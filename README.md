@@ -21,10 +21,18 @@ Requires Node.js 22.12+ (excluding Node 23) or Node.js 24+.
 
 ```bash
 npm install
-npm run dev
+npm run wingdiff
 ```
 
-The local Wingdiff server hosts the API and Vite application at `http://127.0.0.1:4173`.
+The launcher starts Wingdiff at `http://127.0.0.1:4173` and opens the local landing screen. Paste a GitHub pull request URL, or open the fixture directly:
+
+```bash
+npm run wingdiff -- --demo
+npm run wingdiff -- https://github.com/owner/repository/pull/123
+npm run wingdiff -- 123 # resolves the repository from the current checkout
+```
+
+The built server package also exposes the eventual `wingdiff` binary. Use `npm run dev` when working on the UI without automatic browser launch.
 
 ## Portable, local-first AI
 

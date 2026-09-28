@@ -23,6 +23,7 @@ import type {
 } from "./types";
 import { CodeDiff } from "./components/CodeDiff";
 import { Icon } from "./components/Icon";
+import { addRecentTarget, normalizePullRequestTarget, parseLaunchRoute, type PullRequestTarget } from "./launcher";
 import { claimKindLabel, compareSeverity } from "./reviewPresentation";
 
 interface Selection {
@@ -49,6 +50,89 @@ const rankedFindings = tourStops
   .sort((left, right) => compareSeverity(left.finding.severity, right.finding.severity));
 
 export default function App() {
+  const route = useMemo(() => parseLaunchRoute(window.location.search), []);
+  const [demoOpen, setDemoOpen] = useState(route.demo);
+
+  if (demoOpen) return <ReviewApp />;
+  return <Launcher initialTarget={route.target} onDemo={() => {
+    window.history.pushState({}, "", "?demo=1");
+    setDemoOpen(true);
+  }} />;
+}
+
+function Launcher({ initialTarget, onDemo }: { initialTarget?: string; onDemo: () => void }) {
+  const [input, setInput] = useState(initialTarget ?? "");
+  const [target, setTarget] = useState<PullRequestTarget | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [recent, setRecent] = usePersistentState<PullRequestTarget[]>("wingdiff:recent-targets", []);
+  const [theme, setTheme] = usePersistentState<"dark" | "light">("wingdiff:theme", "dark");
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+
+  useEffect(() => {
+    if (!initialTarget) return;
+    const controller = new AbortController();
+    void submitTarget(initialTarget, controller.signal);
+    return () => controller.abort();
+  }, []);
+
+  async function submitTarget(value = input, signal?: AbortSignal) {
+    const candidate = value.trim();
+    if (!candidate || submitting) return;
+    setInput(candidate);
+    setSubmitting(true);
+    setError(null);
+    setTarget(null);
+    try {
+      const normalized = await normalizePullRequestTarget(candidate, signal);
+      setTarget(normalized);
+      setRecent((current) => addRecentTarget(current, normalized));
+      window.history.replaceState({}, "", `?target=${encodeURIComponent(normalized.canonicalUrl)}`);
+    } catch (caught) {
+      if (caught instanceof DOMException && caught.name === "AbortError") return;
+      setError(caught instanceof Error ? caught.message : "Wingdiff could not read that pull request target.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return <div className="launcher-shell">
+    <header className="launcher-topbar">
+      <div className="brand"><span className="brand__mark"><Icon name="route" size={19} /></span><span>wingdiff</span></div>
+      <span className="launcher-local"><i /> Running locally</span>
+      <button aria-label={`Use ${theme === "dark" ? "light" : "dark"} theme`} className="icon-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} type="button"><Icon name={theme === "dark" ? "sun" : "moon"} size={17} /></button>
+    </header>
+    <main className="launcher-main">
+      <section className="launcher-intro">
+        <div className="eyebrow">Start a review</div>
+        <h1>Paste a pull request.</h1>
+        <p>Wingdiff opens it locally and guides you through what changed.</p>
+        <form className={`target-form ${error ? "is-error" : ""}`} onSubmit={(event) => { event.preventDefault(); void submitTarget(); }}>
+          <Icon name="git-pull" size={19} />
+          <input autoFocus aria-label="GitHub pull request" onChange={(event) => setInput(event.target.value)} placeholder="https://github.com/owner/repo/pull/123" spellCheck={false} value={input} />
+          <button disabled={!input.trim() || submitting} type="submit">{submitting ? "Checking…" : "Continue"}<Icon name="arrow-right" size={16} /></button>
+        </form>
+        {error && <div className="target-error" role="alert"><Icon name="flag" size={14} />{error}</div>}
+        <div className="target-help"><span>Also accepts</span><code>owner/repo#123</code><span>or run</span><code>wingdiff 123</code><span>inside a checkout</span></div>
+      </section>
+
+      {target ? <section className="target-ready">
+        <span className="target-ready__icon"><Icon name="check" size={19} /></span>
+        <div><div className="eyebrow">Target ready</div><h2>{target.label}</h2><p>Wingdiff recognized this pull request. Live GitHub acquisition is not connected yet, so no repository data was fetched.</p></div>
+        <button className="button button--primary" onClick={onDemo} type="button">Preview with demo data <Icon name="arrow-right" size={15} /></button>
+      </section> : recent.length > 0 ? <section className="recent-targets">
+        <header><span>Recent pull requests</span><small>Stored on this device</small></header>
+        {recent.map((item) => <button key={item.canonicalUrl} onClick={() => void submitTarget(item.canonicalUrl)} type="button"><span><strong>{item.label}</strong><small>{item.canonicalUrl}</small></span><Icon name="chevron-right" size={15} /></button>)}
+      </section> : <button className="demo-link" onClick={onDemo} type="button"><span><Icon name="spark" size={15} /> Explore the fixture review</span><Icon name="arrow-right" size={14} /></button>}
+    </main>
+    <footer className="launcher-footer"><span><Icon name="shield" size={13} /> Local server · no Wingdiff account</span><code>127.0.0.1</code></footer>
+  </div>;
+}
+
+function ReviewApp() {
   const [view, setView] = useState<View>("brief");
   const [reviewMode, setReviewMode] = useState<ReviewMode>("update");
   const [activeIndex, setActiveIndex] = useState(0);
