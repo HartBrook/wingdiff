@@ -124,7 +124,7 @@ code, kbd { font-family: var(--mono); }
 .button--secondary { color: var(--text); border-color: var(--border-strong); background: var(--surface-2); }
 .button--small { min-height: 28px; padding: 4px 9px; font-size: 10px; }
 .button--hero { min-height: 48px; padding: 0 20px; color: #17141f; border-radius: 12px; background: var(--accent); box-shadow: 0 10px 30px var(--accent-soft); font-size: 13px; }
-.button--hero:hover { gap: 11px; background: var(--accent-strong); transform: translateY(-1px); }
+.button--hero:hover { background: var(--accent-strong); transform: translateY(-1px); }
 
 .tour-rail { position: relative; z-index: 30; display: flex; min-height: 0; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border); background: var(--rail); }
 .tour-rail__heading { display: flex; align-items: center; justify-content: space-between; padding: 21px 18px 15px; color: var(--text-4); font-size: 9px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
