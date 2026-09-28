@@ -28,7 +28,6 @@ if (process.env.NODE_ENV === "development") {
 }
 
 app.listen(port, host, () => {
-  const configured = [process.env.OPENAI_API_KEY && "OpenAI", process.env.ANTHROPIC_API_KEY && "Anthropic"].filter(Boolean);
   console.log(`wingdiff is ready at http://${host}:${port}`);
-  console.log(configured.length ? `AI providers: ${configured.join(", ")}` : "AI providers: fixture mode (set OPENAI_API_KEY or ANTHROPIC_API_KEY)");
+  console.log("AI providers: see the in-app provider picker for local availability");
 });

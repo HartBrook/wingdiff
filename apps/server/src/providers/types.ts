@@ -1,4 +1,4 @@
-export type ProviderId = "openai" | "anthropic";
+export type ProviderId = "codex" | "openai" | "anthropic";
 export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface ModelDefinition {
@@ -16,7 +16,9 @@ export interface PublicProvider {
   id: ProviderId;
   name: string;
   configured: boolean;
-  envVariable: string;
+  transport: "cli" | "api";
+  setupCommand: string;
+  setupDescription: string;
   models: ModelDefinition[];
 }
 
@@ -59,4 +61,3 @@ export interface TextProvider {
     signal?: AbortSignal,
   ): AsyncIterable<string>;
 }
-

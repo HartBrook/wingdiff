@@ -10,7 +10,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env) {
   app.use(express.json({ limit: "256kb" }));
 
   app.get("/api/providers", (_request, response) => {
-    response.json({ providers: publicProviders(environment) });
+    response.json({ providers: publicProviders(environment, new Set(providers.keys())) });
   });
 
   app.post("/api/investigate", async (request, response) => {
@@ -19,8 +19,11 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env) {
       const context = validateInvestigationContext(request.body?.context);
       const provider = providers.get(selection.provider);
       if (!provider) {
+        const setup = selection.provider === "codex"
+          ? "Install Codex CLI and run codex login"
+          : `set ${selection.provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY"}`;
         response.status(503).json({
-          error: `${selection.provider} is not configured. Set ${selection.provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY"} before starting Wingdiff.`,
+          error: `${selection.provider} is not configured. ${setup} before starting Wingdiff.`,
         });
         return;
       }

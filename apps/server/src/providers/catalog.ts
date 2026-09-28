@@ -6,10 +6,10 @@ import type {
   ReasoningEffort,
 } from "./types.js";
 
-const OPENAI_MODELS: ModelDefinition[] = [
+const CODEX_MODELS: ModelDefinition[] = [
   {
     id: "gpt-6-sol",
-    provider: "openai",
+    provider: "codex",
     name: "GPT-6 Sol",
     family: "OpenAI",
     description: "Balanced reasoning, latency, and cost for everyday code review.",
@@ -19,7 +19,7 @@ const OPENAI_MODELS: ModelDefinition[] = [
   },
   {
     id: "gpt-6-astra",
-    provider: "openai",
+    provider: "codex",
     name: "GPT-6 Astra",
     family: "OpenAI",
     description: "Highest capability for architectural and high-risk reviews.",
@@ -29,7 +29,7 @@ const OPENAI_MODELS: ModelDefinition[] = [
   },
   {
     id: "gpt-6-luna",
-    provider: "openai",
+    provider: "codex",
     name: "GPT-6 Luna",
     family: "OpenAI",
     description: "Fast, cost-efficient investigation for routine questions.",
@@ -39,7 +39,7 @@ const OPENAI_MODELS: ModelDefinition[] = [
   },
   {
     id: "gpt-5.3-codex",
-    provider: "openai",
+    provider: "codex",
     name: "GPT-5.3-Codex",
     family: "Codex",
     description: "Codex-tuned model for agentic coding and code investigation.",
@@ -48,6 +48,13 @@ const OPENAI_MODELS: ModelDefinition[] = [
     defaultEffort: "medium",
   },
 ];
+
+const OPENAI_MODELS: ModelDefinition[] = CODEX_MODELS.map((model) => ({
+  ...model,
+  provider: "openai",
+  family: model.family === "Codex" ? "OpenAI API" : model.family,
+  badge: model.id === "gpt-6-sol" ? "API" : model.badge,
+}));
 
 const ANTHROPIC_MODELS: ModelDefinition[] = [
   {
@@ -72,18 +79,39 @@ const ANTHROPIC_MODELS: ModelDefinition[] = [
   },
 ];
 
-export const MODEL_CATALOG: ModelDefinition[] = [...OPENAI_MODELS, ...ANTHROPIC_MODELS];
+export const MODEL_CATALOG: ModelDefinition[] = [...CODEX_MODELS, ...OPENAI_MODELS, ...ANTHROPIC_MODELS];
 
-const PROVIDER_METADATA: Record<ProviderId, { name: string; envVariable: string }> = {
-  openai: { name: "OpenAI / Codex", envVariable: "OPENAI_API_KEY" },
-  anthropic: { name: "Anthropic", envVariable: "ANTHROPIC_API_KEY" },
+const PROVIDER_METADATA: Record<ProviderId, Omit<PublicProvider, "id" | "configured" | "models">> = {
+  codex: {
+    name: "Codex CLI",
+    transport: "cli",
+    setupCommand: "codex login",
+    setupDescription: "Install Codex CLI and sign in with your ChatGPT account.",
+  },
+  openai: {
+    name: "OpenAI API",
+    transport: "api",
+    setupCommand: "OPENAI_API_KEY",
+    setupDescription: "Set an OpenAI API key in your shell or local .env file.",
+  },
+  anthropic: {
+    name: "Anthropic API",
+    transport: "api",
+    setupCommand: "ANTHROPIC_API_KEY",
+    setupDescription: "Set an Anthropic API key in your shell or local .env file.",
+  },
 };
 
-export function publicProviders(environment: NodeJS.ProcessEnv): PublicProvider[] {
-  return (["openai", "anthropic"] as ProviderId[]).map((id) => ({
+export function publicProviders(
+  environment: NodeJS.ProcessEnv,
+  configuredProviders: ReadonlySet<ProviderId> = new Set(),
+): PublicProvider[] {
+  return (["codex", "openai", "anthropic"] as ProviderId[]).map((id) => ({
     id,
     ...PROVIDER_METADATA[id],
-    configured: Boolean(environment[PROVIDER_METADATA[id].envVariable]),
+    configured: id === "codex"
+      ? configuredProviders.has(id)
+      : Boolean(environment[id === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY"]),
     models: MODEL_CATALOG.filter((model) => model.provider === id),
   }));
 }
@@ -91,15 +119,13 @@ export function publicProviders(environment: NodeJS.ProcessEnv): PublicProvider[
 export function validateSelection(input: unknown): ModelSelection {
   if (!input || typeof input !== "object") throw new Error("A model selection is required.");
   const value = input as Record<string, unknown>;
-  const model = MODEL_CATALOG.find((candidate) => candidate.id === value.model);
+  const model = MODEL_CATALOG.find((candidate) => (
+    candidate.id === value.model && candidate.provider === value.provider
+  ));
   if (!model) throw new Error(`Unknown model: ${String(value.model)}`);
-  if (model.provider !== value.provider) {
-    throw new Error(`Model ${model.id} does not belong to provider ${String(value.provider)}.`);
-  }
   const effort = value.reasoningEffort as ReasoningEffort;
   if (!model.reasoningEfforts.includes(effort)) {
     throw new Error(`${model.name} does not support ${String(effort)} reasoning.`);
   }
   return { provider: model.provider, model: model.id, reasoningEffort: effort };
 }
-

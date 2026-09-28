@@ -8,6 +8,10 @@ describe("model catalog", () => {
       "gpt-6-astra",
       "gpt-6-luna",
       "gpt-5.3-codex",
+      "gpt-6-sol",
+      "gpt-6-astra",
+      "gpt-6-luna",
+      "gpt-5.3-codex",
       "claude-sonnet-4-6",
       "claude-opus-4-6",
     ]);
@@ -20,15 +24,20 @@ describe("model catalog", () => {
   });
 
   it("never exposes API keys in public provider metadata", () => {
-    const providers = publicProviders({ OPENAI_API_KEY: "secret-openai" });
+    const providers = publicProviders({ OPENAI_API_KEY: "secret-openai" }, new Set(["codex"]));
+    expect(providers.find((provider) => provider.id === "codex")?.configured).toBe(true);
     expect(providers.find((provider) => provider.id === "openai")?.configured).toBe(true);
     expect(providers.find((provider) => provider.id === "anthropic")?.configured).toBe(false);
     expect(JSON.stringify(providers)).not.toContain("secret-openai");
   });
 
   it("rejects cross-provider and unsupported reasoning selections", () => {
-    expect(() => validateSelection({ provider: "anthropic", model: "gpt-6-sol", reasoningEffort: "medium" })).toThrow(/does not belong/);
+    expect(() => validateSelection({ provider: "anthropic", model: "gpt-6-sol", reasoningEffort: "medium" })).toThrow(/Unknown model/);
     expect(() => validateSelection({ provider: "openai", model: "gpt-6-astra", reasoningEffort: "none" })).toThrow(/does not support/);
+    expect(validateSelection({ provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" })).toEqual({
+      provider: "codex",
+      model: "gpt-6-sol",
+      reasoningEffort: "medium",
+    });
   });
 });
-
