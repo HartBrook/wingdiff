@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { mockAnswers, pullRequest, risks, tourStops } from "./fixture";
+import { mockAnswers, pullRequest, tourStops } from "./fixture";
 import {
   DEFAULT_SELECTION,
   FALLBACK_PROVIDERS,
@@ -21,7 +21,6 @@ import type {
 } from "./types";
 import { CodeDiff } from "./components/CodeDiff";
 import { Icon } from "./components/Icon";
-import { Topology } from "./components/Topology";
 import { claimKindLabel, compareSeverity } from "./reviewPresentation";
 
 interface Selection {
@@ -46,7 +45,6 @@ const initialStatuses = Object.fromEntries(
 const rankedFindings = tourStops
   .flatMap((stop, stopIndex) => stop.finding ? [{ finding: stop.finding, stop, stopIndex }] : [])
   .sort((left, right) => compareSeverity(left.finding.severity, right.finding.severity));
-const rankedRisks = [...risks].sort((left, right) => compareSeverity(left.level, right.level));
 
 export default function App() {
   const [view, setView] = useState<View>("brief");
@@ -379,13 +377,11 @@ function TopBar({ activeModel, comments, onMenu, onModel, onReview, onTheme, pro
       <div className="topbar__divider" />
       <div className="pr-identity"><span>{pullRequest.repository}</span><strong>#{pullRequest.number}</strong><span className="pr-identity__title">{pullRequest.title}</span></div>
       <div className="topbar__spacer" />
-      <div className="analysis-pill"><span className="live-dot" /> Analysis complete</div>
       <button className="model-button" onClick={onModel} type="button">
         <span className="model-button__spark"><Icon name="spark" size={13} /></span>
         <span><small>{providerConfigured ? "Live model" : "Fixture mode"}</small><strong>{activeModel}</strong></span>
         <Icon name="chevron-right" size={13} />
       </button>
-      <button className="command-button" type="button"><Icon name="search" size={15} /><span>Search review</span><kbd>⌘ K</kbd></button>
       <button aria-label={`Use ${theme === "dark" ? "light" : "dark"} theme`} className="icon-button" onClick={onTheme} type="button"><Icon name={theme === "dark" ? "sun" : "moon"} size={17} /></button>
       <button className="button button--primary topbar__review" onClick={onReview} type="button">Review {comments > 0 && <span>{comments}</span>}</button>
     </header>
@@ -429,15 +425,8 @@ function Summary({ onBegin, onSelectStop }: { onBegin: () => void; onSelectStop:
         </header>
         {rankedFindings.length ? <div className="summary-finding-list">{rankedFindings.map(({ finding, stop, stopIndex }, index) => <button key={finding.id} onClick={() => onSelectStop(stopIndex)} type="button"><span className="finding-rank">{String(index + 1).padStart(2, "0")}</span><span className={`risk-level risk-level--${finding.severity}`}>{finding.severity}</span><span><strong>{finding.title}</strong><small>{finding.body}</small><em>{finding.category} · {stop.eyebrow}</em></span><Icon name="chevron-right" size={16} /></button>)}</div> : <div className="summary-clear"><Icon name="check" size={18} /><div><strong>Nothing in the analyzed evidence currently argues against approval.</strong><span>Walk the code and apply your own repository context before deciding.</span></div></div>}
       </section>
-      <section className="intent-grid">
-        <article className="intent-card intent-card--stated"><header><span className="card-icon"><Icon name="git-pull" size={17} /></span><div><div className="eyebrow">Author intent</div><small>From the pull request description</small></div></header><p>“{pullRequest.statedIntent}”</p></article>
-        <article className="intent-card intent-card--inferred"><header><span className="card-icon card-icon--spark"><Icon name="spark" size={17} /></span><div><div className="eyebrow">Implementation summary</div><small><span className="confidence-dot" /> High confidence</small></div></header><p>{pullRequest.inferredSummary}</p></article>
-      </section>
-      <section className="brief-grid">
-        <article className="panel panel--topology"><header className="panel__header"><div><div className="eyebrow">Change topology</div><h2>One new decision path, two boundaries</h2></div><span className="panel__meta">6 symbols · 5 relationships</span></header><Topology activeIds={["route", "login", "policy", "store", "error", "tests"]} /><footer className="topology-legend"><span><i className="node-key node-key--entry" /> Entry</span><span><i className="node-key node-key--logic" /> Logic</span><span><i className="node-key node-key--boundary" /> Boundary</span><span><i className="node-key node-key--contract" /> Contract</span><span><i className="node-key node-key--test" /> Test</span></footer></article>
-        <article className="panel panel--risk"><header className="panel__header"><div><div className="eyebrow">Review watchlist</div><h2>Behavior worth verifying</h2></div></header><div className="risk-list">{rankedRisks.map((risk) => <button key={risk.id} onClick={() => onSelectStop(tourStops.findIndex((stop) => stop.id === risk.stopId))} type="button"><span className={`risk-level risk-level--${risk.level}`}>{risk.level}</span><span><strong>{risk.label}</strong><small>{risk.detail}</small></span><Icon name="chevron-right" size={15} /></button>)}</div></article>
-      </section>
-      <section className="begin-card"><div className="begin-card__route"><span>01</span><i /><span>05</span></div><div><div className="eyebrow">Your guided route is ready</div><h2>Five stops through behavior, state, contract, and tests.</h2><p>Mechanical changes and generated files are grouped outside the tour.</p></div><button className="button button--hero" onClick={onBegin} type="button">Begin guided review <Icon name="arrow-right" /></button></section>
+      <section className="summary-context"><div><span>Change</span><p>{pullRequest.inferredSummary}</p></div><div><span>Author intent</span><p>{pullRequest.statedIntent}</p></div></section>
+      <section className="begin-card"><div><strong>{tourStops.length} review stops</strong><span>{pullRequest.estimatedMinutes} min · behavior, state, contract, tests</span></div><button className="button button--hero" onClick={onBegin} type="button">Start review <Icon name="arrow-right" /></button></section>
     </div>
   );
 }
@@ -445,16 +434,14 @@ function Summary({ onBegin, onSelectStop }: { onBegin: () => void; onSelectStop:
 function TourView({ activeEvidence, activeEvidenceId, activeIndex, comments, onAsk, onComment, onEvidence, onFindingComment, onFlag, onNavigate, onSelectLine, onUnderstood, selection, status, stop }: { activeEvidence: EvidenceBlock; activeEvidenceId: string | null; activeIndex: number; comments: number; onAsk: () => void; onComment: () => void; onEvidence: (id: string) => void; onFindingComment: () => void; onFlag: () => void; onNavigate: (delta: number) => void; onSelectLine: (evidenceId: string, line: number, extend: boolean) => void; onUnderstood: () => void; selection: Selection | null; status: StopStatus; stop: TourStop }) {
   return (
     <div className="page page--tour" key={stop.id}>
-      <div className="stop-progress"><span style={{ width: `${((activeIndex + 1) / tourStops.length) * 100}%` }} /></div>
-      <header className="stop-header"><div className="stop-header__topline"><div className="eyebrow">Stop {activeIndex + 1} of {tourStops.length} · {stop.eyebrow}</div><div className="stop-header__meta"><span className="confidence"><i /> {stop.confidence} confidence</span><span>~{stop.minutes} min</span></div></div><h1>{stop.title}</h1><p>{stop.summary}</p><div className="stop-actions"><button className={`button button--quiet ${status === "flagged" ? "is-flagged" : ""}`} onClick={onFlag} type="button"><Icon name="flag" size={15} />{status === "flagged" ? "Flagged" : "Flag"}</button><button className="button button--quiet" onClick={onAsk} type="button"><Icon name="spark" size={15} />Investigate <kbd>A</kbd></button><button className="button button--secondary" onClick={onComment} type="button"><Icon name="comment" size={15} />Comment <kbd>C</kbd></button>{comments > 0 && <span className="draft-count"><Icon name="comment" size={14} /> {comments} draft</span>}</div></header>
+      <header className="stop-header"><div className="stop-header__topline"><div className="eyebrow">{activeIndex + 1}/{tourStops.length} · {stop.eyebrow}</div></div><h1>{stop.title}</h1><p>{stop.summary}</p><div className="stop-actions"><button className={`button button--quiet ${status === "flagged" ? "is-flagged" : ""}`} onClick={onFlag} type="button"><Icon name="flag" size={15} />{status === "flagged" ? "Flagged" : "Flag"}</button><button className="button button--quiet" onClick={onAsk} type="button"><Icon name="spark" size={15} />Ask</button><button className="button button--secondary" onClick={onComment} type="button"><Icon name="comment" size={15} />Comment</button>{comments > 0 && <span className="draft-count">{comments} draft</span>}</div></header>
       <div className="tour-grid">
-        <section className="evidence-column"><div className="section-label"><span>Code change</span><button type="button"><Icon name="external" size={13} /> Open at {pullRequest.headSha}</button></div>{stop.evidence.length > 1 && <div className="evidence-tabs">{stop.evidence.map((item) => <button className={item.id === activeEvidenceId ? "is-active" : ""} key={item.id} onClick={() => onEvidence(item.id)} type="button">{item.label}<span>{fileName(item.path)}</span></button>)}</div>}<CodeDiff evidence={activeEvidence} onAsk={onAsk} onComment={onComment} onSelectLine={onSelectLine} selection={selection} /><article className="why-card"><span className="why-card__line" /><div><div className="eyebrow">Why review this</div><p>{stop.why}</p></div></article><div className="mini-topology"><div><div className="eyebrow">In the change path</div><strong>{stop.topologyNodes.length} related symbols</strong></div><Topology activeIds={stop.topologyNodes} compact /></div></section>
+        <section className="evidence-column"><div className="section-label"><span>Code change</span><button type="button"><Icon name="external" size={13} /> {pullRequest.headSha}</button></div>{stop.evidence.length > 1 && <div className="evidence-tabs">{stop.evidence.map((item) => <button className={item.id === activeEvidenceId ? "is-active" : ""} key={item.id} onClick={() => onEvidence(item.id)} type="button">{item.label}<span>{fileName(item.path)}</span></button>)}</div>}<CodeDiff evidence={activeEvidence} onAsk={onAsk} onComment={onComment} onSelectLine={onSelectLine} selection={selection} /></section>
         <aside className="insight-column">
           <section className="insight-section finding-section">
             <div className="section-label"><span>Review finding</span></div>
             {stop.finding ? <article className={`finding-card finding-card--${stop.finding.severity}`}><header><span className={`risk-level risk-level--${stop.finding.severity}`}>{stop.finding.severity}</span><span>{stop.finding.category}</span></header><h3>{stop.finding.title}</h3><p>{stop.finding.body}</p><button className="button button--finding" onClick={onFindingComment} type="button"><Icon name="comment" size={14} /> Draft from finding</button></article> : <article className="finding-clear"><span><Icon name="check" size={17} /></span><div><h3>No blocking finding here</h3><p>Nothing in this stop currently argues against approval.</p></div></article>}
           </section>
-          <section className="reviewer-comment-card"><div><span className="card-icon"><Icon name="comment" size={15} /></span><div><div className="eyebrow">Your review</div><h3>You know what the analysis cannot.</h3></div></div><p>Add repository context, product nuance, or a concern you spotted yourself.</p><button className="button button--secondary" onClick={onComment} type="button">Write your comment <Icon name="arrow-right" size={14} /></button></section>
           <section className="insight-section"><div className="section-label"><span>Observations</span></div><div className="observation-list">{stop.claims.map((claim) => <article className={`observation observation--${claim.kind}`} key={claim.id}><header><span>{claimKindLabel(claim.kind)}</span><small>{claim.confidence} confidence</small></header><p>{claim.text}</p><button type="button"><Icon name="code" size={13} /> {claim.evidenceIds.length} code anchor{claim.evidenceIds.length === 1 ? "" : "s"}</button></article>)}</div></section>
           <section className="insight-section review-prompts"><div className="section-label"><span>Questions to verify</span></div>{stop.prompts.map((prompt, index) => <button key={prompt} onClick={onAsk} type="button"><span>{String(index + 1).padStart(2, "0")}</span>{prompt}<Icon name="chevron-right" size={14} /></button>)}</section>
         </aside>
@@ -484,7 +471,7 @@ function InvestigationDrawer({ answering, entries, evidence, modelName, onAsk, o
       </header>
       <div className="drawer-context"><span>Attached evidence</span><div><Icon name="code" size={14} /><span><strong>{fileName(evidence.path)}</strong><small>lines {evidence.startLine}–{evidence.endLine} · {pullRequest.headSha}</small></span><Icon name="check" size={13} /></div></div>
       <div className="drawer-thread">
-        {entries.length === 0 && <div className="drawer-intro"><div className="spark-orbit"><Icon name="spark" /></div><h2>Interrogate the evidence.</h2><p>{providerConfigured ? `${modelName} will answer from the attached change and separate code facts from inference.` : "Configure a provider for live answers. Until then, Wingdiff uses the authored fixture response for this stop."}</p><div className="suggested-questions">{stop.prompts.map((prompt) => <button key={prompt} onClick={() => onAsk(prompt)} type="button">{prompt}<Icon name="arrow-right" size={13} /></button>)}</div></div>}
+        {entries.length === 0 && <div className="drawer-intro"><h2>Ask about this change</h2><div className="suggested-questions">{stop.prompts.map((prompt) => <button key={prompt} onClick={() => onAsk(prompt)} type="button">{prompt}<Icon name="arrow-right" size={13} /></button>)}</div></div>}
         {entries.map((entry) => <div className="thread-entry" key={entry.id}><div className="thread-question"><span>You</span><p>{entry.question}</p></div><div className={`thread-answer ${entry.status === "error" ? "is-error" : ""}`}><header><span className="card-icon card-icon--spark"><Icon name="spark" size={14} /></span><strong>{entry.model ?? "Guided fixture"}</strong><small><i className="confidence-dot" /> {entry.provider === "fixture" || !entry.provider ? "Fixture response" : "Grounded in current evidence"}</small></header>{entry.answer ? <p>{entry.answer}</p> : <div className="inline-thinking"><i /><i /><i /></div>}<button disabled={entry.status === "streaming"} type="button"><Icon name="comment" size={13} /> Use as comment</button></div></div>)}
         {answering && entries.every((entry) => entry.status !== "streaming") && <div className="thinking"><i /><i /><i /><span>Tracing the evidence…</span></div>}
       </div>
@@ -523,7 +510,7 @@ function CommentComposer({ composer, onCancel, onChange, onSeverity, onStage }: 
     <header><div><div className="eyebrow">Draft review comment</div><h2>{fileName(composer.evidence.path)}:{composer.startLine}{composer.endLine !== composer.startLine ? `–${composer.endLine}` : ""}</h2></div><button aria-label="Close comment composer" className="icon-button" onClick={onCancel} type="button"><Icon name="x" size={17} /></button></header>
     <div className="comment-workbench">
       <section className="comment-code"><div className="section-label"><span>Code context</span><small>Selected lines stay highlighted</small></div><CodeDiff evidence={composer.evidence} minimal selection={commentSelection} /></section>
-      <section className="comment-editor"><div className="comment-anchor"><Icon name="code" size={14} /><span>{composer.evidence.path}</span><code>{pullRequest.headSha}</code></div><label htmlFor="review-comment">Your judgment, in your words</label><p>Wingdiff will stage exactly what you write here.</p><textarea autoFocus id="review-comment" onChange={(event) => onChange(event.target.value)} placeholder="What should the author know?" rows={9} value={composer.body} /><div className="comment-severity"><span>Severity</span>{(["low", "medium", "high"] as RiskLevel[]).map((level) => <button className={composer.severity === level ? "is-active" : ""} key={level} onClick={() => onSeverity(level)} type="button"><i className={`severity-dot severity-dot--${level}`} />{level}</button>)}</div><footer><button className="button button--quiet" onClick={onCancel} type="button">Cancel</button><button className="button button--primary" disabled={!composer.body.trim()} onClick={onStage} type="button">Add to review <Icon name="arrow-right" size={15} /></button></footer></section>
+      <section className="comment-editor"><div className="comment-anchor"><Icon name="code" size={14} /><span>{composer.evidence.path}</span><code>{pullRequest.headSha}</code></div><label htmlFor="review-comment">Comment</label><textarea autoFocus id="review-comment" onChange={(event) => onChange(event.target.value)} placeholder="What should the author know?" rows={9} value={composer.body} /><div className="comment-severity"><span>Severity</span>{(["low", "medium", "high"] as RiskLevel[]).map((level) => <button className={composer.severity === level ? "is-active" : ""} key={level} onClick={() => onSeverity(level)} type="button"><i className={`severity-dot severity-dot--${level}`} />{level}</button>)}</div><footer><button className="button button--quiet" onClick={onCancel} type="button">Cancel</button><button className="button button--primary" disabled={!composer.body.trim()} onClick={onStage} type="button">Add to review <Icon name="arrow-right" size={15} /></button></footer></section>
     </div>
   </section></div>;
 }
