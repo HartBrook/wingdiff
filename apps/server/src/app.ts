@@ -1,5 +1,6 @@
 import express from "express";
 import { createProviders, publicProviders, validateSelection } from "./providers/index.js";
+import { parsePullRequestTarget } from "./targets.js";
 import { validateInvestigationContext } from "./validation.js";
 
 export function createApp(environment: NodeJS.ProcessEnv = process.env) {
@@ -8,6 +9,20 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env) {
 
   app.disable("x-powered-by");
   app.use(express.json({ limit: "256kb" }));
+
+  app.get("/api/health", (_request, response) => {
+    response.json({ service: "wingdiff", status: "ready" });
+  });
+
+  app.post("/api/targets/parse", (request, response) => {
+    try {
+      const target = parsePullRequestTarget(request.body?.input, request.body?.checkoutRepository);
+      response.json({ target });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The pull request target is not valid.";
+      response.status(400).json({ error: message });
+    }
+  });
 
   app.get("/api/providers", (_request, response) => {
     response.json({ providers: publicProviders(environment, new Set(providers.keys())) });
