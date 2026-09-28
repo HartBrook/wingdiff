@@ -2,10 +2,12 @@
 
 Wingdiff is a guided, evidence-backed tour of a pull request. It helps an engineer understand a change by behavior, data flow, and risk; investigate the exact supporting code; and publish a thoughtful review to GitHub.
 
-This repository currently contains the Phase 0 experience prototype described in the [product plan](./PRODUCT_PLAN.md). It uses a realistic cross-file PR fixture to exercise the complete review loop:
+This repository currently contains the Phase 0 experience prototype described in the [product plan](./PRODUCT_PLAN.md). It uses a realistic cross-file PR fixture and an author follow-up to exercise the complete review loop:
 
-- Review summary with ranked findings, stated intent, implementation shape, and risk map
-- Five-stop semantic tour with exact diff evidence and provenance labels
+- A default **Since your review** route that isolates the two areas changed after the reviewed head
+- An **Entire PR** backstop that keeps reviewed-but-unchanged areas visible
+- Finding continuity that shows whether earlier concerns still apply or appear addressed
+- A focused summary and semantic tour with exact diff evidence
 - Line selection, flags, contextual investigation, and draft review comments
 - Full evidence Browse mode
 - Review desk with coverage, summary, inline comments, and disposition
@@ -61,7 +63,7 @@ npm run typecheck
 npm run build
 ```
 
-The fixture tests enforce the product's grounding contract: claims must resolve to real evidence, diff ranges must be internally consistent, and risks and tour stops must reference valid topology nodes.
+The fixture tests enforce the product's grounding contract: claims must resolve to real evidence, diff ranges must be internally consistent, revision coverage must partition the full tour, and findings must remain attached to known stops.
 
 ## Keyboard shortcuts
 
