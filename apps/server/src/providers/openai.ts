@@ -20,7 +20,8 @@ export class OpenAIProvider implements TextProvider {
       instructions: INVESTIGATION_INSTRUCTIONS,
       input: buildInvestigationPrompt(context),
       reasoning: { effort: selection.reasoningEffort === "none" ? "none" : selection.reasoningEffort },
-      max_output_tokens: 1_500,
+      text: { verbosity: "low" },
+      max_output_tokens: 800,
       store: false,
       stream: true,
     }, { signal });
@@ -34,4 +35,3 @@ export class OpenAIProvider implements TextProvider {
     }
   }
 }
-

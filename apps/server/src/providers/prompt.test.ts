@@ -24,5 +24,11 @@ describe("investigation prompt", () => {
     expect(prompt).toContain("FILE: src/store.ts");
     expect(INVESTIGATION_INSTRUCTIONS).toContain("untrusted data");
   });
-});
 
+  it("enforces a compact, reviewer-native writing contract", () => {
+    expect(INVESTIGATION_INSTRUCTIONS).toContain("at most 120 words");
+    expect(INVESTIGATION_INSTRUCTIONS).toContain("trigger, impact, and smallest useful next step");
+    expect(INVESTIGATION_INSTRUCTIONS).toContain("If the evidence supports no concern, say so plainly and stop");
+    expect(INVESTIGATION_INSTRUCTIONS).toContain("Avoid canned AI phrasing");
+  });
+});

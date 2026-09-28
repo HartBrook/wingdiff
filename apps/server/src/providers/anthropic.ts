@@ -17,7 +17,7 @@ export class AnthropicProvider implements TextProvider {
   ): AsyncIterable<string> {
     const stream = this.client.messages.stream({
       model: selection.model,
-      max_tokens: 1_500,
+      max_tokens: 800,
       system: INVESTIGATION_INSTRUCTIONS,
       messages: [{ role: "user", content: buildInvestigationPrompt(context) }],
     }, { signal });
@@ -29,4 +29,3 @@ export class AnthropicProvider implements TextProvider {
     }
   }
 }
-
