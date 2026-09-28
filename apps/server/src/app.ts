@@ -33,7 +33,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env) {
       response.flushHeaders();
 
       const abortController = new AbortController();
-      request.on("close", () => abortController.abort());
+      response.on("close", () => abortController.abort());
 
       for await (const delta of provider.streamInvestigation(selection, context, abortController.signal)) {
         response.write(`data: ${JSON.stringify({ type: "delta", delta })}\n\n`);
@@ -53,4 +53,3 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env) {
 
   return app;
 }
-

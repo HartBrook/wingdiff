@@ -1,9 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { mockAnswers, pullRequest, risks, tourStops } from "./fixture";
+import {
+  DEFAULT_SELECTION,
+  FALLBACK_PROVIDERS,
+  fetchProviders,
+  selectedModel,
+  streamInvestigation,
+} from "./ai";
 import type {
   DraftComment,
   EvidenceBlock,
   NotebookEntry,
+  ModelSelection,
+  ProviderDefinition,
   ReviewDisposition,
   RiskLevel,
   StopStatus,
@@ -46,6 +55,9 @@ export default function App() {
   const [composer, setComposer] = useState<ComposerState | null>(null);
   const [question, setQuestion] = useState("");
   const [answering, setAnswering] = useState(false);
+  const [providers, setProviders] = useState<ProviderDefinition[]>(FALLBACK_PROVIDERS);
+  const [modelSelection, setModelSelection] = usePersistentState<ModelSelection>("wingdiff:model", DEFAULT_SELECTION);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [theme, setTheme] = usePersistentState<"dark" | "light">("wingdiff:theme", "dark");
   const [reviewSummary, setReviewSummary] = useState(
     "The progressive throttling policy is clear and the client-facing response is well defined. I found one concurrency issue in the Redis adapter that should be addressed before merge.",
@@ -58,10 +70,18 @@ export default function App() {
   const understoodCount = Object.values(statuses).filter((status) => status === "understood").length;
   const activeEvidence = activeStop.evidence.find((item) => item.id === activeEvidenceId) ?? activeStop.evidence[0]!;
   const stopNotebook = notebook.filter((entry) => entry.stopId === activeStop.id);
+  const activeModel = selectedModel(providers, modelSelection);
+  const activeProvider = providers.find((provider) => provider.id === modelSelection.provider);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchProviders(controller.signal).then(setProviders).catch(() => undefined);
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     setActiveEvidenceId(activeStop.evidence[0]?.id ?? null);
@@ -84,6 +104,7 @@ export default function App() {
         setDrawerOpen(false);
         setComposer(null);
         setMobileNavOpen(false);
+        setModelPickerOpen(false);
       }
     }
     window.addEventListener("keydown", handleKeyDown);
@@ -165,24 +186,53 @@ export default function App() {
     window.setTimeout(() => setToast(null), 2600);
   }
 
-  function askQuestion(prompt?: string) {
+  async function askQuestion(prompt?: string) {
     const value = (prompt ?? question).trim();
     if (!value || answering) return;
     setQuestion("");
     setAnswering(true);
-    window.setTimeout(() => {
-      setNotebook((current) => [
-        ...current,
-        {
-          id: crypto.randomUUID(),
-          stopId: activeStop.id,
-          question: value,
+    const entryId = crypto.randomUUID();
+    const live = Boolean(activeProvider?.configured);
+    const entry: NotebookEntry = {
+      id: entryId,
+      stopId: activeStop.id,
+      question: value,
+      answer: "",
+      createdAt: Date.now(),
+      provider: live ? modelSelection.provider : "fixture",
+      model: live ? activeModel.name : "Guided fixture",
+      status: "streaming",
+    };
+    setNotebook((current) => [...current, entry]);
+
+    if (!live) {
+      window.setTimeout(() => {
+        updateNotebookEntry(setNotebook, entryId, {
           answer: mockAnswers[activeStop.id] ?? "The available evidence does not resolve that question yet.",
-          createdAt: Date.now(),
-        },
-      ]);
+          status: "complete",
+        });
+        setAnswering(false);
+      }, 650);
+      return;
+    }
+
+    try {
+      await streamInvestigation({
+        selection: modelSelection,
+        stop: activeStop,
+        question: value,
+        onDelta: (delta) => setNotebook((current) => current.map((item) => item.id === entryId ? { ...item, answer: item.answer + delta } : item)),
+      });
+      updateNotebookEntry(setNotebook, entryId, { status: "complete" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The model request failed.";
+      updateNotebookEntry(setNotebook, entryId, {
+        answer: `Wingdiff could not complete this investigation. ${message}`,
+        status: "error",
+      });
+    } finally {
       setAnswering(false);
-    }, 650);
+    }
   }
 
   function beginTour() {
@@ -193,10 +243,13 @@ export default function App() {
   return (
     <div className="app-shell">
       <TopBar
+        activeModel={activeModel.name}
         comments={comments.length}
         onMenu={() => setMobileNavOpen((open) => !open)}
+        onModel={() => setModelPickerOpen(true)}
         onReview={() => setView("review")}
         onTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
+        providerConfigured={Boolean(activeProvider?.configured)}
         theme={theme}
       />
 
@@ -266,11 +319,22 @@ export default function App() {
           answering={answering}
           entries={stopNotebook}
           evidence={activeEvidence}
+          modelName={activeModel.name}
           onAsk={askQuestion}
           onClose={() => setDrawerOpen(false)}
           onQuestion={setQuestion}
           question={question}
+          providerConfigured={Boolean(activeProvider?.configured)}
           stop={activeStop}
+        />
+      )}
+
+      {modelPickerOpen && (
+        <ModelPicker
+          onClose={() => setModelPickerOpen(false)}
+          onSelection={setModelSelection}
+          providers={providers}
+          selection={modelSelection}
         />
       )}
 
@@ -289,7 +353,7 @@ export default function App() {
   );
 }
 
-function TopBar({ comments, onMenu, onReview, onTheme, theme }: { comments: number; onMenu: () => void; onReview: () => void; onTheme: () => void; theme: "dark" | "light" }) {
+function TopBar({ activeModel, comments, onMenu, onModel, onReview, onTheme, providerConfigured, theme }: { activeModel: string; comments: number; onMenu: () => void; onModel: () => void; onReview: () => void; onTheme: () => void; providerConfigured: boolean; theme: "dark" | "light" }) {
   return (
     <header className="topbar">
       <button aria-label="Open navigation" className="icon-button mobile-menu" onClick={onMenu} type="button"><Icon name="menu" /></button>
@@ -298,6 +362,11 @@ function TopBar({ comments, onMenu, onReview, onTheme, theme }: { comments: numb
       <div className="pr-identity"><span>{pullRequest.repository}</span><strong>#{pullRequest.number}</strong><span className="pr-identity__title">{pullRequest.title}</span></div>
       <div className="topbar__spacer" />
       <div className="analysis-pill"><span className="live-dot" /> Analysis complete</div>
+      <button className="model-button" onClick={onModel} type="button">
+        <span className="model-button__spark"><Icon name="spark" size={13} /></span>
+        <span><small>{providerConfigured ? "Live model" : "Fixture mode"}</small><strong>{activeModel}</strong></span>
+        <Icon name="chevron-right" size={13} />
+      </button>
       <button className="command-button" type="button"><Icon name="search" size={15} /><span>Search review</span><kbd>⌘ K</kbd></button>
       <button aria-label={`Use ${theme === "dark" ? "light" : "dark"} theme`} className="icon-button" onClick={onTheme} type="button"><Icon name={theme === "dark" ? "sun" : "moon"} size={17} /></button>
       <button className="button button--primary topbar__review" onClick={onReview} type="button">Review {comments > 0 && <span>{comments}</span>}</button>
@@ -371,12 +440,54 @@ function ReviewDesk({ comments, disposition, onBack, onDisposition, onPublish, o
   return <div className="page page--review"><header className="review-header"><button className="back-link" onClick={onBack} type="button"><Icon name="arrow-left" size={15} /> Back to tour</button><div className="eyebrow">Review desk</div><h1>Turn your understanding into a decision.</h1><p>Everything below is local until you publish. Preview the exact review GitHub will receive.</p></header><div className="review-summary-strip"><div><span className="summary-icon summary-icon--green"><Icon name="check" /></span><span><strong>{understood}/{tourStops.length}</strong><small>stops understood</small></span></div><div><span className="summary-icon summary-icon--amber"><Icon name="flag" /></span><span><strong>{flagged}</strong><small>open flag{flagged === 1 ? "" : "s"}</small></span></div><div><span className="summary-icon summary-icon--blue"><Icon name="comment" /></span><span><strong>{comments.length}</strong><small>draft comment{comments.length === 1 ? "" : "s"}</small></span></div><div className="review-sha"><span className="live-dot" /><span><strong>Head is current</strong><small>{pullRequest.headSha} · checked just now</small></span></div></div><div className="review-grid"><div className="review-main"><section className="review-section"><header><div><span>01</span><div><h2>Review summary</h2><p>Set the context before inline feedback.</p></div></div><small>{summary.length} characters</small></header><textarea onChange={(event) => onSummary(event.target.value)} rows={6} value={summary} /></section><section className="review-section"><header><div><span>02</span><div><h2>Inline comments</h2><p>Anchors are pinned to {pullRequest.headSha}.</p></div></div><small>{comments.length} draft{comments.length === 1 ? "" : "s"}</small></header>{comments.length === 0 ? <div className="empty-comments"><Icon name="comment" /><strong>No inline comments yet</strong><span>You can still publish a summary-only review.</span></div> : <div className="review-comments">{comments.map((comment) => <article key={comment.id}><header><span className={`risk-level risk-level--${comment.severity}`}>{comment.severity}</span><code>{comment.path}:{comment.startLine}{comment.endLine !== comment.startLine ? `–${comment.endLine}` : ""}</code><button aria-label="Remove draft comment" onClick={() => onRemoveComment(comment.id)} type="button"><Icon name="x" size={15} /></button></header><p>{comment.body}</p></article>)}</div>}</section></div><aside className="publish-card"><div className="eyebrow">Final disposition</div><h2>How should GitHub record this review?</h2><div className="disposition-list">{(["COMMENT", "APPROVE", "REQUEST_CHANGES"] as ReviewDisposition[]).map((value) => <button className={disposition === value ? "is-active" : ""} key={value} onClick={() => onDisposition(value)} type="button"><span className="radio"><i /></span><span><strong>{labelDisposition(value)}</strong><small>{dispositionDescription(value)}</small></span></button>)}</div><div className="publish-preview"><span>Will publish</span><strong>{comments.length} inline comment{comments.length === 1 ? "" : "s"}</strong><strong>1 review summary</strong><small>as @alex-rivera</small></div><button className="button button--publish" onClick={onPublish} type="button">Publish review to GitHub <Icon name="external" size={16} /></button><p className="publish-note"><Icon name="shield" size={13} /> This prototype simulates submission. No network request will be made.</p></aside></div></div>;
 }
 
-function InvestigationDrawer({ answering, entries, evidence, onAsk, onClose, onQuestion, question, stop }: { answering: boolean; entries: NotebookEntry[]; evidence: EvidenceBlock; onAsk: (prompt?: string) => void; onClose: () => void; onQuestion: (value: string) => void; question: string; stop: TourStop }) {
-  return <><button aria-label="Close investigation" className="drawer-backdrop" onClick={onClose} type="button" /><aside aria-label="Investigation notebook" className="investigation-drawer"><header><div><span className="card-icon card-icon--spark"><Icon name="spark" size={17} /></span><div><div className="eyebrow">Investigation notebook</div><strong>{stop.eyebrow}</strong></div></div><button aria-label="Close investigation" className="icon-button" onClick={onClose} type="button"><Icon name="x" size={17} /></button></header><div className="drawer-context"><span>Attached evidence</span><div><Icon name="code" size={14} /><span><strong>{fileName(evidence.path)}</strong><small>lines {evidence.startLine}–{evidence.endLine} · {pullRequest.headSha}</small></span><Icon name="check" size={13} /></div></div><div className="drawer-thread">{entries.length === 0 && <div className="drawer-intro"><div className="spark-orbit"><Icon name="spark" /></div><h2>Interrogate the evidence.</h2><p>Wingdiff will answer from the attached change and clearly separate code facts from inference.</p><div className="suggested-questions">{stop.prompts.map((prompt) => <button key={prompt} onClick={() => onAsk(prompt)} type="button">{prompt}<Icon name="arrow-right" size={13} /></button>)}</div></div>}{entries.map((entry) => <div className="thread-entry" key={entry.id}><div className="thread-question"><span>You</span><p>{entry.question}</p></div><div className="thread-answer"><header><span className="card-icon card-icon--spark"><Icon name="spark" size={14} /></span><strong>Wingdiff</strong><small><i className="confidence-dot" /> Grounded in current evidence</small></header><p>{entry.answer}</p><button type="button"><Icon name="comment" size={13} /> Use as comment</button></div></div>)}{answering && <div className="thinking"><i /><i /><i /><span>Tracing the evidence…</span></div>}</div><form className="drawer-input" onSubmit={(event) => { event.preventDefault(); onAsk(); }}><textarea aria-label="Ask about this change" onChange={(event) => onQuestion(event.target.value)} placeholder="Ask about behavior, failure modes, or context…" rows={3} value={question} /><div><span><kbd>↵</kbd> to ask · answers stay local</span><button aria-label="Ask question" disabled={!question.trim() || answering} type="submit"><Icon name="arrow-right" size={17} /></button></div></form></aside></>;
+function InvestigationDrawer({ answering, entries, evidence, modelName, onAsk, onClose, onQuestion, providerConfigured, question, stop }: { answering: boolean; entries: NotebookEntry[]; evidence: EvidenceBlock; modelName: string; onAsk: (prompt?: string) => void; onClose: () => void; onQuestion: (value: string) => void; providerConfigured: boolean; question: string; stop: TourStop }) {
+  return <>
+    <button aria-label="Close investigation" className="drawer-backdrop" onClick={onClose} type="button" />
+    <aside aria-label="Investigation notebook" className="investigation-drawer">
+      <header>
+        <div><span className="card-icon card-icon--spark"><Icon name="spark" size={17} /></span><div><div className="eyebrow">Investigation notebook</div><strong>{stop.eyebrow}</strong></div></div>
+        <div className="drawer-header-actions"><span className={`drawer-model ${providerConfigured ? "is-live" : ""}`}><i />{providerConfigured ? modelName : "Fixture answers"}</span><button aria-label="Close investigation" className="icon-button" onClick={onClose} type="button"><Icon name="x" size={17} /></button></div>
+      </header>
+      <div className="drawer-context"><span>Attached evidence</span><div><Icon name="code" size={14} /><span><strong>{fileName(evidence.path)}</strong><small>lines {evidence.startLine}–{evidence.endLine} · {pullRequest.headSha}</small></span><Icon name="check" size={13} /></div></div>
+      <div className="drawer-thread">
+        {entries.length === 0 && <div className="drawer-intro"><div className="spark-orbit"><Icon name="spark" /></div><h2>Interrogate the evidence.</h2><p>{providerConfigured ? `${modelName} will answer from the attached change and separate code facts from inference.` : "Configure a provider for live answers. Until then, Wingdiff uses the authored fixture response for this stop."}</p><div className="suggested-questions">{stop.prompts.map((prompt) => <button key={prompt} onClick={() => onAsk(prompt)} type="button">{prompt}<Icon name="arrow-right" size={13} /></button>)}</div></div>}
+        {entries.map((entry) => <div className="thread-entry" key={entry.id}><div className="thread-question"><span>You</span><p>{entry.question}</p></div><div className={`thread-answer ${entry.status === "error" ? "is-error" : ""}`}><header><span className="card-icon card-icon--spark"><Icon name="spark" size={14} /></span><strong>{entry.model ?? "Guided fixture"}</strong><small><i className="confidence-dot" /> {entry.provider === "fixture" || !entry.provider ? "Fixture response" : "Grounded in current evidence"}</small></header>{entry.answer ? <p>{entry.answer}</p> : <div className="inline-thinking"><i /><i /><i /></div>}<button disabled={entry.status === "streaming"} type="button"><Icon name="comment" size={13} /> Use as comment</button></div></div>)}
+        {answering && entries.every((entry) => entry.status !== "streaming") && <div className="thinking"><i /><i /><i /><span>Tracing the evidence…</span></div>}
+      </div>
+      <form className="drawer-input" onSubmit={(event) => { event.preventDefault(); onAsk(); }}><textarea aria-label="Ask about this change" onChange={(event) => onQuestion(event.target.value)} placeholder="Ask about behavior, failure modes, or context…" rows={3} value={question} /><div><span><kbd>↵</kbd> to ask · {providerConfigured ? `using ${modelName}` : "fixture mode"}</span><button aria-label="Ask question" disabled={!question.trim() || answering} type="submit"><Icon name="arrow-right" size={17} /></button></div></form>
+    </aside>
+  </>;
+}
+
+function ModelPicker({ onClose, onSelection, providers, selection }: { onClose: () => void; onSelection: (selection: ModelSelection) => void; providers: ProviderDefinition[]; selection: ModelSelection }) {
+  const provider = providers.find((candidate) => candidate.id === selection.provider) ?? providers[0]!;
+  const active = provider.models.find((model) => model.id === selection.model) ?? provider.models[0]!;
+
+  function chooseProvider(next: ProviderDefinition) {
+    const first = next.models[0]!;
+    onSelection({ provider: next.id, model: first.id, reasoningEffort: first.defaultEffort });
+  }
+
+  return <div className="modal-backdrop model-backdrop" role="presentation"><section aria-modal="true" className="model-modal" role="dialog">
+    <header><div><div className="eyebrow">AI provider</div><h2>Choose your review copilot.</h2><p>The selected model handles contextual investigation. Credentials remain in the local server process.</p></div><button aria-label="Close model picker" className="icon-button" onClick={onClose} type="button"><Icon name="x" size={17} /></button></header>
+    <div className="provider-tabs">{providers.map((candidate) => <button className={candidate.id === provider.id ? "is-active" : ""} key={candidate.id} onClick={() => chooseProvider(candidate)} type="button"><span>{candidate.name}</span><small className={candidate.configured ? "is-configured" : ""}><i />{candidate.configured ? "Configured" : "Needs key"}</small></button>)}</div>
+    <div className="model-grid">{provider.models.map((model) => <button className={model.id === active.id ? "is-active" : ""} key={model.id} onClick={() => onSelection({ provider: provider.id, model: model.id, reasoningEffort: model.defaultEffort })} type="button"><span className="model-radio"><i /></span><span><strong>{model.name}{model.badge && <em>{model.badge}</em>}</strong><small>{model.description}</small></span></button>)}</div>
+    <section className="reasoning-setting"><div><span>Reasoning effort</span><small>Higher effort can improve difficult reviews with more latency and token usage.</small></div><div>{active.reasoningEfforts.map((effort) => <button className={selection.reasoningEffort === effort ? "is-active" : ""} key={effort} onClick={() => onSelection({ ...selection, reasoningEffort: effort })} type="button">{effort}</button>)}</div></section>
+    {!provider.configured && <div className="provider-setup"><Icon name="shield" size={16} /><div><strong>{provider.name} is not configured</strong><p>Set <code>{provider.envVariable}</code> in your shell, then restart Wingdiff. The key is never sent to the browser.</p></div></div>}
+    <footer><span><Icon name="check" size={13} /> Selection saved locally</span><button className="button button--primary" onClick={onClose} type="button">Use {active.name}</button></footer>
+  </section></div>;
 }
 
 function CommentComposer({ composer, onCancel, onChange, onSeverity, onStage }: { composer: ComposerState; onCancel: () => void; onChange: (value: string) => void; onSeverity: (value: RiskLevel) => void; onStage: () => void }) {
   return <div className="modal-backdrop" role="presentation"><section aria-modal="true" className="comment-modal" role="dialog"><header><div><div className="eyebrow">Draft review comment</div><h2>{fileName(composer.evidence.path)}:{composer.startLine}{composer.endLine !== composer.startLine ? `–${composer.endLine}` : ""}</h2></div><button aria-label="Close comment composer" className="icon-button" onClick={onCancel} type="button"><Icon name="x" size={17} /></button></header><div className="comment-anchor"><Icon name="code" size={14} /><span>{composer.evidence.path}</span><code>{pullRequest.headSha}</code></div><textarea autoFocus onChange={(event) => onChange(event.target.value)} placeholder="Write a precise, actionable review comment…" rows={7} value={composer.body} /><div className="comment-severity"><span>Severity</span>{(["low", "medium", "high"] as RiskLevel[]).map((level) => <button className={composer.severity === level ? "is-active" : ""} key={level} onClick={() => onSeverity(level)} type="button"><i className={`severity-dot severity-dot--${level}`} />{level}</button>)}</div><footer><button className="button button--quiet" onClick={onCancel} type="button">Cancel</button><button className="button button--primary" disabled={!composer.body.trim()} onClick={onStage} type="button">Add to review <Icon name="arrow-right" size={15} /></button></footer></section></div>;
+}
+
+function updateNotebookEntry(
+  setEntries: React.Dispatch<React.SetStateAction<NotebookEntry[]>>,
+  id: string,
+  patch: Partial<NotebookEntry>,
+) {
+  setEntries((current) => current.map((entry) => entry.id === id ? { ...entry, ...patch } : entry));
 }
 
 function usePersistentState<T>(key: string, fallback: T) {
@@ -390,4 +501,3 @@ function fileName(path: string) { return path.split("/").at(-1) ?? path; }
 function directoryName(path: string) { const pieces = path.split("/"); pieces.pop(); return pieces.length ? `${pieces.join("/")}/` : ""; }
 function labelDisposition(value: ReviewDisposition) { if (value === "REQUEST_CHANGES") return "Request changes"; if (value === "APPROVE") return "Approve"; return "Comment"; }
 function dispositionDescription(value: ReviewDisposition) { if (value === "REQUEST_CHANGES") return "Block merge until feedback is addressed"; if (value === "APPROVE") return "Signal that this is ready to merge"; return "Share feedback without an approval decision"; }
-

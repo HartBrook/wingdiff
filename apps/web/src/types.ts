@@ -5,6 +5,9 @@ export type ClaimKind = "fact" | "inference" | "unknown";
 export type RiskLevel = "low" | "medium" | "high";
 export type DiffLineKind = "context" | "addition" | "deletion" | "header";
 export type ReviewDisposition = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
+export type ProviderId = "openai" | "anthropic";
+export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
+export type AnswerStatus = "streaming" | "complete" | "error";
 
 export interface PullRequestFixture {
   number: number;
@@ -117,5 +120,32 @@ export interface NotebookEntry {
   question: string;
   answer: string;
   createdAt: number;
+  provider: ProviderId | "fixture";
+  model: string;
+  status: AnswerStatus;
 }
 
+export interface ModelDefinition {
+  id: string;
+  provider: ProviderId;
+  name: string;
+  family: string;
+  description: string;
+  badge?: string;
+  reasoningEfforts: ReasoningEffort[];
+  defaultEffort: ReasoningEffort;
+}
+
+export interface ProviderDefinition {
+  id: ProviderId;
+  name: string;
+  configured: boolean;
+  envVariable: string;
+  models: ModelDefinition[];
+}
+
+export interface ModelSelection {
+  provider: ProviderId;
+  model: string;
+  reasoningEffort: ReasoningEffort;
+}

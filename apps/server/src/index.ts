@@ -1,7 +1,16 @@
 import path from "node:path";
+import { loadEnvFile } from "node:process";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { createApp } from "./app.js";
+
+const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+try {
+  loadEnvFile(path.join(repositoryRoot, ".env"));
+} catch (error) {
+  const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+  if (code !== "ENOENT") throw error;
+}
 
 const host = process.env.WINGDIFF_HOST ?? "127.0.0.1";
 const port = Number(process.env.WINGDIFF_PORT ?? 4173);
