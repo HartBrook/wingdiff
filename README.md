@@ -4,7 +4,7 @@ Wingdiff is a guided, evidence-backed tour of a pull request. It helps an engine
 
 This repository currently contains the Phase 0 experience prototype described in the [product plan](./PRODUCT_PLAN.md). It uses a realistic cross-file PR fixture to exercise the complete review loop:
 
-- Technical brief with stated intent, inferred behavior, topology, and risk map
+- Review summary with ranked findings, stated intent, implementation shape, and risk map
 - Five-stop semantic tour with exact diff evidence and provenance labels
 - Line selection, flags, contextual investigation, and draft review comments
 - Full evidence Browse mode
