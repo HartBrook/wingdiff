@@ -5,6 +5,9 @@ export type ClaimKind = "fact" | "inference" | "unknown";
 export type RiskLevel = "low" | "medium" | "high";
 export type DiffLineKind = "context" | "addition" | "deletion" | "header";
 export type ReviewDisposition = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
+export type ReviewMode = "update" | "full";
+export type CoverageState = "reviewed-current" | "reviewed-unchanged" | "changed" | "unseen";
+export type FindingRevisionState = "new" | "still-applies" | "recheck" | "appears-addressed" | "superseded" | "resolved";
 export type ProviderId = "codex" | "openai" | "anthropic";
 export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 export type AnswerStatus = "streaming" | "complete" | "error";
@@ -150,4 +153,25 @@ export interface ModelSelection {
   provider: ProviderId;
   model: string;
   reasoningEffort: ReasoningEffort;
+}
+
+export interface FindingRevision {
+  findingId: string;
+  stopId: string;
+  title: string;
+  severity: RiskLevel;
+  state: FindingRevisionState;
+  summary: string;
+}
+
+export interface ReviewUpdateFixture {
+  fromHeadSha: string;
+  toHeadSha: string;
+  commits: number;
+  filesChanged: number;
+  additions: number;
+  deletions: number;
+  changedStopIds: string[];
+  unchangedStopIds: string[];
+  findingRevisions: FindingRevision[];
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { risks, topologyNodes, tourStops } from "./fixture";
+import { pullRequest, reviewUpdate, risks, topologyNodes, tourStops, updateStops } from "./fixture";
 
 describe("guided review fixture", () => {
   it("has a stable, contiguous route", () => {
@@ -60,5 +60,37 @@ describe("guided review fixture", () => {
       expect(stop.finding!.suggestedComment.length).toBeGreaterThan(40);
     }
   });
-});
 
+  it("models a complete checkpoint-to-head update", () => {
+    expect(reviewUpdate.fromHeadSha).not.toBe(reviewUpdate.toHeadSha);
+    expect(reviewUpdate.toHeadSha).toBe(pullRequest.headSha);
+
+    const allStopIds = new Set(tourStops.map((stop) => stop.id));
+    const partition = [...reviewUpdate.changedStopIds, ...reviewUpdate.unchangedStopIds];
+
+    expect(new Set(partition)).toEqual(allStopIds);
+    expect(partition).toHaveLength(allStopIds.size);
+    expect(updateStops.map((stop) => stop.id)).toEqual(reviewUpdate.changedStopIds);
+  });
+
+  it("revisits prior findings only where code changed", () => {
+    for (const revision of reviewUpdate.findingRevisions) {
+      expect(reviewUpdate.changedStopIds).toContain(revision.stopId);
+      expect(updateStops.some((stop) => stop.id === revision.stopId)).toBe(true);
+    }
+  });
+
+  it("keeps update evidence internally consistent", () => {
+    for (const stop of updateStops) {
+      for (const evidence of stop.evidence) {
+        const displayedLines = evidence.lines
+          .flatMap((line) => [line.oldLine, line.newLine])
+          .filter((line): line is number => line !== undefined);
+
+        expect(displayedLines.length, `${evidence.id} should display numbered lines`).toBeGreaterThan(0);
+        expect(Math.min(...displayedLines)).toBeGreaterThanOrEqual(evidence.startLine);
+        expect(Math.max(...displayedLines)).toBeLessThanOrEqual(evidence.endLine);
+      }
+    }
+  });
+});
