@@ -1,4 +1,5 @@
 import express from "express";
+import { inspectLocalTarget } from "./preflight.js";
 import { createProviders, publicProviders, validateSelection } from "./providers/index.js";
 import { parsePullRequestTarget } from "./targets.js";
 import { validateInvestigationContext } from "./validation.js";
@@ -20,6 +21,17 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env) {
       response.json({ target });
     } catch (error) {
       const message = error instanceof Error ? error.message : "The pull request target is not valid.";
+      response.status(400).json({ error: message });
+    }
+  });
+
+  app.post("/api/targets/prepare", async (request, response) => {
+    try {
+      const target = parsePullRequestTarget(request.body?.input, request.body?.checkoutRepository);
+      const environment = await inspectLocalTarget(target, process.cwd());
+      response.json({ target, environment });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The pull request target could not be prepared.";
       response.status(400).json({ error: message });
     }
   });

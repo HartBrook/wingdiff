@@ -23,7 +23,7 @@ import type {
 } from "./types";
 import { CodeDiff } from "./components/CodeDiff";
 import { Icon } from "./components/Icon";
-import { addRecentTarget, normalizePullRequestTarget, parseLaunchRoute, type PullRequestTarget } from "./launcher";
+import { addRecentTarget, parseLaunchRoute, preparePullRequestTarget, type PullRequestTarget, type TargetPreparation } from "./launcher";
 import { claimKindLabel, compareSeverity } from "./reviewPresentation";
 
 interface Selection {
@@ -62,7 +62,7 @@ export default function App() {
 
 function Launcher({ initialTarget, onDemo }: { initialTarget?: string; onDemo: () => void }) {
   const [input, setInput] = useState(initialTarget ?? "");
-  const [target, setTarget] = useState<PullRequestTarget | null>(null);
+  const [preparation, setPreparation] = useState<TargetPreparation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [recent, setRecent] = usePersistentState<PullRequestTarget[]>("wingdiff:recent-targets", []);
@@ -85,12 +85,12 @@ function Launcher({ initialTarget, onDemo }: { initialTarget?: string; onDemo: (
     setInput(candidate);
     setSubmitting(true);
     setError(null);
-    setTarget(null);
+    setPreparation(null);
     try {
-      const normalized = await normalizePullRequestTarget(candidate, signal);
-      setTarget(normalized);
-      setRecent((current) => addRecentTarget(current, normalized));
-      window.history.replaceState({}, "", `?target=${encodeURIComponent(normalized.canonicalUrl)}`);
+      const prepared = await preparePullRequestTarget(candidate, signal);
+      setPreparation(prepared);
+      setRecent((current) => addRecentTarget(current, prepared.target));
+      window.history.replaceState({}, "", `?target=${encodeURIComponent(prepared.target.canonicalUrl)}`);
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") return;
       setError(caught instanceof Error ? caught.message : "Wingdiff could not read that pull request target.");
@@ -119,9 +119,9 @@ function Launcher({ initialTarget, onDemo }: { initialTarget?: string; onDemo: (
         <div className="target-help"><span>Also accepts</span><code>owner/repo#123</code><span>or run</span><code>wingdiff 123</code><span>inside a checkout</span></div>
       </section>
 
-      {target ? <section className="target-ready">
+      {preparation ? <section className="target-ready">
         <span className="target-ready__icon"><Icon name="check" size={19} /></span>
-        <div><div className="eyebrow">Target ready</div><h2>{target.label}</h2><p>Wingdiff recognized this pull request. Live GitHub acquisition is not connected yet, so no repository data was fetched.</p></div>
+        <div><div className="eyebrow">Target ready</div><h2>{preparation.target.label}</h2><p>{checkoutMessage(preparation)} · {preparation.environment.githubCli.installed ? "GitHub CLI installed" : "GitHub CLI not found"}. No GitHub request was made.</p></div>
         <button className="button button--primary" onClick={onDemo} type="button">Preview with demo data <Icon name="arrow-right" size={15} /></button>
       </section> : recent.length > 0 ? <section className="recent-targets">
         <header><span>Recent pull requests</span><small>Stored on this device</small></header>
@@ -636,6 +636,13 @@ function updateNotebookEntry(
   patch: Partial<NotebookEntry>,
 ) {
   setEntries((current) => current.map((entry) => entry.id === id ? { ...entry, ...patch } : entry));
+}
+
+function checkoutMessage(preparation: TargetPreparation): string {
+  const checkout = preparation.environment.checkout;
+  if (checkout.status === "matched") return "Current checkout matches";
+  if (checkout.status === "different" && checkout.repository) return `Current checkout is ${checkout.repository}`;
+  return "No local checkout resolved";
 }
 
 function usePersistentState<T>(key: string, fallback: T) {
