@@ -422,7 +422,7 @@ code, kbd { font-family: var(--mono); }
 .model-modal > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
 .model-modal > header h2 { margin: 8px 0 5px; font-size: 24px; font-weight: 500; letter-spacing: -.035em; }
 .model-modal > header p { max-width: 520px; margin: 0; color: var(--text-3); font-size: 10px; line-height: 1.5; }
-.provider-tabs { display: grid; grid-template-columns: 1fr 1fr; margin: 24px 0 14px; padding: 4px; gap: 4px; border: 1px solid var(--border); border-radius: 11px; background: var(--canvas-soft); }
+.provider-tabs { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin: 24px 0 14px; padding: 4px; gap: 4px; border: 1px solid var(--border); border-radius: 11px; background: var(--canvas-soft); }
 .provider-tabs button { display: flex; min-height: 42px; align-items: center; justify-content: space-between; padding: 8px 11px; color: var(--text-3); border: 1px solid transparent; border-radius: 8px; background: transparent; cursor: pointer; }
 .provider-tabs button.is-active { color: var(--text); border-color: var(--border); background: var(--surface-2); box-shadow: 0 6px 16px rgba(0,0,0,.08); }
 .provider-tabs button > span { font-size: 10px; font-weight: 600; }

@@ -7,29 +7,37 @@ import type {
 } from "./types";
 
 export const DEFAULT_SELECTION: ModelSelection = {
-  provider: "openai",
+  provider: "codex",
   model: "gpt-6-sol",
   reasoningEffort: "medium",
 };
 
 export const FALLBACK_PROVIDERS: ProviderDefinition[] = [
   {
-    id: "openai",
-    name: "OpenAI / Codex",
+    id: "codex",
+    name: "Codex CLI",
     configured: false,
-    envVariable: "OPENAI_API_KEY",
-    models: [
-      model("gpt-6-sol", "GPT-6 Sol", "OpenAI", "Balanced reasoning, latency, and cost for everyday code review.", "Recommended", ["none", "low", "medium", "high", "xhigh", "max"], "medium"),
-      model("gpt-6-astra", "GPT-6 Astra", "OpenAI", "Highest capability for architectural and high-risk reviews.", "Deep review", ["low", "medium", "high", "xhigh", "max"], "high"),
-      model("gpt-6-luna", "GPT-6 Luna", "OpenAI", "Fast, cost-efficient investigation for routine questions.", "Fast", ["none", "low", "medium", "high", "xhigh", "max"], "low"),
-      model("gpt-5.3-codex", "GPT-5.3-Codex", "Codex", "Codex-tuned model for agentic coding and code investigation.", "Codex", ["low", "medium", "high", "xhigh"], "medium"),
-    ],
+    transport: "cli",
+    setupCommand: "codex login",
+    setupDescription: "Install Codex CLI and sign in with your ChatGPT account.",
+    models: openAIModels("codex", "Recommended"),
+  },
+  {
+    id: "openai",
+    name: "OpenAI API",
+    configured: false,
+    transport: "api",
+    setupCommand: "OPENAI_API_KEY",
+    setupDescription: "Set an OpenAI API key in your shell or local .env file.",
+    models: openAIModels("openai", "API"),
   },
   {
     id: "anthropic",
-    name: "Anthropic",
+    name: "Anthropic API",
     configured: false,
-    envVariable: "ANTHROPIC_API_KEY",
+    transport: "api",
+    setupCommand: "ANTHROPIC_API_KEY",
+    setupDescription: "Set an Anthropic API key in your shell or local .env file.",
     models: [
       model("claude-sonnet-4-6", "Claude Sonnet 4.6", "Anthropic", "Fast, capable analysis for interactive review.", "Balanced", ["medium"], "medium", "anthropic"),
       model("claude-opus-4-6", "Claude Opus 4.6", "Anthropic", "Deeper analysis for complex changes.", "Deep review", ["high"], "high", "anthropic"),
@@ -104,9 +112,18 @@ export async function streamInvestigation({
 }
 
 export function selectedModel(providers: ProviderDefinition[], selection: ModelSelection) {
-  return providers.flatMap((provider) => provider.models).find((candidate) => candidate.id === selection.model)
-    ?? FALLBACK_PROVIDERS.flatMap((provider) => provider.models).find((candidate) => candidate.id === selection.model)
+  return providers.find((provider) => provider.id === selection.provider)?.models.find((candidate) => candidate.id === selection.model)
+    ?? FALLBACK_PROVIDERS.find((provider) => provider.id === selection.provider)?.models.find((candidate) => candidate.id === selection.model)
     ?? FALLBACK_PROVIDERS[0]!.models[0]!;
+}
+
+function openAIModels(provider: "codex" | "openai", solBadge: string): ModelDefinition[] {
+  return [
+    model("gpt-6-sol", "GPT-6 Sol", "OpenAI", "Balanced reasoning, latency, and cost for everyday code review.", solBadge, ["none", "low", "medium", "high", "xhigh", "max"], "medium", provider),
+    model("gpt-6-astra", "GPT-6 Astra", "OpenAI", "Highest capability for architectural and high-risk reviews.", "Deep review", ["low", "medium", "high", "xhigh", "max"], "high", provider),
+    model("gpt-6-luna", "GPT-6 Luna", "OpenAI", "Fast, cost-efficient investigation for routine questions.", "Fast", ["none", "low", "medium", "high", "xhigh", "max"], "low", provider),
+    model("gpt-5.3-codex", "GPT-5.3-Codex", "Codex", "Codex-tuned model for agentic coding and code investigation.", "Codex", ["low", "medium", "high", "xhigh"], "medium", provider),
+  ];
 }
 
 function model(

@@ -5,7 +5,7 @@ export type ClaimKind = "fact" | "inference" | "unknown";
 export type RiskLevel = "low" | "medium" | "high";
 export type DiffLineKind = "context" | "addition" | "deletion" | "header";
 export type ReviewDisposition = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
-export type ProviderId = "openai" | "anthropic";
+export type ProviderId = "codex" | "openai" | "anthropic";
 export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 export type AnswerStatus = "streaming" | "complete" | "error";
 
@@ -140,7 +140,9 @@ export interface ProviderDefinition {
   id: ProviderId;
   name: string;
   configured: boolean;
-  envVariable: string;
+  transport: "cli" | "api";
+  setupCommand: string;
+  setupDescription: string;
   models: ModelDefinition[];
 }
 

@@ -11,7 +11,7 @@ This repository currently contains the Phase 0 experience prototype described in
 - Review desk with coverage, summary, inline comments, and disposition
 - Dark/light themes, keyboard navigation, responsive layout, and local persistence
 
-GitHub submission and tour generation are deliberately simulated in this phase. Contextual investigation can use a live OpenAI or Anthropic model; without a configured key it falls back to clearly labeled fixture answers.
+GitHub submission and tour generation are deliberately simulated in this phase. Contextual investigation defaults to the locally installed Codex CLI using its existing ChatGPT sign-in. Direct OpenAI and Anthropic APIs remain optional; without an available provider Wingdiff falls back to clearly labeled fixture answers.
 
 ## Run locally
 
@@ -24,27 +24,34 @@ npm run dev
 
 The local Wingdiff server hosts the API and Vite application at `http://127.0.0.1:4173`.
 
-## AI providers
+## Portable, local-first AI
 
-OpenAI/Codex is the default provider. Copy the example environment file and add the key for either provider:
+Wingdiff has no hosted service dependency. By default, its loopback server delegates model work to Codex CLI, which keeps authentication in the supported CLI credential store instead of asking Wingdiff to handle a key.
 
 ```bash
-cp .env.example .env
-
-# Edit .env, then restart Wingdiff
+codex login
+codex login status
 npm run dev
 ```
 
-Available OpenAI models:
+Wingdiff invokes `codex exec` in an isolated temporary directory with an ephemeral session, a read-only sandbox, and user/project customization disabled. Review evidence is sent over stdin rather than command-line arguments. The model request still reaches the provider configured by Codex, so your organization’s model and data-use policies still apply.
+
+Direct API access is an optional fallback. Copy the example environment file and add either key:
+
+```bash
+cp .env.example .env
+```
+
+Available Codex/OpenAI models:
 
 - `gpt-6-sol` — default balance of review quality, speed, and cost
 - `gpt-6-astra` — highest-capability option for difficult reviews
 - `gpt-6-luna` — fast, cost-efficient investigations
 - `gpt-5.3-codex` — Codex-tuned coding model
 
-Claude Sonnet 4.6 and Opus 4.6 remain available through the same provider interface. Select the provider, model, and supported reasoning effort from the model control in the top bar.
+Claude Sonnet 4.6 and Opus 4.6 remain available through the same provider interface. Select Codex CLI, OpenAI API, or Anthropic API plus the model and supported reasoning effort from the model control in the top bar.
 
-API keys are read only by the loopback Node server and are never returned to browser JavaScript. OpenAI requests use the Responses API with streaming and `store: false`.
+API keys are read only by the loopback Node server and are never returned to browser JavaScript. OpenAI API requests use the Responses API with streaming and `store: false`. Wingdiff never reads or copies Codex CLI credentials.
 
 ## Verify
 

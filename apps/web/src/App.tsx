@@ -72,6 +72,7 @@ export default function App() {
   const stopNotebook = notebook.filter((entry) => entry.stopId === activeStop.id);
   const activeModel = selectedModel(providers, modelSelection);
   const activeProvider = providers.find((provider) => provider.id === modelSelection.provider);
+  const activeModelLabel = activeProvider ? `${activeProvider.name} · ${activeModel.name}` : activeModel.name;
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -79,7 +80,18 @@ export default function App() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetchProviders(controller.signal).then(setProviders).catch(() => undefined);
+    fetchProviders(controller.signal).then((availableProviders) => {
+      setProviders(availableProviders);
+      setModelSelection((current) => {
+        const currentProvider = availableProviders.find((provider) => provider.id === current.provider);
+        if (currentProvider?.configured) return current;
+        const codex = availableProviders.find((provider) => provider.id === "codex" && provider.configured);
+        const model = codex?.models.find((candidate) => candidate.id === DEFAULT_SELECTION.model) ?? codex?.models[0];
+        return codex && model
+          ? { provider: codex.id, model: model.id, reasoningEffort: model.defaultEffort }
+          : current;
+      });
+    }).catch(() => undefined);
     return () => controller.abort();
   }, []);
 
@@ -200,7 +212,7 @@ export default function App() {
       answer: "",
       createdAt: Date.now(),
       provider: live ? modelSelection.provider : "fixture",
-      model: live ? activeModel.name : "Guided fixture",
+      model: live ? activeModelLabel : "Guided fixture",
       status: "streaming",
     };
     setNotebook((current) => [...current, entry]);
@@ -243,7 +255,7 @@ export default function App() {
   return (
     <div className="app-shell">
       <TopBar
-        activeModel={activeModel.name}
+        activeModel={activeModelLabel}
         comments={comments.length}
         onMenu={() => setMobileNavOpen((open) => !open)}
         onModel={() => setModelPickerOpen(true)}
@@ -319,7 +331,7 @@ export default function App() {
           answering={answering}
           entries={stopNotebook}
           evidence={activeEvidence}
-          modelName={activeModel.name}
+          modelName={activeModelLabel}
           onAsk={askQuestion}
           onClose={() => setDrawerOpen(false)}
           onQuestion={setQuestion}
@@ -469,11 +481,11 @@ function ModelPicker({ onClose, onSelection, providers, selection }: { onClose: 
   }
 
   return <div className="modal-backdrop model-backdrop" role="presentation"><section aria-modal="true" className="model-modal" role="dialog">
-    <header><div><div className="eyebrow">AI provider</div><h2>Choose your review copilot.</h2><p>The selected model handles contextual investigation. Credentials remain in the local server process.</p></div><button aria-label="Close model picker" className="icon-button" onClick={onClose} type="button"><Icon name="x" size={17} /></button></header>
-    <div className="provider-tabs">{providers.map((candidate) => <button className={candidate.id === provider.id ? "is-active" : ""} key={candidate.id} onClick={() => chooseProvider(candidate)} type="button"><span>{candidate.name}</span><small className={candidate.configured ? "is-configured" : ""}><i />{candidate.configured ? "Configured" : "Needs key"}</small></button>)}</div>
+    <header><div><div className="eyebrow">AI provider</div><h2>Choose your review copilot.</h2><p>Codex CLI uses your existing local sign-in. Direct API providers remain optional, and credentials never enter browser JavaScript.</p></div><button aria-label="Close model picker" className="icon-button" onClick={onClose} type="button"><Icon name="x" size={17} /></button></header>
+    <div className="provider-tabs">{providers.map((candidate) => <button className={candidate.id === provider.id ? "is-active" : ""} key={candidate.id} onClick={() => chooseProvider(candidate)} type="button"><span>{candidate.name}</span><small className={candidate.configured ? "is-configured" : ""}><i />{candidate.configured ? "Ready" : candidate.transport === "cli" ? "Needs sign-in" : "Needs key"}</small></button>)}</div>
     <div className="model-grid">{provider.models.map((model) => <button className={model.id === active.id ? "is-active" : ""} key={model.id} onClick={() => onSelection({ provider: provider.id, model: model.id, reasoningEffort: model.defaultEffort })} type="button"><span className="model-radio"><i /></span><span><strong>{model.name}{model.badge && <em>{model.badge}</em>}</strong><small>{model.description}</small></span></button>)}</div>
     <section className="reasoning-setting"><div><span>Reasoning effort</span><small>Higher effort can improve difficult reviews with more latency and token usage.</small></div><div>{active.reasoningEfforts.map((effort) => <button className={selection.reasoningEffort === effort ? "is-active" : ""} key={effort} onClick={() => onSelection({ ...selection, reasoningEffort: effort })} type="button">{effort}</button>)}</div></section>
-    {!provider.configured && <div className="provider-setup"><Icon name="shield" size={16} /><div><strong>{provider.name} is not configured</strong><p>Set <code>{provider.envVariable}</code> in your shell, then restart Wingdiff. The key is never sent to the browser.</p></div></div>}
+    {!provider.configured && <div className="provider-setup"><Icon name="shield" size={16} /><div><strong>{provider.name} is not ready</strong><p>{provider.setupDescription} Run <code>{provider.setupCommand}</code>, then restart Wingdiff.</p></div></div>}
     <footer><span><Icon name="check" size={13} /> Selection saved locally</span><button className="button button--primary" onClick={onClose} type="button">Use {active.name}</button></footer>
   </section></div>;
 }
