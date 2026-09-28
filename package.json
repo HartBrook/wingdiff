@@ -11,6 +11,7 @@
   ],
   "scripts": {
     "dev": "npm run dev --workspace @wingdiff/server",
+    "wingdiff": "npm run cli --workspace @wingdiff/server --",
     "start": "npm run start --workspace @wingdiff/server",
     "build": "npm run build --workspace @wingdiff/web && npm run build --workspace @wingdiff/server",
     "typecheck": "npm run typecheck --workspaces --if-present",
