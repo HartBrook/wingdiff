@@ -21,8 +21,8 @@ export async function acquirePinnedRevisions(
 ): Promise<PinnedRevisions> {
   const repositoryRoot = (await runCommand(["rev-parse", "--show-toplevel"], checkoutPath)).trim();
   const namespace = `refs/wingdiff/pull/${target.number}`;
-  const baseRef = `${namespace}/base`;
-  const headRef = `${namespace}/head`;
+  const baseRef = `${namespace}/revisions/${metadata.base.sha}`;
+  const headRef = `${namespace}/revisions/${metadata.head.sha}`;
 
   await ensureBaseRevision(metadata, baseRef, repositoryRoot, runCommand);
   await ensureHeadRevision(target, metadata, headRef, repositoryRoot, runCommand);

@@ -25,8 +25,8 @@ describe("pinned Git revisions", () => {
     expect(after).toBe(before);
     expect(pinned).toEqual({
       repositoryRoot: await realpath(repository.path),
-      base: { sha: repository.baseSha, ref: "refs/wingdiff/pull/42/base" },
-      head: { sha: repository.headSha, ref: "refs/wingdiff/pull/42/head" },
+      base: { sha: repository.baseSha, ref: `refs/wingdiff/pull/42/revisions/${repository.baseSha}` },
+      head: { sha: repository.headSha, ref: `refs/wingdiff/pull/42/revisions/${repository.headSha}` },
     });
     expect((await git(repository.path, ["rev-parse", pinned.base.ref])).trim()).toBe(repository.baseSha);
     expect((await git(repository.path, ["rev-parse", pinned.head.ref])).trim()).toBe(repository.headSha);
@@ -53,8 +53,8 @@ describe("pinned Git revisions", () => {
     };
 
     await acquirePinnedRevisions(target, metadata, "/work/codex", runner);
-    expect(calls).toContainEqual(["fetch", "--no-tags", "--quiet", "origin", "+refs/heads/main:refs/wingdiff/pull/42/base"]);
-    expect(calls).toContainEqual(["fetch", "--no-tags", "--quiet", "origin", "+refs/pull/42/head:refs/wingdiff/pull/42/head"]);
+    expect(calls).toContainEqual(["fetch", "--no-tags", "--quiet", "origin", `+refs/heads/main:refs/wingdiff/pull/42/revisions/${metadata.base.sha}`]);
+    expect(calls).toContainEqual(["fetch", "--no-tags", "--quiet", "origin", `+refs/pull/42/head:refs/wingdiff/pull/42/revisions/${metadata.head.sha}`]);
   });
 
   it("rejects a head that moves between metadata and fetch", async () => {
