@@ -46,15 +46,17 @@ describe("local review sessions", () => {
     store.saveCheckpoint(session.id, {
       reviewedHeadSha: session.metadata.head.sha,
       completedAt: "2026-09-29T12:10:00Z",
+      scope: "full",
       coverage: { counter: "reviewed-current" },
-      findingRevisions: [{ findingId: "race", state: "resolved" }],
+      findingRevisions: [{ findingId: "race", title: "Counter race", severity: "high", state: "resolved", summary: "Resolved by the reviewer.", pathHints: ["counter.ts"] }],
     });
 
     expect(store.latestCheckpoint(session.id)).toEqual({
       reviewedHeadSha: "b".repeat(40),
       completedAt: "2026-09-29T12:10:00Z",
+      scope: "full",
       coverage: { counter: "reviewed-current" },
-      findingRevisions: [{ findingId: "race", state: "resolved" }],
+      findingRevisions: [{ findingId: "race", title: "Counter race", severity: "high", state: "resolved", summary: "Resolved by the reviewer.", pathHints: ["counter.ts"] }],
     });
     store.close();
   });
@@ -71,6 +73,7 @@ describe("local review sessions", () => {
       session.metadata.head.sha,
       {
         summary: "The counter change is small and focused.",
+        findingRevisions: [],
         stops: [{
           id: "counter",
           title: "Counter update",
@@ -91,7 +94,7 @@ describe("local review sessions", () => {
       selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
       tour: { summary: "The counter change is small and focused." },
     });
-    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(4);
+    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(5);
     store.close();
   });
 
@@ -101,6 +104,7 @@ describe("local review sessions", () => {
     store.saveCheckpoint(baseline.id, {
       reviewedHeadSha: baseline.metadata.head.sha,
       completedAt: "2026-09-29T12:10:00Z",
+      scope: "full",
       coverage: { counter: "understood" },
       findingRevisions: [],
     });

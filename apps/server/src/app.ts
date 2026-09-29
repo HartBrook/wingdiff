@@ -4,7 +4,7 @@ import { inspectLocalTarget } from "./preflight.js";
 import { createProviders, publicProviders, validateSelection } from "./providers/index.js";
 import type { ProviderId, TextProvider } from "./providers/types.js";
 import { SessionStore } from "./sessions.js";
-import type { TourScope } from "./sessions.js";
+import type { FindingCheckpoint, TourScope } from "./sessions.js";
 import { parsePullRequestTarget } from "./targets.js";
 import { generateSessionTour, getSessionTour } from "./tourService.js";
 import { validateInvestigationContext } from "./validation.js";
@@ -91,10 +91,12 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
         return;
       }
       const coverage = reviewCoverage(request.body?.coverage);
-      const findingRevisions = Array.isArray(request.body?.findingRevisions) ? request.body.findingRevisions : [];
+      const scope = tourScope(request.body?.scope);
+      const findingRevisions = findingCheckpoints(request.body?.findingRevisions);
       const checkpoint = {
         reviewedHeadSha: session.metadata.head.sha,
         completedAt: new Date().toISOString(),
+        scope,
         coverage,
         findingRevisions,
       };
@@ -266,4 +268,35 @@ function tourScope(input: unknown): TourScope {
   if (input === undefined || input === null || input === "" || input === "full") return "full";
   if (input === "update") return "update";
   throw new Error(`Invalid tour scope: ${String(input)}`);
+}
+
+function findingCheckpoints(input: unknown) {
+  if (input === undefined) return [];
+  if (!Array.isArray(input) || input.length > 100) throw new Error("Finding revisions must be a bounded list.");
+  return input.map((candidate, index) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw new Error(`Finding revision ${index + 1} is invalid.`);
+    }
+    const value = candidate as Record<string, unknown>;
+    const findingId = requiredText(value.findingId, `finding revision ${index + 1} id`, 128);
+    const title = requiredText(value.title, `${findingId} title`, 160);
+    const summary = requiredText(value.summary, `${findingId} summary`, 420);
+    const severity = String(value.severity);
+    const state = String(value.state);
+    if (!["high", "medium", "low"].includes(severity)) throw new Error(`Invalid severity for ${findingId}.`);
+    if (!["new", "still-applies", "appears-addressed", "recheck", "superseded", "resolved"].includes(state)) {
+      throw new Error(`Invalid state for ${findingId}.`);
+    }
+    const pathHints = Array.isArray(value.pathHints)
+      ? value.pathHints.map((path, pathIndex) => requiredText(path, `${findingId} path ${pathIndex + 1}`, 500))
+      : [];
+    return { findingId, title, summary, severity, state, pathHints } as FindingCheckpoint;
+  });
+}
+
+function requiredText(input: unknown, label: string, maximum: number): string {
+  if (typeof input !== "string" || !input.trim()) throw new Error(`${label} is required.`);
+  const value = input.trim();
+  if (value.length > maximum) throw new Error(`${label} exceeds ${maximum} characters.`);
+  return value;
 }

@@ -15,6 +15,7 @@ const input: TourGenerationInput = {
     headSha: "b".repeat(40),
   },
   fileAnchorIds: ["file_001_abc"],
+  priorFindings: [],
   anchors: [
     { id: "file_001_abc", path: "src/store.ts", kind: "file" },
     { id: "line_def", path: "src/store.ts", kind: "addition", newLine: 8, content: "await store.set(value)" },
@@ -30,6 +31,7 @@ describe("tour generation prompt", () => {
     expect(prompt).toContain("line_def");
     expect(TOUR_INSTRUCTIONS).toContain("untrusted data");
     expect(TOUR_INSTRUCTIONS).toContain("Avoid introductions, conclusions, praise, filler");
+    expect(TOUR_INSTRUCTIONS).toContain("Never mark a finding resolved");
   });
 
   it("requires nullable findings and rejects extra structured fields", () => {
@@ -38,6 +40,7 @@ describe("tour generation prompt", () => {
     expect(stop.required).toContain("finding");
     expect(stop.properties.finding.anyOf).toContainEqual({ type: "null" });
     expect(stop.additionalProperties).toBe(false);
+    expect(TOUR_JSON_SCHEMA.required).toContain("findingRevisions");
   });
 });
 

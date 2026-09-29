@@ -54,6 +54,7 @@ describe("review acquisition", () => {
     store.saveCheckpoint(baseline.id, {
       reviewedHeadSha: baseline.metadata.head.sha,
       completedAt: "2026-09-29T12:10:00Z",
+      scope: "full",
       coverage: { counter: "understood" },
       findingRevisions: [],
     });
@@ -90,6 +91,7 @@ describe("review acquisition", () => {
     store.saveCheckpoint(baseline.id, {
       reviewedHeadSha: baseline.metadata.head.sha,
       completedAt: "2026-09-29T12:10:00Z",
+      scope: "full",
       coverage: { counter: "understood" },
       findingRevisions: [],
     });

@@ -76,6 +76,20 @@ describe("session tour generation", () => {
     const store = new SessionStore(":memory:");
     const baselineMetadata = { ...metadata, head: { ref: "feature", sha: "c".repeat(40) } };
     const baseline = store.upsertReadySession(target, baselineMetadata, { ...evidence, headSha: baselineMetadata.head.sha });
+    store.saveCheckpoint(baseline.id, {
+      reviewedHeadSha: baseline.metadata.head.sha,
+      completedAt: "2026-09-29T12:10:00Z",
+      scope: "full",
+      coverage: { counter: "understood" },
+      findingRevisions: [{
+        findingId: "counter-race",
+        title: "Counter updates can race",
+        severity: "high",
+        state: "new",
+        summary: "The earlier path used a read-modify-write sequence.",
+        pathHints: ["src/counter.ts"],
+      }],
+    });
     const current = store.upsertReadySession(target, metadata, evidence);
     store.saveReviewUpdate(current.id, baseline.id, {
       ...evidence,
@@ -87,8 +101,15 @@ describe("session tour generation", () => {
       id: "codex",
       async generateTour(_selection, input) {
         suppliedBaseSha = input.pullRequest.baseSha;
+        expect(input.priorFindings.map((finding) => finding.id)).toEqual(["counter-race"]);
         return {
           summary: "Only the counter changed since review.",
+          findingRevisions: [{
+            findingId: "counter-race",
+            state: "appears-addressed",
+            summary: "The current change uses one Redis operation.",
+            anchorIds: ["line_new-counter"],
+          }],
           stops: [{
             id: "counter-update", title: "Counter follow-up", summary: "The follow-up adjusts the counter.", purpose: "Recheck the changed area.",
             anchorIds: [input.fileAnchorIds[0]!, "line_new-counter"],

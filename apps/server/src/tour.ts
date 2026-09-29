@@ -5,6 +5,7 @@ import type { PullRequestMetadata } from "./github.js";
 export type TourClaimKind = "fact" | "inference" | "unknown";
 export type TourConfidence = "high" | "medium" | "low";
 export type TourSeverity = "high" | "medium" | "low";
+export type FindingContinuityState = "still-applies" | "appears-addressed" | "recheck" | "superseded";
 
 export interface TourEvidenceAnchor {
   id: string;
@@ -29,6 +30,15 @@ export interface TourGenerationInput {
   };
   anchors: TourEvidenceAnchor[];
   fileAnchorIds: string[];
+  priorFindings: PriorTourFinding[];
+}
+
+export interface PriorTourFinding {
+  id: string;
+  title: string;
+  severity: TourSeverity;
+  summary: string;
+  pathHints: string[];
 }
 
 export interface GeneratedTourClaim {
@@ -58,12 +68,24 @@ export interface GeneratedTourStop {
   finding?: GeneratedTourFinding;
 }
 
+export interface GeneratedFindingRevision {
+  findingId: string;
+  state: FindingContinuityState;
+  summary: string;
+  anchorIds: string[];
+}
+
 export interface GeneratedTour {
   summary: string;
   stops: GeneratedTourStop[];
+  findingRevisions: GeneratedFindingRevision[];
 }
 
-export function buildTourGenerationInput(metadata: PullRequestMetadata, evidence: PullRequestEvidence): TourGenerationInput {
+export function buildTourGenerationInput(
+  metadata: PullRequestMetadata,
+  evidence: PullRequestEvidence,
+  priorFindings: PriorTourFinding[] = [],
+): TourGenerationInput {
   const anchors: TourEvidenceAnchor[] = [];
   const fileAnchorIds: string[] = [];
 
@@ -99,6 +121,7 @@ export function buildTourGenerationInput(metadata: PullRequestMetadata, evidence
     },
     anchors,
     fileAnchorIds,
+    priorFindings,
   };
 }
 
@@ -152,7 +175,8 @@ export function validateGeneratedTour(raw: unknown, input: TourGenerationInput):
     if (!coveredPaths.has(path)) throw new Error(`Generated tour does not cover changed file ${path} (${fileAnchorId}).`);
   }
 
-  return { summary, stops };
+  const findingRevisions = validateFindingRevisions(value.findingRevisions ?? [], input, knownAnchors);
+  return { summary, stops, findingRevisions };
 }
 
 export function buildTourPrompt(input: TourGenerationInput): string {
@@ -173,6 +197,16 @@ export function buildTourPrompt(input: TourGenerationInput): string {
     return `FILE ${path}\n${lines.join("\n")}`;
   }).join("\n\n");
 
+  const priorFindings = input.priorFindings.length
+    ? input.priorFindings.map((finding) => [
+      `FINDING ${finding.id}`,
+      `SEVERITY: ${finding.severity}`,
+      `TITLE: ${finding.title}`,
+      `SUMMARY: ${finding.summary}`,
+      `PATH_HINTS: ${finding.pathHints.join(", ") || "(none)"}`,
+    ].join("\n")).join("\n\n")
+    : "(none)";
+
   return `<pull_request>
 REPOSITORY: ${input.pullRequest.repository}
 NUMBER: ${input.pullRequest.number}
@@ -184,9 +218,42 @@ DESCRIPTION:
 ${input.pullRequest.body || "(none)"}
 </pull_request>
 
+<prior_findings>
+${priorFindings}
+</prior_findings>
+
 <validated_evidence>
 ${evidence}
 </validated_evidence>`;
+}
+
+function validateFindingRevisions(
+  value: unknown,
+  input: TourGenerationInput,
+  knownAnchors: Set<string>,
+): GeneratedFindingRevision[] {
+  const revisions = list(value, "finding revisions", input.priorFindings.length, input.priorFindings.length);
+  const priorIds = new Set(input.priorFindings.map((finding) => finding.id));
+  const seen = new Set<string>();
+  const result = revisions.map((candidate, index): GeneratedFindingRevision => {
+    const revision = record(candidate, `finding revision ${index + 1}`);
+    const findingId = boundedText(revision.findingId, `finding revision ${index + 1} id`, 128);
+    if (!priorIds.has(findingId)) throw new Error(`Finding revision references unknown prior finding ${findingId}.`);
+    if (seen.has(findingId)) throw new Error(`Finding revision is duplicated: ${findingId}`);
+    seen.add(findingId);
+    const state = choice(revision.state, `${findingId} state`, ["still-applies", "appears-addressed", "recheck", "superseded"] as const);
+    const anchorIds = anchors(revision.anchorIds, `${findingId} revision anchors`, knownAnchors, state === "superseded" ? 0 : 1, 8);
+    return {
+      findingId,
+      state,
+      summary: boundedText(revision.summary, `${findingId} revision summary`, 360),
+      anchorIds,
+    };
+  });
+  for (const finding of input.priorFindings) {
+    if (!seen.has(finding.id)) throw new Error(`Generated tour does not classify prior finding ${finding.id}.`);
+  }
+  return result;
 }
 
 function validateFinding(raw: unknown, stopId: string, knownAnchors: Set<string>): GeneratedTourFinding {

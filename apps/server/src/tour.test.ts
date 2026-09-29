@@ -31,6 +31,7 @@ describe("generated tour contract", () => {
     const prompt = buildTourPrompt(input);
     expect(prompt).toContain("FILE src/counter.ts");
     expect(prompt).toContain("line_new-counter\tnew:2\t+return redis.incr(key)");
+    expect(prompt).toContain("<prior_findings>");
   });
 
   it("uses the evidence revision pair for an update-scoped prompt", () => {
@@ -70,11 +71,33 @@ describe("generated tour contract", () => {
     verbose.stops[0]!.title = "x".repeat(141);
     expect(() => validateGeneratedTour(verbose, input)).toThrow(/exceeds 140/);
   });
+
+  it("requires one grounded continuity decision for every prior finding", () => {
+    const input = buildTourGenerationInput(metadata, evidence, [{
+      id: "counter-race",
+      title: "Counter updates can race",
+      severity: "high",
+      summary: "The earlier implementation used a read-modify-write sequence.",
+      pathHints: ["src/counter.ts"],
+    }]);
+    const tour = validTour(input.fileAnchorIds);
+    tour.findingRevisions = [{
+      findingId: "counter-race",
+      state: "appears-addressed",
+      summary: "The current evidence replaces the sequence with Redis INCR.",
+      anchorIds: ["line_new-counter"],
+    }];
+
+    expect(validateGeneratedTour(tour, input).findingRevisions[0]?.state).toBe("appears-addressed");
+    tour.findingRevisions = [];
+    expect(() => validateGeneratedTour(tour, input)).toThrow(/must contain 1/);
+  });
 });
 
 function validTour(fileAnchors: string[]) {
   return {
     summary: "The counter update moves into Redis and gains direct coverage.",
+    findingRevisions: [] as Array<{ findingId: string; state: string; summary: string; anchorIds: string[] }>,
     stops: [
       {
         id: "atomic-counter", title: "Counter updates move into Redis", summary: "The write is now atomic.", purpose: "Verify concurrent behavior.",

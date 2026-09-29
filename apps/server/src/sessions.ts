@@ -25,8 +25,18 @@ export interface ReviewSession {
 export interface ReviewCheckpoint {
   reviewedHeadSha: string;
   completedAt: string;
+  scope: TourScope;
   coverage: Record<string, string>;
-  findingRevisions: unknown[];
+  findingRevisions: FindingCheckpoint[];
+}
+
+export interface FindingCheckpoint {
+  findingId: string;
+  title: string;
+  severity: "high" | "medium" | "low";
+  state: "new" | "still-applies" | "appears-addressed" | "recheck" | "superseded" | "resolved";
+  summary: string;
+  pathHints: string[];
 }
 
 export interface PullRequestCheckpoint extends ReviewCheckpoint {
@@ -140,16 +150,18 @@ export class SessionStore {
     this.requireSession(sessionId);
     this.database.prepare(`
       INSERT INTO review_checkpoints (
-        session_id, reviewed_head_sha, completed_at, coverage_json, finding_revisions_json
-      ) VALUES (?, ?, ?, ?, ?)
+        session_id, reviewed_head_sha, completed_at, scope, coverage_json, finding_revisions_json
+      ) VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(session_id, reviewed_head_sha) DO UPDATE SET
         completed_at = excluded.completed_at,
+        scope = excluded.scope,
         coverage_json = excluded.coverage_json,
         finding_revisions_json = excluded.finding_revisions_json
     `).run(
       sessionId,
       checkpoint.reviewedHeadSha,
       checkpoint.completedAt,
+      checkpoint.scope,
       JSON.stringify(checkpoint.coverage),
       JSON.stringify(checkpoint.findingRevisions),
     );
@@ -157,15 +169,16 @@ export class SessionStore {
 
   latestCheckpoint(sessionId: string): ReviewCheckpoint | undefined {
     const row = this.database.prepare(`
-      SELECT reviewed_head_sha, completed_at, coverage_json, finding_revisions_json
+      SELECT reviewed_head_sha, completed_at, scope, coverage_json, finding_revisions_json
       FROM review_checkpoints WHERE session_id = ? ORDER BY completed_at DESC LIMIT 1
     `).get(sessionId);
     if (!row) return undefined;
     return {
       reviewedHeadSha: String(row.reviewed_head_sha),
       completedAt: String(row.completed_at),
+      scope: String(row.scope) as TourScope,
       coverage: JSON.parse(String(row.coverage_json)) as Record<string, string>,
-      findingRevisions: JSON.parse(String(row.finding_revisions_json)) as unknown[],
+      findingRevisions: JSON.parse(String(row.finding_revisions_json)) as FindingCheckpoint[],
     };
   }
 
@@ -184,8 +197,9 @@ export class SessionStore {
       pullRequestNumber: Number(row.pr_number),
       reviewedHeadSha: String(row.reviewed_head_sha),
       completedAt: String(row.completed_at),
+      scope: String(row.scope) as TourScope,
       coverage: JSON.parse(String(row.coverage_json)) as Record<string, string>,
-      findingRevisions: JSON.parse(String(row.finding_revisions_json)) as unknown[],
+      findingRevisions: JSON.parse(String(row.finding_revisions_json)) as FindingCheckpoint[],
     };
   }
 
@@ -271,6 +285,7 @@ export class SessionStore {
   getTour(sessionId: string, scope: TourScope = "full"): StoredTour | undefined {
     const row = this.database.prepare("SELECT * FROM generated_tours WHERE session_id = ? AND scope = ?").get(sessionId, scope);
     if (!row) return undefined;
+    const parsedTour = JSON.parse(String(row.tour_json)) as GeneratedTour;
     return {
       sessionId: String(row.session_id),
       scope: String(row.scope) as TourScope,
@@ -281,7 +296,10 @@ export class SessionStore {
       },
       baseSha: String(row.base_sha),
       headSha: String(row.head_sha),
-      tour: JSON.parse(String(row.tour_json)) as GeneratedTour,
+      tour: {
+        ...parsedTour,
+        findingRevisions: Array.isArray(parsedTour.findingRevisions) ? parsedTour.findingRevisions : [],
+      },
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
     };
@@ -308,7 +326,7 @@ export function defaultDatabasePath(environment: NodeJS.ProcessEnv = process.env
 
 function migrate(database: DatabaseSync) {
   let version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
-  if (version > 4) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
+  if (version > 5) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
 
   if (version === 0) database.exec(`
     BEGIN;
@@ -420,6 +438,15 @@ function migrate(database: DatabaseSync) {
     FROM generated_tours_v3 t JOIN review_sessions s ON s.id = t.session_id;
     DROP TABLE generated_tours_v3;
     PRAGMA user_version = 4;
+    COMMIT;
+  `);
+
+  version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+  if (version === 4) database.exec(`
+    BEGIN;
+    ALTER TABLE review_checkpoints ADD COLUMN scope TEXT NOT NULL DEFAULT 'full'
+      CHECK (scope IN ('full', 'update'));
+    PRAGMA user_version = 5;
     COMMIT;
   `);
 }
