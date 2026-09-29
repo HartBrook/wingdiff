@@ -89,6 +89,16 @@ describe("generated tour API", () => {
 
     const removed = await fetch(`${url}/${createdBody.comment.id}`, { method: "DELETE" });
     expect(removed.status).toBe(204);
+
+    const draftUrl = `http://127.0.0.1:${port}/api/sessions/${session.id}/review-draft`;
+    const savedDraft = await fetch(draftUrl, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: "The implementation looks ready.", event: "APPROVE" }),
+    });
+    expect(savedDraft.status).toBe(200);
+    expect(await (await fetch(draftUrl)).json()).toMatchObject({
+      draft: { body: "The implementation looks ready.", event: "APPROVE" },
+    });
   });
 });
 

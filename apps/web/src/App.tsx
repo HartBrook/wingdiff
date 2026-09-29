@@ -30,16 +30,19 @@ import {
   createDraftComment,
   completeReviewCheckpoint,
   checkpointFindings,
+  deleteDraftComment,
   evidenceBlocksFor,
   fetchReviewCheckpoint,
   fetchReviewSession,
   fetchDraftComments,
+  fetchReviewDraft,
   fetchSessionTour,
   fetchSessionUpdate,
   generatedTourStops,
   generateSessionTour,
   refreshReviewSession,
   revisionStopIndex,
+  saveReviewDraft,
   type AcquiredReviewSession,
   type FindingCheckpoint,
   type GeneratedSessionTour,
@@ -206,7 +209,7 @@ function SessionLoader({ id, onHome, onSession }: { id: string; onHome: () => vo
 }
 
 function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void; onSession: (id: string) => void; session: AcquiredReviewSession }) {
-  const [view, setView] = useState<"summary" | "tour" | "browse">("summary");
+  const [view, setView] = useState<"summary" | "tour" | "browse" | "review">("summary");
   const [theme, setTheme] = usePersistentState<"dark" | "light">("wingdiff:theme", "dark");
   const [tours, setTours] = useState<Record<AcquiredScope, GeneratedSessionTour | null>>({ full: null, update: null });
   const [reviewScope, setReviewScope] = useState<AcquiredScope>("full");
@@ -229,6 +232,9 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   const [statuses, setStatuses] = usePersistentState<Record<string, StopStatus>>(`wingdiff:statuses:${session.metadata.head.sha}`, {});
   const [comments, setComments] = useState<DraftComment[]>([]);
   const [composer, setComposer] = useState<ComposerState | null>(null);
+  const [reviewSummary, setReviewSummary] = useState("");
+  const [disposition, setDisposition] = useState<ReviewDisposition>("COMMENT");
+  const [savingReview, setSavingReview] = useState(false);
   const generated = tours[reviewScope];
   const scopedEvidence = reviewScope === "update" && update ? update.evidence : session.evidence;
   const blocks = useMemo(() => evidenceBlocksFor(scopedEvidence), [scopedEvidence]);
@@ -256,16 +262,19 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       fetchSessionUpdate(session.id, controller.signal),
       fetchReviewCheckpoint(session.id, controller.signal),
       fetchDraftComments(session.id, controller.signal),
+      fetchReviewDraft(session.id, controller.signal),
       fetchProviders(controller.signal).then((availableProviders) => {
         setProviders(availableProviders);
         setModelSelection((current) => preferredAvailableSelection(availableProviders, current));
       }),
-    ]).then(([fullTour, updateTour, updateContext, storedCheckpoint, storedComments]) => {
+    ]).then(([fullTour, updateTour, updateContext, storedCheckpoint, storedComments, storedReviewDraft]) => {
       setTours({ full: fullTour, update: updateTour });
       setUpdate(updateContext?.update ?? null);
       setBaselineCheckpoint(updateContext?.baselineCheckpoint ?? null);
       setCheckpoint(storedCheckpoint);
       setComments(storedComments);
+      setReviewSummary(storedReviewDraft?.body ?? "");
+      setDisposition(storedReviewDraft?.event ?? "COMMENT");
       if (updateContext) setReviewScope("update");
     }).catch((caught) => {
       if (caught instanceof DOMException && caught.name === "AbortError") return;
@@ -390,6 +399,31 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     }
   }
 
+  async function persistReviewDraft(body = reviewSummary, event = disposition) {
+    setSavingReview(true);
+    setError(null);
+    try {
+      const saved = await saveReviewDraft(session.id, body, event);
+      setReviewSummary(saved.body);
+      setDisposition(saved.event);
+      setNotice("Review draft saved locally.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Wingdiff could not save this review draft.");
+    } finally {
+      setSavingReview(false);
+    }
+  }
+
+  async function removeComment(commentId: string) {
+    setError(null);
+    try {
+      await deleteDraftComment(session.id, commentId);
+      setComments((current) => current.filter((comment) => comment.id !== commentId));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Wingdiff could not remove this draft comment.");
+    }
+  }
+
   function markUnderstood() {
     if (!activeStop) return;
     setStatuses((current) => ({ ...current, [activeStop.id]: "understood" }));
@@ -407,13 +441,14 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       <div className="topbar__spacer" />
       <button className="model-button" onClick={() => setModelPickerOpen(true)} type="button"><span className="model-button__spark"><Icon name="spark" size={13} /></span><span><small>{activeProvider?.configured ? "Review model" : "Model setup"}</small><strong>{activeModelLabel}</strong></span><Icon name="chevron-right" size={13} /></button>
       <a className="button button--quiet acquired-github-link" href={metadata.url} rel="noreferrer" target="_blank">GitHub <Icon name="external" size={14} /></a>
+      <button className="button button--primary topbar__review" onClick={() => setView("review")} type="button">Review {comments.length > 0 && <span>{comments.length}</span>}</button>
       <button aria-label={`Use ${theme === "dark" ? "light" : "dark"} theme`} className="icon-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} type="button"><Icon name={theme === "dark" ? "sun" : "moon"} size={17} /></button>
     </header>
     {view === "tour" && generated && activeStop && activeEvidence ? <div className={`workspace acquired-workspace ${mobileRouteOpen ? "is-mobile-open" : ""}`}>
-      <AcquiredTourRail activeIndex={activeIndex} onBrowse={() => { setView("browse"); setMobileRouteOpen(false); }} onSelect={(index) => { setActiveIndex(index); setMobileRouteOpen(false); }} onSummary={() => { setView("summary"); setMobileRouteOpen(false); }} statuses={statuses} stops={stops} />
+      <AcquiredTourRail activeIndex={activeIndex} onBrowse={() => { setView("browse"); setMobileRouteOpen(false); }} onReview={() => { setView("review"); setMobileRouteOpen(false); }} onSelect={(index) => { setActiveIndex(index); setMobileRouteOpen(false); }} onSummary={() => { setView("summary"); setMobileRouteOpen(false); }} statuses={statuses} stops={stops} />
       <main className="main-canvas"><AcquiredTourView activeEvidence={activeEvidence} activeEvidenceId={activeEvidenceId} activeFindingRevisions={activeFindingRevisions} activeIndex={activeIndex} comments={comments.filter((comment) => comment.stopId === activeStop.id).length} headSha={metadata.head.sha} onComment={() => openComment(false)} onEvidence={setActiveEvidenceId} onFindingComment={() => openComment(true)} onFlag={() => setStatuses((current) => ({ ...current, [activeStop.id]: current[activeStop.id] === "flagged" ? "unseen" : "flagged" }))} onNavigate={(delta) => setActiveIndex((current) => Math.max(0, Math.min(stops.length - 1, current + delta)))} onSelectLine={selectLine} onUnderstood={markUnderstood} selection={selection} status={statuses[activeStop.id] ?? "unseen"} stop={activeStop} totalStops={stops.length} /></main>
     </div> : <main className="main-canvas acquired-canvas">
-      {view === "summary" ? <AcquiredSummary activeModel={activeModelLabel} baselineCheckpoint={baselineCheckpoint} checkpoint={checkpoint} completing={completing} error={error} generated={generated} generating={generating} modelReady={Boolean(activeProvider?.configured)} notice={notice} onBegin={() => { setActiveIndex(0); setView("tour"); }} onBrowse={() => setView("browse")} onCheckUpdates={() => void checkForUpdates()} onComplete={() => void completeReview()} onGenerate={() => void generateTour()} onScope={selectScope} onSelectStop={(index) => { setActiveIndex(index); setView("tour"); }} refreshing={refreshing} reviewScope={reviewScope} scopedEvidence={scopedEvidence} session={session} statuses={statuses} stops={stops} tourLoading={tourLoading} update={update} /> : <AcquiredBrowse blocks={blocks} onSummary={() => setView("summary")} scope={reviewScope} session={session} />}
+      {view === "summary" ? <AcquiredSummary activeModel={activeModelLabel} baselineCheckpoint={baselineCheckpoint} checkpoint={checkpoint} completing={completing} error={error} generated={generated} generating={generating} modelReady={Boolean(activeProvider?.configured)} notice={notice} onBegin={() => { setActiveIndex(0); setView("tour"); }} onBrowse={() => setView("browse")} onCheckUpdates={() => void checkForUpdates()} onComplete={() => void completeReview()} onGenerate={() => void generateTour()} onScope={selectScope} onSelectStop={(index) => { setActiveIndex(index); setView("tour"); }} refreshing={refreshing} reviewScope={reviewScope} scopedEvidence={scopedEvidence} session={session} statuses={statuses} stops={stops} tourLoading={tourLoading} update={update} /> : view === "browse" ? <AcquiredBrowse blocks={blocks} onSummary={() => setView("summary")} scope={reviewScope} session={session} /> : <AcquiredReviewDesk comments={comments} disposition={disposition} error={error} headSha={metadata.head.sha} onBack={() => setView(generated ? "tour" : "summary")} onDisposition={(event) => { setDisposition(event); void persistReviewDraft(reviewSummary, event); }} onRemoveComment={(id) => void removeComment(id)} onSave={() => void persistReviewDraft()} onSummary={setReviewSummary} saving={savingReview} statuses={statuses} stops={stops} summary={reviewSummary} />}
     </main>}
     {modelPickerOpen && <ModelPicker onClose={() => setModelPickerOpen(false)} onSelection={setModelSelection} providers={providers} selection={modelSelection} />}
     {composer && <CommentComposer composer={composer} headSha={metadata.head.sha} onCancel={() => setComposer(null)} onChange={(body) => setComposer((current) => current ? { ...current, body } : null)} onSeverity={(severity) => setComposer((current) => current ? { ...current, severity } : null)} onStage={stageComment} />}
@@ -487,10 +522,10 @@ function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completi
   </div>;
 }
 
-function AcquiredTourRail({ activeIndex, onBrowse, onSelect, onSummary, statuses, stops }: { activeIndex: number; onBrowse: () => void; onSelect: (index: number) => void; onSummary: () => void; statuses: Record<string, StopStatus>; stops: TourStop[] }) {
+function AcquiredTourRail({ activeIndex, onBrowse, onReview, onSelect, onSummary, statuses, stops }: { activeIndex: number; onBrowse: () => void; onReview: () => void; onSelect: (index: number) => void; onSummary: () => void; statuses: Record<string, StopStatus>; stops: TourStop[] }) {
   const completed = stops.filter((stop) => statuses[stop.id] !== undefined && statuses[stop.id] !== "unseen").length;
   const progress = Math.round((completed / stops.length) * 100);
-  return <aside className="tour-rail"><div className="tour-rail__heading"><span>Review route</span><span>{stops.reduce((total, stop) => total + stop.minutes, 0)} min</span></div><nav aria-label="Review route" className="route-list"><button className="route-item route-item--brief" onClick={onSummary} type="button"><span className="route-item__marker"><Icon name="layers" size={14} /></span><span><strong>Summary</strong><small>Findings and intent</small></span></button><div className="route-list__line" />{stops.map((stop, index) => { const status = statuses[stop.id] ?? "unseen"; return <button className={`route-item ${activeIndex === index ? "is-active" : ""} is-${status}`} key={stop.id} onClick={() => onSelect(index)} type="button"><span className="route-item__marker">{status === "understood" ? <Icon name="check" size={13} /> : status === "flagged" ? <Icon name="flag" size={12} /> : index + 1}</span><span><strong>{stop.eyebrow}</strong><small>{shortTitle(stop.title)}</small></span>{stop.finding && <i className={`severity-dot severity-dot--${stop.finding.severity}`} />}</button>; })}<div className="route-list__line route-list__line--last" /><button className="route-item" onClick={onBrowse} type="button"><span className="route-item__marker"><Icon name="code" size={14} /></span><span><strong>Changed files</strong><small>Browse full diff</small></span></button></nav><div className="rail-progress"><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><span>{progress}%</span></div><div><strong>{completed} of {stops.length}</strong><span>stops reviewed</span></div></div></aside>;
+  return <aside className="tour-rail"><div className="tour-rail__heading"><span>Review route</span><span>{stops.reduce((total, stop) => total + stop.minutes, 0)} min</span></div><nav aria-label="Review route" className="route-list"><button className="route-item route-item--brief" onClick={onSummary} type="button"><span className="route-item__marker"><Icon name="layers" size={14} /></span><span><strong>Summary</strong><small>Findings and intent</small></span></button><div className="route-list__line" />{stops.map((stop, index) => { const status = statuses[stop.id] ?? "unseen"; return <button className={`route-item ${activeIndex === index ? "is-active" : ""} is-${status}`} key={stop.id} onClick={() => onSelect(index)} type="button"><span className="route-item__marker">{status === "understood" ? <Icon name="check" size={13} /> : status === "flagged" ? <Icon name="flag" size={12} /> : index + 1}</span><span><strong>{stop.eyebrow}</strong><small>{shortTitle(stop.title)}</small></span>{stop.finding && <i className={`severity-dot severity-dot--${stop.finding.severity}`} />}</button>; })}<div className="route-list__line route-list__line--last" /><button className="route-item" onClick={onBrowse} type="button"><span className="route-item__marker"><Icon name="code" size={14} /></span><span><strong>Changed files</strong><small>Browse full diff</small></span></button><button className="route-item route-item--review" onClick={onReview} type="button"><span className="route-item__marker"><Icon name="shield" size={14} /></span><span><strong>Review desk</strong><small>Prepare your decision</small></span></button></nav><div className="rail-progress"><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><span>{progress}%</span></div><div><strong>{completed} of {stops.length}</strong><span>stops reviewed</span></div></div></aside>;
 }
 
 function AcquiredTourView({ activeEvidence, activeEvidenceId, activeFindingRevisions, activeIndex, comments, headSha, onComment, onEvidence, onFindingComment, onFlag, onNavigate, onSelectLine, onUnderstood, selection, status, stop, totalStops }: {
@@ -532,6 +567,33 @@ function AcquiredTourView({ activeEvidence, activeEvidenceId, activeFindingRevis
 
 function AcquiredBrowse({ blocks, onSummary, scope, session }: { blocks: EvidenceBlock[]; onSummary: () => void; scope: AcquiredScope; session: AcquiredReviewSession }) {
   return <div className="page page--browse"><header className="browse-header"><div><div className="eyebrow">{scope === "update" ? "Since your review" : "Entire PR"} · {session.metadata.head.sha.slice(0, 7)}</div><h1>Changed files</h1><p>{scope === "update" ? "Only code changed after your explicit review checkpoint." : "The full pull request diff remains available as a backstop."}</p></div><button className="button button--secondary" onClick={onSummary} type="button"><Icon name="arrow-left" size={16} /> Back to summary</button></header><div className="browse-layout"><aside className="file-index"><div className="section-label"><span>Changed files</span><b>{blocks.length}</b></div>{blocks.map((block) => <a href={`#${block.id}`} key={block.id}><Icon name="code" size={14} /><span>{fileName(block.path)}<small>{directoryName(block.path)}</small></span><Icon name="chevron-right" size={13} /></a>)}</aside><div className="browse-diffs">{blocks.map((block) => <div className="browse-file" id={block.id} key={block.id}><CodeDiff evidence={block} minimal /></div>)}</div></div></div>;
+}
+
+function AcquiredReviewDesk({ comments, disposition, error, headSha, onBack, onDisposition, onRemoveComment, onSave, onSummary, saving, statuses, stops, summary }: {
+  comments: DraftComment[];
+  disposition: ReviewDisposition;
+  error: string | null;
+  headSha: string;
+  onBack: () => void;
+  onDisposition: (value: ReviewDisposition) => void;
+  onRemoveComment: (id: string) => void;
+  onSave: () => void;
+  onSummary: (value: string) => void;
+  saving: boolean;
+  statuses: Record<string, StopStatus>;
+  stops: TourStop[];
+  summary: string;
+}) {
+  const reviewed = stops.filter((stop) => (statuses[stop.id] ?? "unseen") !== "unseen").length;
+  const flagged = stops.filter((stop) => statuses[stop.id] === "flagged").length;
+  const rankedComments = [...comments].sort((left, right) => compareSeverity(left.severity, right.severity) || left.path.localeCompare(right.path));
+
+  return <div className="page page--review">
+    <header className="review-header"><button className="back-link" onClick={onBack} type="button"><Icon name="arrow-left" size={15} /> Back to review</button><div className="eyebrow">Review desk</div><h1>Prepare your decision.</h1><p>Confirm the feedback and disposition that will represent your review.</p></header>
+    <div className="review-summary-strip"><div><span className="summary-icon summary-icon--green"><Icon name="check" /></span><span><strong>{reviewed}/{stops.length}</strong><small>stops reviewed</small></span></div><div><span className="summary-icon summary-icon--amber"><Icon name="flag" /></span><span><strong>{flagged}</strong><small>open flag{flagged === 1 ? "" : "s"}</small></span></div><div><span className="summary-icon summary-icon--blue"><Icon name="comment" /></span><span><strong>{comments.length}</strong><small>draft comment{comments.length === 1 ? "" : "s"}</small></span></div><div className="review-sha"><span className="live-dot" /><span><strong>Pinned head</strong><small>{headSha.slice(0, 12)}</small></span></div></div>
+    {error && <div className="target-error acquired-generation-error" role="alert"><Icon name="flag" size={14} />{error}</div>}
+    <div className="review-grid"><div className="review-main"><section className="review-section"><header><div><span>01</span><div><h2>Review summary</h2><p>Keep it concise and decision-relevant.</p></div></div><small>{summary.length} characters</small></header><textarea onBlur={onSave} onChange={(event) => onSummary(event.target.value)} placeholder="Summarize your review…" rows={6} value={summary} /></section><section className="review-section"><header><div><span>02</span><div><h2>Inline comments</h2><p>Ranked by severity and pinned to the diff.</p></div></div><small>{comments.length} draft{comments.length === 1 ? "" : "s"}</small></header>{rankedComments.length === 0 ? <div className="empty-comments"><Icon name="comment" /><strong>No inline comments</strong><span>A summary-only review is valid.</span></div> : <div className="review-comments">{rankedComments.map((comment) => <article key={comment.id}><header><span className={`risk-level risk-level--${comment.severity}`}>{comment.severity}</span><code>{comment.path}:{comment.startLine}{comment.endLine !== comment.startLine ? `–${comment.endLine}` : ""}</code><button aria-label="Remove draft comment" onClick={() => onRemoveComment(comment.id)} type="button"><Icon name="x" size={15} /></button></header><p>{comment.body}</p></article>)}</div>}</section></div><aside className="publish-card"><div className="eyebrow">Final disposition</div><h2>How should GitHub record this review?</h2><div className="disposition-list">{(["COMMENT", "APPROVE", "REQUEST_CHANGES"] as ReviewDisposition[]).map((value) => <button className={disposition === value ? "is-active" : ""} key={value} onClick={() => onDisposition(value)} type="button"><span className="radio"><i /></span><span><strong>{labelDisposition(value)}</strong><small>{dispositionDescription(value)}</small></span></button>)}</div><div className="publish-preview"><span>Prepared locally</span><strong>{comments.length} inline comment{comments.length === 1 ? "" : "s"}</strong><strong>{summary.trim() ? "1 review summary" : "No review summary"}</strong><small>{headSha.slice(0, 12)}</small></div><button className="button button--publish" disabled={saving} onClick={onSave} type="button">{saving ? "Saving…" : "Save review"}<Icon name="check" size={16} /></button><p className="publish-note"><Icon name="shield" size={13} /> Nothing is sent to GitHub yet.</p></aside></div>
+  </div>;
 }
 
 function ReviewApp({ onHome }: { onHome: () => void }) {

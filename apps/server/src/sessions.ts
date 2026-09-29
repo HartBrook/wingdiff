@@ -93,6 +93,13 @@ export interface DraftReviewComment {
 
 export type NewDraftReviewComment = Omit<DraftReviewComment, "id" | "sessionId" | "createdAt" | "updatedAt">;
 
+export interface ReviewDraft {
+  sessionId: string;
+  body: string;
+  event: "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
+  updatedAt: string;
+}
+
 export class SessionStore {
   readonly database: DatabaseSync;
 
@@ -353,6 +360,31 @@ export class SessionStore {
       .run(commentId, sessionId).changes > 0;
   }
 
+  getReviewDraft(sessionId: string): ReviewDraft | undefined {
+    this.requireSession(sessionId);
+    const row = this.database.prepare("SELECT * FROM review_drafts WHERE session_id = ?").get(sessionId);
+    if (!row) return undefined;
+    return {
+      sessionId: String(row.session_id),
+      body: String(row.body),
+      event: String(row.event) as ReviewDraft["event"],
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  saveReviewDraft(sessionId: string, body: string, event: ReviewDraft["event"]): ReviewDraft {
+    this.requireSession(sessionId);
+    const updatedAt = this.now().toISOString();
+    this.database.prepare(`
+      INSERT INTO review_drafts (session_id, body, event, updated_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        body = excluded.body,
+        event = excluded.event,
+        updated_at = excluded.updated_at
+    `).run(sessionId, body, event, updatedAt);
+    return this.getReviewDraft(sessionId)!;
+  }
+
   close() {
     this.database.close();
   }
@@ -374,7 +406,7 @@ export function defaultDatabasePath(environment: NodeJS.ProcessEnv = process.env
 
 function migrate(database: DatabaseSync) {
   let version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
-  if (version > 6) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
+  if (version > 7) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
 
   if (version === 0) database.exec(`
     BEGIN;
@@ -506,6 +538,19 @@ function migrate(database: DatabaseSync) {
     ALTER TABLE draft_comments ADD COLUMN severity TEXT NOT NULL DEFAULT 'low'
       CHECK (severity IN ('high', 'medium', 'low'));
     PRAGMA user_version = 6;
+    COMMIT;
+  `);
+
+  version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+  if (version === 6) database.exec(`
+    BEGIN;
+    CREATE TABLE review_drafts (
+      session_id TEXT PRIMARY KEY REFERENCES review_sessions(id) ON DELETE CASCADE,
+      body TEXT NOT NULL,
+      event TEXT NOT NULL CHECK (event IN ('COMMENT', 'APPROVE', 'REQUEST_CHANGES')),
+      updated_at TEXT NOT NULL
+    );
+    PRAGMA user_version = 7;
     COMMIT;
   `);
 }

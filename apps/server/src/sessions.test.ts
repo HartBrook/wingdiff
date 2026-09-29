@@ -94,7 +94,7 @@ describe("local review sessions", () => {
       selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
       tour: { summary: "The counter change is small and focused." },
     });
-    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(6);
+    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(7);
     store.close();
   });
 
@@ -110,6 +110,21 @@ describe("local review sessions", () => {
     expect(comment).toMatchObject({ sessionId: session.id, stopId: "counter", severity: "medium" });
     expect(store.deleteDraftComment(session.id, comment.id)).toBe(true);
     expect(store.listDraftComments(session.id)).toEqual([]);
+    store.close();
+  });
+
+  it("persists the review summary and disposition", () => {
+    const store = new SessionStore(":memory:", () => new Date("2026-09-29T12:00:00Z"));
+    const session = store.upsertReadySession(target, metadata(), evidence());
+
+    expect(store.getReviewDraft(session.id)).toBeUndefined();
+    expect(store.saveReviewDraft(session.id, "Ready after the expiry question is answered.", "COMMENT")).toEqual({
+      sessionId: session.id,
+      body: "Ready after the expiry question is answered.",
+      event: "COMMENT",
+      updatedAt: "2026-09-29T12:00:00.000Z",
+    });
+    expect(store.getReviewDraft(session.id)?.event).toBe("COMMENT");
     store.close();
   });
 

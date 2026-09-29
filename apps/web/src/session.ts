@@ -157,6 +157,13 @@ export interface StoredDraftReviewComment {
   updatedAt: string;
 }
 
+export interface StoredReviewDraft {
+  sessionId: string;
+  body: string;
+  event: "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
+  updatedAt: string;
+}
+
 export interface ReviewRefreshResult {
   status: "current" | "updated";
   session: AcquiredReviewSession;
@@ -252,6 +259,28 @@ export async function deleteDraftComment(id: string, commentId: string): Promise
   if (response.ok) return;
   const body = await response.json() as { error?: string };
   throw new Error(body.error ?? "Wingdiff could not remove this draft comment.");
+}
+
+export async function fetchReviewDraft(id: string, signal?: AbortSignal): Promise<StoredReviewDraft | null> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/review-draft`, { signal });
+  const body = await response.json() as { draft?: StoredReviewDraft | null; error?: string };
+  if (!response.ok) throw new Error(body.error ?? "Wingdiff could not load this review draft.");
+  return body.draft ?? null;
+}
+
+export async function saveReviewDraft(
+  id: string,
+  body: string,
+  event: StoredReviewDraft["event"],
+): Promise<StoredReviewDraft> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/review-draft`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ body, event }),
+  });
+  const result = await response.json() as { draft?: StoredReviewDraft; error?: string };
+  if (!response.ok || !result.draft) throw new Error(result.error ?? "Wingdiff could not save this review draft.");
+  return result.draft;
 }
 
 export async function refreshReviewSession(id: string): Promise<ReviewRefreshResult> {

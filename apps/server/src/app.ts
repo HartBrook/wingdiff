@@ -146,6 +146,33 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
     response.status(204).end();
   });
 
+  app.get("/api/sessions/:id/review-draft", (request, response) => {
+    const session = sessionStore.getSession(request.params.id);
+    if (!session) {
+      response.status(404).json({ error: "Review session not found." });
+      return;
+    }
+    response.json({ draft: sessionStore.getReviewDraft(session.id) ?? null });
+  });
+
+  app.put("/api/sessions/:id/review-draft", (request, response) => {
+    try {
+      const session = sessionStore.getSession(request.params.id);
+      if (!session) {
+        response.status(404).json({ error: "Review session not found." });
+        return;
+      }
+      const body = typeof request.body?.body === "string" ? request.body.body : "";
+      if (body.length > 65_536) throw new Error("Review summary exceeds 65536 characters.");
+      const event = request.body?.event;
+      if (!["COMMENT", "APPROVE", "REQUEST_CHANGES"].includes(event)) throw new Error("Review disposition is invalid.");
+      response.json({ draft: sessionStore.saveReviewDraft(session.id, body, event) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Wingdiff could not save this review draft.";
+      response.status(400).json({ error: message });
+    }
+  });
+
   app.post("/api/sessions/:id/refresh", async (request, response) => {
     try {
       const session = sessionStore.getSession(request.params.id);
