@@ -19,6 +19,28 @@ afterEach(async () => {
 });
 
 describe("generated tour API", () => {
+  it("exchanges a launch token for an HTTP-only cookie and protects APIs", async () => {
+    store = new SessionStore(":memory:");
+    const app = createApp({}, { sessionStore: store, providers: new Map(), authToken: "a".repeat(43) });
+    server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => server!.once("listening", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    expect((await fetch(`${baseUrl}/api/health`)).status).toBe(401);
+    const exchange = await fetch(`${baseUrl}/?demo=1&wingdiff_token=${"a".repeat(43)}`, { redirect: "manual" });
+    expect(exchange.status).toBe(302);
+    expect(exchange.headers.get("location")).toBe("/?demo=1");
+    const cookie = exchange.headers.get("set-cookie")!;
+    expect(cookie).toContain("HttpOnly");
+    expect((await fetch(`${baseUrl}/api/health`, { headers: { Cookie: cookie } })).status).toBe(200);
+    expect((await fetch(`${baseUrl}/api/targets/parse`, {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json", Origin: "https://attacker.example" },
+      body: JSON.stringify({ input: target.canonicalUrl }),
+    })).status).toBe(403);
+  });
+
   it("generates and resumes a revision-pinned tour", async () => {
     store = new SessionStore(":memory:");
     const session = store.upsertReadySession(target, metadata, evidence);

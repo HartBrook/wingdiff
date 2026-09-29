@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 
 import { execFile as execFileCallback, spawn } from "node:child_process";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { loadWingdiffEnvironment } from "./environment.js";
 import { startWingdiffServer } from "./server.js";
+import { defaultDatabasePath } from "./sessions.js";
 import { parsePullRequestTarget, repositoryFromRemoteUrl, type PullRequestTarget } from "./targets.js";
 
 const execFile = promisify(execFileCallback);
@@ -35,10 +38,11 @@ export function parseCliArguments(arguments_: string[]): CliOptions {
   return { target, demo, openBrowser, help };
 }
 
-export function launchUrl(baseUrl: string, options: { demo: boolean; target?: PullRequestTarget }): string {
+export function launchUrl(baseUrl: string, options: { demo: boolean; target?: PullRequestTarget; authToken?: string }): string {
   const url = new URL(baseUrl);
   if (options.demo) url.searchParams.set("demo", "1");
   if (options.target) url.searchParams.set("target", options.target.canonicalUrl);
+  if (options.authToken) url.searchParams.set("wingdiff_token", options.authToken);
   return url.toString();
 }
 
@@ -69,33 +73,81 @@ async function run() {
     ? await repositoryForCheckout(process.cwd())
     : undefined;
   const target = options.target ? parsePullRequestTarget(options.target, checkoutRepository) : undefined;
-  const host = process.env.WINGDIFF_HOST ?? "127.0.0.1";
-  const port = process.env.WINGDIFF_PORT ?? "4173";
-  const baseUrl = `http://${host}:${port}`;
-  const destination = launchUrl(baseUrl, { demo: options.demo, target });
-
-  if (await isWingdiffRunning(baseUrl)) {
+  const discoveryPath = serverDiscoveryPath(process.env);
+  const existing = await readServerDiscovery(discoveryPath);
+  if (existing && await isWingdiffRunning(existing.url, existing.authToken)) {
+    if (path.resolve(existing.cwd) !== path.resolve(process.cwd())) {
+      throw new Error(`Wingdiff is already running for ${existing.cwd}. Stop it before launching from another checkout.`);
+    }
+    const destination = launchUrl(existing.url, { demo: options.demo, target, authToken: existing.authToken });
     process.stdout.write(`Reusing Wingdiff at ${destination}\n`);
     if (options.openBrowser) openBrowser(destination);
     return;
   }
 
   const running = await startWingdiffServer();
-  const runningDestination = launchUrl(running.url, { demo: options.demo, target });
+  await writeServerDiscovery(discoveryPath, {
+    url: running.url,
+    authToken: running.authToken,
+    cwd: process.cwd(),
+    pid: process.pid,
+  });
+  running.server.once("close", () => void removeServerDiscovery(discoveryPath, running.authToken));
+  const runningDestination = launchUrl(running.url, { demo: options.demo, target, authToken: running.authToken });
   process.stdout.write(`Wingdiff is ready at ${runningDestination}\n`);
   process.stdout.write("Press Ctrl+C to stop the local server.\n");
   if (options.openBrowser) openBrowser(runningDestination);
 }
 
-async function isWingdiffRunning(baseUrl: string): Promise<boolean> {
+async function isWingdiffRunning(baseUrl: string, authToken: string): Promise<boolean> {
   try {
-    const response = await fetch(`${baseUrl}/api/health`, { signal: AbortSignal.timeout(500) });
+    const response = await fetch(`${baseUrl}/api/health`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+      signal: AbortSignal.timeout(500),
+    });
     if (!response.ok) return false;
     const body = await response.json() as { service?: string };
     return body.service === "wingdiff";
   } catch {
     return false;
   }
+}
+
+interface ServerDiscovery {
+  url: string;
+  authToken: string;
+  cwd: string;
+  pid: number;
+}
+
+export function serverDiscoveryPath(environment: NodeJS.ProcessEnv = process.env) {
+  return path.join(path.dirname(defaultDatabasePath(environment)), "server.json");
+}
+
+async function readServerDiscovery(filePath: string): Promise<ServerDiscovery | undefined> {
+  try {
+    const value = JSON.parse(await readFile(filePath, "utf8")) as Partial<ServerDiscovery>;
+    const url = typeof value.url === "string" ? new URL(value.url) : undefined;
+    if (!url || !["127.0.0.1", "localhost", "[::1]", "::1"].includes(url.hostname)) return undefined;
+    if (typeof value.authToken !== "string" || value.authToken.length < 32) return undefined;
+    if (typeof value.cwd !== "string" || !value.cwd || !Number.isSafeInteger(value.pid)) return undefined;
+    return value as ServerDiscovery;
+  } catch {
+    return undefined;
+  }
+}
+
+async function writeServerDiscovery(filePath: string, discovery: ServerDiscovery) {
+  await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  const temporaryPath = `${filePath}.${process.pid}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(discovery)}\n`, { mode: 0o600 });
+  await rename(temporaryPath, filePath);
+}
+
+async function removeServerDiscovery(filePath: string, authToken: string) {
+  const current = await readServerDiscovery(filePath);
+  if (current?.authToken !== authToken) return;
+  await unlink(filePath).catch(() => undefined);
 }
 
 function openBrowser(url: string) {

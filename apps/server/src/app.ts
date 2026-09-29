@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import express from "express";
 import { acquireReviewSession, refreshReviewSession, type AcquisitionDependencies } from "./acquisition.js";
 import { validateDraftComment } from "./comments.js";
@@ -17,6 +18,7 @@ export interface AppOptions {
   providers?: Map<ProviderId, TextProvider>;
   acquisitionDependencies?: AcquisitionDependencies;
   reviewSubmissionDependencies?: ReviewSubmissionDependencies;
+  authToken?: string;
 }
 
 export function createApp(environment: NodeJS.ProcessEnv = process.env, options: AppOptions = {}) {
@@ -27,6 +29,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
 
   app.disable("x-powered-by");
   app.use(express.json({ limit: "256kb" }));
+  if (options.authToken) app.use(localAuthentication(options.authToken));
 
   app.get("/api/health", (_request, response) => {
     response.json({ service: "wingdiff", status: "ready" });
@@ -362,6 +365,61 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
   });
 
   return app;
+}
+
+function localAuthentication(authToken: string): express.RequestHandler {
+  return (request, response, next) => {
+    const queryToken = typeof request.query.wingdiff_token === "string" ? request.query.wingdiff_token : undefined;
+    if (request.method === "GET" && queryToken && tokenMatches(queryToken, authToken)) {
+      const destination = new URL(request.originalUrl, "http://wingdiff.local");
+      destination.searchParams.delete("wingdiff_token");
+      response.setHeader("Set-Cookie", `wingdiff_auth=${encodeURIComponent(authToken)}; HttpOnly; SameSite=Strict; Path=/`);
+      response.setHeader("Cache-Control", "no-store");
+      response.redirect(302, `${destination.pathname}${destination.search}${destination.hash}`);
+      return;
+    }
+
+    if (!request.path.startsWith("/api/")) {
+      next();
+      return;
+    }
+
+    const bearer = request.get("authorization")?.replace(/^Bearer\s+/i, "");
+    const cookie = parseCookies(request.get("cookie") ?? "").wingdiff_auth;
+    const bearerAuthorized = Boolean(bearer && tokenMatches(bearer, authToken));
+    if (!bearerAuthorized && !(cookie && tokenMatches(cookie, authToken))) {
+      response.status(401).json({ error: "This Wingdiff session is not authorized." });
+      return;
+    }
+
+    if (!bearerAuthorized && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+      const origin = request.get("origin");
+      const expectedOrigin = `${request.protocol}://${request.get("host")}`;
+      if (origin && origin !== expectedOrigin) {
+        response.status(403).json({ error: "Cross-origin Wingdiff requests are not allowed." });
+        return;
+      }
+    }
+    next();
+  };
+}
+
+function parseCookies(header: string): Record<string, string> {
+  return Object.fromEntries(header.split(";").flatMap((part) => {
+    const separator = part.indexOf("=");
+    if (separator < 0) return [];
+    try {
+      return [[part.slice(0, separator).trim(), decodeURIComponent(part.slice(separator + 1).trim())]];
+    } catch {
+      return [];
+    }
+  }));
+}
+
+function tokenMatches(candidate: string, expected: string): boolean {
+  const left = Buffer.from(candidate);
+  const right = Buffer.from(expected);
+  return left.length === right.length && timingSafeEqual(left, right);
 }
 
 function reviewCoverage(input: unknown): Record<string, string> {

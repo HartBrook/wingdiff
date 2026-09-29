@@ -34,6 +34,11 @@ describe("wingdiff CLI", () => {
     expect(new URL(url).searchParams.get("target")).toBe("https://github.com/openai/codex/pull/42");
   });
 
+  it("includes a one-time local authentication token", () => {
+    const url = launchUrl("http://127.0.0.1:4173", { demo: false, authToken: "local-secret" });
+    expect(new URL(url).searchParams.get("wingdiff_token")).toBe("local-secret");
+  });
+
   it("uses platform-native browser launchers without a shell", () => {
     expect(browserInvocation("darwin", "http://localhost")).toEqual({ command: "open", arguments: ["http://localhost"] });
     expect(browserInvocation("linux", "http://localhost")).toEqual({ command: "xdg-open", arguments: ["http://localhost"] });
