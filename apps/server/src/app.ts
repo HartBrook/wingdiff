@@ -1,5 +1,5 @@
 import express from "express";
-import { acquireReviewSession } from "./acquisition.js";
+import { acquireReviewSession, refreshReviewSession, type AcquisitionDependencies } from "./acquisition.js";
 import { inspectLocalTarget } from "./preflight.js";
 import { createProviders, publicProviders, validateSelection } from "./providers/index.js";
 import type { ProviderId, TextProvider } from "./providers/types.js";
@@ -12,6 +12,7 @@ export interface AppOptions {
   cwd?: string;
   sessionStore?: SessionStore;
   providers?: Map<ProviderId, TextProvider>;
+  acquisitionDependencies?: AcquisitionDependencies;
 }
 
 export function createApp(environment: NodeJS.ProcessEnv = process.env, options: AppOptions = {}) {
@@ -64,12 +65,74 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
   app.post("/api/sessions", async (request, response) => {
     try {
       const target = parsePullRequestTarget(request.body?.input, request.body?.checkoutRepository);
-      const session = await acquireReviewSession(target, cwd, sessionStore);
+      const session = await acquireReviewSession(target, cwd, sessionStore, undefined, options.acquisitionDependencies);
       response.status(201).json({ session });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Wingdiff could not acquire this pull request.";
       response.status(400).json({ error: message });
     }
+  });
+
+  app.get("/api/sessions/:id/checkpoint", (request, response) => {
+    const session = sessionStore.getSession(request.params.id);
+    if (!session) {
+      response.status(404).json({ error: "Review session not found." });
+      return;
+    }
+    response.json({ checkpoint: sessionStore.latestCheckpoint(session.id) ?? null });
+  });
+
+  app.post("/api/sessions/:id/checkpoint", (request, response) => {
+    try {
+      const session = sessionStore.getSession(request.params.id);
+      if (!session) {
+        response.status(404).json({ error: "Review session not found." });
+        return;
+      }
+      const coverage = reviewCoverage(request.body?.coverage);
+      const findingRevisions = Array.isArray(request.body?.findingRevisions) ? request.body.findingRevisions : [];
+      const checkpoint = {
+        reviewedHeadSha: session.metadata.head.sha,
+        completedAt: new Date().toISOString(),
+        coverage,
+        findingRevisions,
+      };
+      sessionStore.saveCheckpoint(session.id, checkpoint);
+      response.status(201).json({ checkpoint });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Wingdiff could not save this review checkpoint.";
+      response.status(400).json({ error: message });
+    }
+  });
+
+  app.post("/api/sessions/:id/refresh", async (request, response) => {
+    try {
+      const session = sessionStore.getSession(request.params.id);
+      if (!session) {
+        response.status(404).json({ error: "Review session not found." });
+        return;
+      }
+      const result = await refreshReviewSession(
+        session.target,
+        cwd,
+        sessionStore,
+        undefined,
+        options.acquisitionDependencies,
+      );
+      response.json(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Wingdiff could not check for pull request updates.";
+      response.status(400).json({ error: message });
+    }
+  });
+
+  app.get("/api/sessions/:id/update", (request, response) => {
+    const session = sessionStore.getSession(request.params.id);
+    if (!session) {
+      response.status(404).json({ error: "Review session not found." });
+      return;
+    }
+    response.json({ update: sessionStore.getReviewUpdate(session.id) ?? null });
   });
 
   app.get("/api/sessions/:id/tour", (request, response) => {
@@ -167,4 +230,18 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
   });
 
   return app;
+}
+
+function reviewCoverage(input: unknown): Record<string, string> {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Review coverage is required.");
+  const coverage: Record<string, string> = {};
+  for (const [stopId, status] of Object.entries(input)) {
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(stopId)) throw new Error(`Invalid review stop id: ${stopId}`);
+    if (!["understood", "flagged", "skipped"].includes(String(status))) {
+      throw new Error(`Invalid coverage state for ${stopId}.`);
+    }
+    coverage[stopId] = String(status);
+  }
+  if (Object.keys(coverage).length === 0) throw new Error("Review coverage cannot be empty.");
+  return coverage;
 }

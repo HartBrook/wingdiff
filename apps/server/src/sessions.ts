@@ -28,6 +28,21 @@ export interface ReviewCheckpoint {
   findingRevisions: unknown[];
 }
 
+export interface PullRequestCheckpoint extends ReviewCheckpoint {
+  sessionId: string;
+  repository: string;
+  pullRequestNumber: number;
+}
+
+export interface StoredReviewUpdate {
+  sessionId: string;
+  baselineSessionId: string;
+  fromHeadSha: string;
+  toHeadSha: string;
+  evidence: PullRequestEvidence;
+  createdAt: string;
+}
+
 export interface SessionSummary {
   id: string;
   repository: string;
@@ -151,6 +166,68 @@ export class SessionStore {
     };
   }
 
+  latestCheckpointForPullRequest(repository: string, pullRequestNumber: number): PullRequestCheckpoint | undefined {
+    const row = this.database.prepare(`
+      SELECT c.*, s.id AS session_id, s.repository, s.pr_number
+      FROM review_checkpoints c
+      JOIN review_sessions s ON s.id = c.session_id
+      WHERE s.repository = ? AND s.pr_number = ?
+      ORDER BY c.completed_at DESC LIMIT 1
+    `).get(repository, pullRequestNumber);
+    if (!row) return undefined;
+    return {
+      sessionId: String(row.session_id),
+      repository: String(row.repository),
+      pullRequestNumber: Number(row.pr_number),
+      reviewedHeadSha: String(row.reviewed_head_sha),
+      completedAt: String(row.completed_at),
+      coverage: JSON.parse(String(row.coverage_json)) as Record<string, string>,
+      findingRevisions: JSON.parse(String(row.finding_revisions_json)) as unknown[],
+    };
+  }
+
+  saveReviewUpdate(
+    sessionId: string,
+    baselineSessionId: string,
+    evidence: PullRequestEvidence,
+  ): StoredReviewUpdate {
+    this.requireSession(sessionId);
+    this.requireSession(baselineSessionId);
+    const createdAt = this.now().toISOString();
+    this.database.prepare(`
+      INSERT INTO review_updates (
+        session_id, baseline_session_id, from_head_sha, to_head_sha, evidence_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        baseline_session_id = excluded.baseline_session_id,
+        from_head_sha = excluded.from_head_sha,
+        to_head_sha = excluded.to_head_sha,
+        evidence_json = excluded.evidence_json,
+        created_at = excluded.created_at
+    `).run(
+      sessionId,
+      baselineSessionId,
+      evidence.baseSha,
+      evidence.headSha,
+      JSON.stringify(evidence),
+      createdAt,
+    );
+    return this.getReviewUpdate(sessionId)!;
+  }
+
+  getReviewUpdate(sessionId: string): StoredReviewUpdate | undefined {
+    const row = this.database.prepare("SELECT * FROM review_updates WHERE session_id = ?").get(sessionId);
+    if (!row) return undefined;
+    return {
+      sessionId: String(row.session_id),
+      baselineSessionId: String(row.baseline_session_id),
+      fromHeadSha: String(row.from_head_sha),
+      toHeadSha: String(row.to_head_sha),
+      evidence: JSON.parse(String(row.evidence_json)) as PullRequestEvidence,
+      createdAt: String(row.created_at),
+    };
+  }
+
   saveTour(sessionId: string, selection: ModelSelection, headSha: string, tour: GeneratedTour): StoredTour {
     this.requireSession(sessionId);
     const timestamp = this.now().toISOString();
@@ -216,7 +293,7 @@ export function defaultDatabasePath(environment: NodeJS.ProcessEnv = process.env
 
 function migrate(database: DatabaseSync) {
   let version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
-  if (version > 2) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
+  if (version > 3) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
 
   if (version === 0) database.exec(`
     BEGIN;
@@ -285,6 +362,21 @@ function migrate(database: DatabaseSync) {
       updated_at TEXT NOT NULL
     );
     PRAGMA user_version = 2;
+    COMMIT;
+  `);
+
+  version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+  if (version === 2) database.exec(`
+    BEGIN;
+    CREATE TABLE review_updates (
+      session_id TEXT PRIMARY KEY REFERENCES review_sessions(id) ON DELETE CASCADE,
+      baseline_session_id TEXT NOT NULL REFERENCES review_sessions(id) ON DELETE CASCADE,
+      from_head_sha TEXT NOT NULL,
+      to_head_sha TEXT NOT NULL,
+      evidence_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    PRAGMA user_version = 3;
     COMMIT;
   `);
 }

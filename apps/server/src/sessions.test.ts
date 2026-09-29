@@ -87,7 +87,38 @@ describe("local review sessions", () => {
       selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
       tour: { summary: "The counter change is small and focused." },
     });
-    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(2);
+    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(3);
+    store.close();
+  });
+
+  it("finds the latest pull request checkpoint and persists its update evidence", () => {
+    const store = new SessionStore(":memory:");
+    const baseline = store.upsertReadySession(target, metadata(), evidence());
+    store.saveCheckpoint(baseline.id, {
+      reviewedHeadSha: baseline.metadata.head.sha,
+      completedAt: "2026-09-29T12:10:00Z",
+      coverage: { counter: "understood" },
+      findingRevisions: [],
+    });
+    const nextMetadata = { ...metadata(), head: { ref: "feature", sha: "c".repeat(40) } };
+    const nextEvidence = { ...evidence(), headSha: nextMetadata.head.sha };
+    const current = store.upsertReadySession(target, nextMetadata, nextEvidence);
+    const updateEvidence = { ...evidence(), baseSha: baseline.metadata.head.sha, headSha: current.metadata.head.sha };
+
+    expect(store.latestCheckpointForPullRequest("openai/codex", 42)).toMatchObject({
+      sessionId: baseline.id,
+      reviewedHeadSha: baseline.metadata.head.sha,
+      coverage: { counter: "understood" },
+    });
+    expect(store.saveReviewUpdate(current.id, baseline.id, updateEvidence)).toEqual({
+      sessionId: current.id,
+      baselineSessionId: baseline.id,
+      fromHeadSha: baseline.metadata.head.sha,
+      toHeadSha: current.metadata.head.sha,
+      evidence: updateEvidence,
+      createdAt: expect.any(String),
+    });
+    expect(store.getReviewUpdate(current.id)?.evidence).toEqual(updateEvidence);
     store.close();
   });
 

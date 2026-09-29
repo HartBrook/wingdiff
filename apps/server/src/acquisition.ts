@@ -5,7 +5,13 @@ import { inspectLocalTarget, type LocalTargetPreflight } from "./preflight.js";
 import { SessionStore, type ReviewSession } from "./sessions.js";
 import type { PullRequestTarget } from "./targets.js";
 
-export type AcquisitionStage = "preflight" | "metadata" | "revisions" | "evidence" | "persisting";
+export type AcquisitionStage = "preflight" | "metadata" | "revisions" | "evidence" | "persisting" | "update-evidence";
+
+export interface ReviewRefreshResult {
+  status: "current" | "updated";
+  session: ReviewSession;
+  update?: ReturnType<SessionStore["saveReviewUpdate"]>;
+}
 
 export interface AcquisitionDependencies {
   inspectTarget: (target: PullRequestTarget, cwd: string) => Promise<LocalTargetPreflight>;
@@ -28,6 +34,47 @@ export async function acquireReviewSession(
   onStage: (stage: AcquisitionStage) => void = () => undefined,
   dependencies: AcquisitionDependencies = defaultDependencies,
 ): Promise<ReviewSession> {
+  return (await acquireReviewArtifacts(target, cwd, store, onStage, dependencies)).session;
+}
+
+export async function refreshReviewSession(
+  target: PullRequestTarget,
+  cwd: string,
+  store: SessionStore,
+  onStage: (stage: AcquisitionStage) => void = () => undefined,
+  dependencies: AcquisitionDependencies = defaultDependencies,
+): Promise<ReviewRefreshResult> {
+  const baseline = store.latestCheckpointForPullRequest(`${target.owner}/${target.repository}`, target.number);
+  if (!baseline) throw new Error("Complete this pull request review before checking for author updates.");
+
+  const acquired = await acquireReviewArtifacts(target, cwd, store, onStage, dependencies);
+  if (acquired.session.metadata.head.sha === baseline.reviewedHeadSha) {
+    return { status: "current", session: acquired.session };
+  }
+
+  onStage("update-evidence");
+  const evidence = await dependencies.readEvidence({
+    repositoryRoot: acquired.revisions.repositoryRoot,
+    base: {
+      sha: baseline.reviewedHeadSha,
+      ref: `refs/wingdiff/pull/${target.number}/revisions/${baseline.reviewedHeadSha}`,
+    },
+    head: acquired.revisions.head,
+  });
+  if (evidence.baseSha !== baseline.reviewedHeadSha || evidence.headSha !== acquired.session.metadata.head.sha) {
+    throw new Error("Update evidence does not match the reviewed and current head revisions.");
+  }
+  const update = store.saveReviewUpdate(acquired.session.id, baseline.sessionId, evidence);
+  return { status: "updated", session: acquired.session, update };
+}
+
+async function acquireReviewArtifacts(
+  target: PullRequestTarget,
+  cwd: string,
+  store: SessionStore,
+  onStage: (stage: AcquisitionStage) => void,
+  dependencies: AcquisitionDependencies,
+): Promise<{ session: ReviewSession; revisions: PinnedRevisions }> {
   onStage("preflight");
   const preflight = await dependencies.inspectTarget(target, cwd);
   if (preflight.checkout.status !== "matched" || !preflight.checkout.path) {
@@ -49,5 +96,5 @@ export async function acquireReviewSession(
   }
 
   onStage("persisting");
-  return store.upsertReadySession(target, metadata, evidence);
+  return { session: store.upsertReadySession(target, metadata, evidence), revisions };
 }

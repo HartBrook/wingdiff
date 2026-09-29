@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { acquireReviewSession, type AcquisitionDependencies, type AcquisitionStage } from "./acquisition.js";
+import { acquireReviewSession, refreshReviewSession, type AcquisitionDependencies, type AcquisitionStage } from "./acquisition.js";
 import type { PullRequestEvidence } from "./diff.js";
 import type { PinnedRevisions } from "./git.js";
 import type { PullRequestMetadata } from "./github.js";
@@ -45,6 +45,59 @@ describe("review acquisition", () => {
     const dependencies = fixtureDependencies();
     dependencies.readEvidence = async () => ({ ...evidence(), headSha: "c".repeat(40) });
     await expect(acquireReviewSession(target, "/work/codex", store, undefined, dependencies)).rejects.toThrow(/does not match/);
+    store.close();
+  });
+
+  it("compares a new head against the latest explicit review checkpoint", async () => {
+    const store = new SessionStore(":memory:");
+    const baseline = await acquireReviewSession(target, "/work/codex", store, undefined, fixtureDependencies());
+    store.saveCheckpoint(baseline.id, {
+      reviewedHeadSha: baseline.metadata.head.sha,
+      completedAt: "2026-09-29T12:10:00Z",
+      coverage: { counter: "understood" },
+      findingRevisions: [],
+    });
+    const nextHead = "c".repeat(40);
+    const stages: AcquisitionStage[] = [];
+    const dependencies = fixtureDependencies();
+    dependencies.readMetadata = async () => ({ ...metadata(), head: { ref: "feature", sha: nextHead } });
+    dependencies.acquireRevisions = async () => ({
+      repositoryRoot: "/work/codex",
+      base: { ref: "base", sha: baseSha },
+      head: { ref: "head", sha: nextHead },
+    });
+    dependencies.readEvidence = async (input) => ({
+      baseSha: input.base.sha,
+      headSha: input.head.sha,
+      additions: 1,
+      deletions: 0,
+      files: [{ path: "counter.ts", oldPath: "counter.ts", status: "modified", additions: 1, deletions: 0, hunks: [] }],
+    });
+
+    const result = await refreshReviewSession(target, "/work/codex", store, (stage) => stages.push(stage), dependencies);
+
+    expect(stages).toEqual(["preflight", "metadata", "revisions", "evidence", "persisting", "update-evidence"]);
+    expect(result.status).toBe("updated");
+    expect(result.update).toMatchObject({ fromHeadSha: headSha, toHeadSha: nextHead });
+    expect(result.session.evidence.baseSha).toBe(baseSha);
+    expect(result.update?.evidence.baseSha).toBe(headSha);
+    store.close();
+  });
+
+  it("reports a current head without creating update evidence", async () => {
+    const store = new SessionStore(":memory:");
+    const baseline = await acquireReviewSession(target, "/work/codex", store, undefined, fixtureDependencies());
+    store.saveCheckpoint(baseline.id, {
+      reviewedHeadSha: baseline.metadata.head.sha,
+      completedAt: "2026-09-29T12:10:00Z",
+      coverage: { counter: "understood" },
+      findingRevisions: [],
+    });
+
+    const result = await refreshReviewSession(target, "/work/codex", store, undefined, fixtureDependencies());
+
+    expect(result.status).toBe("current");
+    expect(result.update).toBeUndefined();
     store.close();
   });
 });
