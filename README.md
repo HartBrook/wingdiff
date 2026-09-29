@@ -2,7 +2,7 @@
 
 Wingdiff is a guided, evidence-backed tour of a pull request. It helps an engineer understand a change by behavior, data flow, and risk; investigate the exact supporting code; and publish a thoughtful review to GitHub.
 
-This repository currently contains the Phase 0 experience prototype described in the [product plan](./PRODUCT_PLAN.md). It uses a realistic cross-file PR fixture and an author follow-up to exercise the complete review loop:
+This repository contains the local-first review foundation described in the [product plan](./PRODUCT_PLAN.md), plus a realistic cross-file fixture for exercising the complete review loop:
 
 - A default **Since your review** route that isolates the two areas changed after the reviewed head
 - An **Entire PR** backstop that keeps reviewed-but-unchanged areas visible
@@ -13,7 +13,7 @@ This repository currently contains the Phase 0 experience prototype described in
 - Review desk with coverage, summary, inline comments, and disposition
 - Dark/light themes, keyboard navigation, responsive layout, and local persistence
 
-GitHub submission and tour generation are deliberately simulated in this phase. Contextual investigation defaults to the locally installed Codex CLI using its existing ChatGPT sign-in. Direct OpenAI and Anthropic APIs remain optional; without an available provider Wingdiff falls back to clearly labeled fixture answers.
+Real pull requests can be acquired and turned into grounded guided tours. GitHub review submission remains simulated. Contextual investigation defaults to the locally installed Codex CLI using its existing ChatGPT sign-in. Direct OpenAI and Anthropic APIs remain optional; the demo uses clearly labeled fixture answers when no provider is available.
 
 ## Run locally
 
@@ -43,9 +43,9 @@ gh auth status
 npm run wingdiff -- https://github.com/owner/repository/pull/123
 ```
 
-Wingdiff reads metadata through `gh`, fetches missing objects into private `refs/wingdiff/pull/...` references, and builds the diff from exact pinned base/head SHAs. It does not checkout the PR, modify the worktree or index, or execute pull-request code. Acquired metadata, evidence, and review checkpoints are stored in a local SQLite database. Set `WINGDIFF_DATA_DIR` to choose its location.
+Wingdiff reads metadata through `gh`, fetches missing objects into private `refs/wingdiff/pull/...` references, and builds the diff from exact pinned base/head SHAs. It does not checkout the PR, modify the worktree or index, or execute pull-request code. Acquired metadata, evidence, generated tours, and review checkpoints are stored in a local SQLite database. Set `WINGDIFF_DATA_DIR` to choose its location.
 
-The real-PR view currently provides the authentic Summary and Browse evidence surfaces. Semantic tour generation and GitHub review submission remain intentionally disconnected.
+From the real-PR Summary, choose a configured model and select **Generate guided review**. The model organizes the validated diff into semantic stops, ranks concrete findings by severity, and references opaque evidence anchors. Wingdiff rejects the result unless every changed file is covered and every claim or finding resolves to an exact known anchor. Generated tours are pinned to the acquired head SHA and can be resumed locally.
 
 ## Portable, local-first AI
 
@@ -57,7 +57,7 @@ codex login status
 npm run dev
 ```
 
-Wingdiff invokes `codex exec` in an isolated temporary directory with an ephemeral session, a read-only sandbox, and user/project customization disabled. Review evidence is sent over stdin rather than command-line arguments. The model request still reaches the provider configured by Codex, so your organization’s model and data-use policies still apply.
+Wingdiff invokes `codex exec` in an isolated temporary directory with an ephemeral session, a read-only sandbox, user/project customization disabled, and a structured-output schema. Review evidence is sent over stdin rather than command-line arguments. The model request still reaches the provider configured by Codex, so your organization’s model and data-use policies still apply.
 
 Direct API access is an optional fallback. Copy the example environment file and add either key:
 
@@ -74,7 +74,7 @@ Available Codex/OpenAI models:
 
 Claude Sonnet 4.6 and Opus 4.6 remain available through the same provider interface. Select Codex CLI, OpenAI API, or Anthropic API plus the model and supported reasoning effort from the model control in the top bar.
 
-API keys are read only by the loopback Node server and are never returned to browser JavaScript. OpenAI API requests use the Responses API with streaming and `store: false`. Wingdiff never reads or copies Codex CLI credentials.
+API keys are read only by the loopback Node server and are never returned to browser JavaScript. OpenAI API requests use the Responses API with `store: false`; tour generation uses strict structured output and investigations stream. Wingdiff never reads or copies Codex CLI credentials.
 
 ## Verify
 
@@ -84,7 +84,7 @@ npm run typecheck
 npm run build
 ```
 
-The fixture tests enforce the product's grounding contract: claims must resolve to real evidence, diff ranges must be internally consistent, revision coverage must partition the full tour, and findings must remain attached to known stops.
+The tests enforce the product's grounding contract: claims must resolve to real evidence, generated tours must cover every changed file, diff ranges must be internally consistent, revision coverage must partition the full fixture tour, and findings must remain attached to known stops.
 
 ## Keyboard shortcuts
 
