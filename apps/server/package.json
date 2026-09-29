@@ -7,12 +7,12 @@
     "wingdiff": "dist/cli.js"
   },
   "engines": {
-    "node": "^22.12.0 || >=24.0.0"
+    "node": "^22.13.0 || >=24.0.0"
   },
   "scripts": {
-    "dev": "NODE_ENV=development tsx src/index.ts",
-    "cli": "NODE_ENV=development tsx src/cli.ts",
-    "start": "NODE_ENV=production node dist/index.js",
+    "dev": "cross-env NODE_ENV=development tsx src/index.ts",
+    "cli": "cross-env NODE_ENV=development tsx src/cli.ts",
+    "start": "cross-env NODE_ENV=production node dist/index.js",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
@@ -24,6 +24,7 @@
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
+    "cross-env": "^10.1.0",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vite": "^8.3.1",

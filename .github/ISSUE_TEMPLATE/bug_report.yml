@@ -1,0 +1,65 @@
+name: Bug report
+description: Report a reproducible problem in Wingdiff.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Redact private source, tokens, repository names, and model output before submitting.
+  - type: input
+    id: version
+    attributes:
+      label: Wingdiff version
+      description: Release, tag, or commit SHA.
+      placeholder: 0.2.0 or abc1234
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, Node.js version, and relevant CLI versions.
+      placeholder: macOS 15, Node.js 24.8, gh 2.x, Codex CLI 0.x
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Run ...
+        2. Open ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs or screenshots
+      description: Do not include credentials, private code, launch URLs, or local database contents.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I searched for an existing issue.
+          required: true
+        - label: I removed credentials and private repository content.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

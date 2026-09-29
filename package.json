@@ -2,9 +2,19 @@
   "name": "wingdiff",
   "version": "0.2.0",
   "private": true,
+  "description": "A guided, evidence-backed tour of a pull request.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HartBrook/wingdiff.git"
+  },
+  "bugs": {
+    "url": "https://github.com/HartBrook/wingdiff/issues"
+  },
+  "homepage": "https://github.com/HartBrook/wingdiff#readme",
   "type": "module",
   "engines": {
-    "node": "^22.12.0 || >=24.0.0"
+    "node": "^22.13.0 || >=24.0.0"
   },
   "workspaces": [
     "apps/*"

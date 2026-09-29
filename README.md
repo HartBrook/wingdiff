@@ -1,6 +1,16 @@
 # wingdiff
 
+[![CI](https://github.com/HartBrook/wingdiff/actions/workflows/ci.yml/badge.svg)](https://github.com/HartBrook/wingdiff/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/HartBrook/wingdiff/actions/workflows/codeql.yml/badge.svg)](https://github.com/HartBrook/wingdiff/actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+
 Wingdiff is a guided, evidence-backed tour of a pull request. It helps an engineer understand a change by behavior, data flow, and risk; investigate the exact supporting code; and publish a thoughtful review to GitHub.
+
+> [!NOTE]
+> Wingdiff is pre-1.0 software under active pilot testing. Review the generated
+> evidence and final GitHub payload before publishing.
+
+![Wingdiff guided review interface](./docs/images/wingdiff-demo.png)
 
 This repository contains the local-first review foundation described in the [product plan](./PRODUCT_PLAN.md), plus a realistic cross-file fixture for exercising the complete review loop:
 
@@ -17,14 +27,26 @@ Real pull requests can be acquired, turned into grounded guided tours, and revie
 
 ## Run locally
 
-Requires Node.js 22.12+ (excluding Node 23) or Node.js 24+.
+### Prerequisites
+
+- [Git](https://git-scm.com/downloads)
+- [Node.js](https://nodejs.org/) 22.13+ (excluding Node 23) or Node.js 24+
+- [GitHub CLI](https://cli.github.com/) authenticated with `gh auth login` for real pull requests
+- [Codex](https://developers.openai.com/learn/codex) CLI authenticated with `codex login` for the default model transport, or an optional direct provider API key
+
+Wingdiff supports macOS, Linux, and Windows. Its server binds to loopback by
+default and is not intended to be deployed as a public web service.
+
+### Quick start
 
 ```bash
-npm install
-npm run wingdiff
+git clone https://github.com/HartBrook/wingdiff.git
+cd wingdiff
+npm ci
+npm run wingdiff -- --demo
 ```
 
-The launcher starts Wingdiff on a loopback address and opens an authenticated local URL. Paste a GitHub pull request URL, or open the fixture directly:
+The launcher starts Wingdiff on a loopback address and opens an authenticated local URL. From a matching local checkout, pass a GitHub pull request URL or number:
 
 ```bash
 npm run wingdiff -- --demo
@@ -32,7 +54,9 @@ npm run wingdiff -- https://github.com/owner/repository/pull/123
 npm run wingdiff -- 123 # resolves the repository from the current checkout
 ```
 
-The built server package also exposes the eventual `wingdiff` binary. Use `npm run dev` when working on the UI without automatic browser launch.
+Wingdiff is currently distributed from source rather than through npm. The
+server workspace builds a `wingdiff` binary for future packaged releases. Use
+`npm run dev` when developing the UI without automatic browser launch.
 
 ### Read-only PR acquisition
 
@@ -90,6 +114,24 @@ API keys are read only by the loopback Node server and are never returned to bro
 
 The local server generates a fresh launch token, exchanges it for an HTTP-only, same-site cookie, rejects cross-origin mutations, and refuses non-loopback binding unless `WINGDIFF_UNSAFE_ALLOW_REMOTE=1` is explicitly set. Server discovery files are private to the current OS user and are reused only for the same working directory.
 
+### Configuration
+
+All configuration is optional and is read only by the local Node process.
+
+| Variable | Purpose |
+|---|---|
+| `OPENAI_API_KEY` | Enable direct OpenAI API access |
+| `ANTHROPIC_API_KEY` | Enable direct Anthropic API access |
+| `WINGDIFF_CODEX_BIN` | Override the Codex CLI executable |
+| `WINGDIFF_CODEX_TIMEOUT_MS` | Override the Codex request timeout |
+| `WINGDIFF_DATA_DIR` | Choose the directory containing `wingdiff.sqlite3` |
+| `WINGDIFF_HOST` | Override the loopback host |
+| `WINGDIFF_PORT` | Override the local port |
+| `WINGDIFF_UNSAFE_ALLOW_REMOTE` | Allow a non-loopback host when set to `1`; unsupported and dangerous |
+
+See [`.env.example`](./.env.example) for an annotated template. Never commit
+provider keys or expose Wingdiff directly to an untrusted network.
+
 ## Verify
 
 ```bash
@@ -115,3 +157,18 @@ See [PILOT.md](./PILOT.md) for the first-user runbook and feedback checklist.
 | `d` | Toggle tour and Browse mode |
 | `r` | Open the review desk |
 | `Escape` | Close the active overlay |
+
+## Contributing and support
+
+Contributions are welcome. Read [CONTRIBUTING.md](./CONTRIBUTING.md) before
+opening a pull request, use [GitHub Discussions](https://github.com/HartBrook/wingdiff/discussions)
+for questions and ideas, and use [GitHub Issues](https://github.com/HartBrook/wingdiff/issues)
+for reproducible defects. The [product plan](./PRODUCT_PLAN.md) is retained as a
+historical design brief rather than a live roadmap.
+
+Please report vulnerabilities privately according to [SECURITY.md](./SECURITY.md)
+and follow the [Code of Conduct](./CODE_OF_CONDUCT.md) in all project spaces.
+
+## License
+
+Wingdiff is available under the [MIT License](./LICENSE).

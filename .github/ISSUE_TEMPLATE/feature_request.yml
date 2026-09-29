@@ -1,0 +1,40 @@
+name: Feature request
+description: Propose a focused improvement to Wingdiff.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Consider starting with a Discussion for broad product ideas. Issues work best when the user problem and scope are concrete.
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: What review task is difficult today, and for whom?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the result without prescribing an implementation when possible.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: risks
+    attributes:
+      label: Privacy or safety implications
+      description: Note any effect on source handling, providers, persistence, or GitHub writes.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and discussions.
+          required: true
