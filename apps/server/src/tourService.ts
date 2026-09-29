@@ -21,8 +21,9 @@ export async function generateSessionTour(
   repositoryRoot = process.cwd(),
 ): Promise<SessionTour> {
   if (provider.id !== selection.provider) throw new Error("The selected model does not match the configured provider.");
-  const { evidence, input } = await buildSessionGenerationContext(session, store, scope, repositoryRoot);
+  const { evidence, input, manifest } = await buildSessionGenerationContext(session, store, scope, repositoryRoot);
   if (!evidence.files.length) throw new Error("Every changed file is excluded from model context. Keep at least one file to generate a tour.");
+  if (!manifest.ready) throw new Error("Model context is too large. Exclude generated or low-value files before generating a tour.");
   const raw = await provider.generateTour(selection, input, signal);
   const tour = validateGeneratedTour(raw, input);
   const stored = store.saveTour(session.id, scope, selection, evidence.baseSha, evidence.headSha, tour);

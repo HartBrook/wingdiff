@@ -214,6 +214,7 @@ export interface SessionContextManifest {
   excludedFiles: number;
   characters: number;
   warnings: string[];
+  ready: boolean;
   promptPreview: string;
   fingerprint: string;
 }

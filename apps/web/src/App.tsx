@@ -394,6 +394,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
         setTours({ full: null, update: null });
       }
       if (!effectiveManifest.includedFiles) throw new Error("Keep at least one changed file in model context.");
+      if (!effectiveManifest.ready) throw new Error("Reduce model context before generation.");
       setContextPreviewOpen(false);
       await generateTour();
     } catch (caught) {

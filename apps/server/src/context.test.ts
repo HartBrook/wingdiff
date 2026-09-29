@@ -51,6 +51,20 @@ describe("model context manifest", () => {
     expect(context.manifest.excludedFiles).toBe(2);
     store.close();
   });
+
+  it("blocks oversized model context before provider dispatch", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "wingdiff-context-"));
+    directories.push(root);
+    const store = new SessionStore(":memory:");
+    const oversizedEvidence = { ...evidence, files: [changedFile("src/fixture.txt", "x".repeat(751_000), "large")] };
+    const session = store.upsertReadySession(target, metadata, oversizedEvidence);
+
+    const context = await buildSessionGenerationContext(session, store, "full", root);
+
+    expect(context.manifest.ready).toBe(false);
+    expect(context.manifest.warnings.join(" ")).toMatch(/exceeds 750,000/);
+    store.close();
+  });
 });
 
 const target = parsePullRequestTarget("https://github.com/openai/codex/pull/42");

@@ -15,9 +15,11 @@
     "start": "npm run start --workspace @wingdiff/server",
     "build": "npm run build --workspace @wingdiff/web && npm run build --workspace @wingdiff/server",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "test:e2e": "playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "@vitejs/plugin-react": "^6.1.1",

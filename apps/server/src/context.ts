@@ -7,6 +7,7 @@ import { buildTourGenerationInput, buildTourPrompt, type PriorTourFinding, type 
 
 const INSTRUCTION_PATHS = ["AGENTS.md", "CONTRIBUTING.md", ".github/CONTRIBUTING.md"];
 const MAX_INSTRUCTION_CHARACTERS = 20_000;
+const MAX_MODEL_CONTEXT_CHARACTERS = 750_000;
 const DEFAULT_EXCLUSIONS = ["**/.env*", "**/*.pem", "**/*.key"];
 
 export interface ContextFileManifest {
@@ -37,6 +38,7 @@ export interface SessionContextManifest {
   excludedFiles: number;
   characters: number;
   warnings: string[];
+  ready: boolean;
   promptPreview: string;
   fingerprint: string;
 }
@@ -67,7 +69,7 @@ export async function buildSessionGenerationContext(
   );
   const promptPreview = buildTourPrompt(input);
   const includedFiles = files.filter((file) => file.included).length;
-  const warnings = contextWarnings(files, instructions);
+  const warnings = contextWarnings(files, instructions, promptPreview.length);
   return {
     evidence,
     priorFindings,
@@ -83,6 +85,7 @@ export async function buildSessionGenerationContext(
       excludedFiles: files.length - includedFiles,
       characters: promptPreview.length,
       warnings,
+      ready: includedFiles > 0 && promptPreview.length <= MAX_MODEL_CONTEXT_CHARACTERS,
       promptPreview,
       fingerprint: createHash("sha256").update(promptPreview).digest("hex"),
     },
@@ -185,13 +188,14 @@ async function readRepositoryInstructions(repositoryRoot: string): Promise<Repos
   return instructions;
 }
 
-function contextWarnings(files: ContextFileManifest[], instructions: RepositoryInstruction[]): string[] {
+function contextWarnings(files: ContextFileManifest[], instructions: RepositoryInstruction[], characters: number): string[] {
   const warnings: string[] = [];
   const includedSensitive = files.filter((file) => file.included && file.classifications.includes("sensitive"));
   if (includedSensitive.length) warnings.push(`${includedSensitive.length} included file${includedSensitive.length === 1 ? " is" : "s are"} marked potentially sensitive.`);
   const includedGenerated = files.filter((file) => file.included && file.classifications.some((value) => value === "generated" || value === "vendor"));
   if (includedGenerated.length) warnings.push(`${includedGenerated.length} generated or vendor file${includedGenerated.length === 1 ? " is" : "s are"} included.`);
   if (instructions.some((instruction) => instruction.truncated)) warnings.push("A repository instruction file was truncated to 20,000 characters.");
+  if (characters > MAX_MODEL_CONTEXT_CHARACTERS) warnings.push("Model context exceeds 750,000 characters. Exclude generated or low-value files before generation.");
   return warnings;
 }
 
