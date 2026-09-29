@@ -92,7 +92,7 @@ export function buildTourGenerationInput(metadata: PullRequestMetadata, evidence
       title: metadata.title,
       body: metadata.body,
       author: metadata.author.login,
-      baseRef: metadata.base.ref,
+      baseRef: evidence.baseSha === metadata.base.sha ? metadata.base.ref : "reviewed-head",
       headRef: metadata.head.ref,
       baseSha: evidence.baseSha,
       headSha: evidence.headSha,

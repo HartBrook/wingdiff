@@ -22,7 +22,9 @@ describe("acquired session evidence", () => {
     const acquired = session();
     const generated: GeneratedSessionTour = {
       sessionId: acquired.id,
+      scope: "full",
       selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
+      baseSha: acquired.metadata.base.sha,
       headSha: acquired.metadata.head.sha,
       tour: {
         summary: "The counter update is now atomic.",

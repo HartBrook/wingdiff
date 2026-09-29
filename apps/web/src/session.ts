@@ -70,7 +70,9 @@ export interface TourEvidenceAnchor {
 
 export interface GeneratedSessionTour {
   sessionId: string;
+  scope: "full" | "update";
   selection: ModelSelection;
+  baseSha: string;
   headSha: string;
   tour: {
     summary: string;
@@ -102,6 +104,28 @@ export interface GeneratedSessionTour {
   updatedAt: string;
 }
 
+export interface ReviewCheckpoint {
+  reviewedHeadSha: string;
+  completedAt: string;
+  coverage: Record<string, string>;
+  findingRevisions: unknown[];
+}
+
+export interface StoredReviewUpdate {
+  sessionId: string;
+  baselineSessionId: string;
+  fromHeadSha: string;
+  toHeadSha: string;
+  evidence: AcquiredReviewSession["evidence"];
+  createdAt: string;
+}
+
+export interface ReviewRefreshResult {
+  status: "current" | "updated";
+  session: AcquiredReviewSession;
+  update?: StoredReviewUpdate;
+}
+
 export async function createReviewSession(input: string): Promise<AcquiredReviewSession> {
   return sessionRequest("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input }) });
 }
@@ -110,8 +134,8 @@ export async function fetchReviewSession(id: string, signal?: AbortSignal): Prom
   return sessionRequest(`/api/sessions/${encodeURIComponent(id)}`, { signal });
 }
 
-export async function fetchSessionTour(id: string, signal?: AbortSignal): Promise<GeneratedSessionTour | null> {
-  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/tour`, { signal });
+export async function fetchSessionTour(id: string, scope: "full" | "update" = "full", signal?: AbortSignal): Promise<GeneratedSessionTour | null> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/tour?scope=${scope}`, { signal });
   if (response.status === 404) return null;
   const body = await response.json() as { generated?: GeneratedSessionTour; error?: string };
   if (!response.ok || !body.generated) throw new Error(body.error ?? "Wingdiff could not load this guided tour.");
@@ -121,12 +145,13 @@ export async function fetchSessionTour(id: string, signal?: AbortSignal): Promis
 export async function generateSessionTour(
   id: string,
   selection: ModelSelection,
+  scope: "full" | "update" = "full",
   signal?: AbortSignal,
 ): Promise<GeneratedSessionTour> {
   const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/tour`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ selection }),
+    body: JSON.stringify({ selection, scope }),
     signal,
   });
   const body = await response.json() as { generated?: GeneratedSessionTour; error?: string };
@@ -134,8 +159,48 @@ export async function generateSessionTour(
   return body.generated;
 }
 
+export async function fetchReviewCheckpoint(id: string, signal?: AbortSignal): Promise<ReviewCheckpoint | null> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/checkpoint`, { signal });
+  const body = await response.json() as { checkpoint?: ReviewCheckpoint | null; error?: string };
+  if (!response.ok) throw new Error(body.error ?? "Wingdiff could not load this review checkpoint.");
+  return body.checkpoint ?? null;
+}
+
+export async function completeReviewCheckpoint(
+  id: string,
+  coverage: Record<string, string>,
+  findingRevisions: unknown[] = [],
+): Promise<ReviewCheckpoint> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/checkpoint`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ coverage, findingRevisions }),
+  });
+  const body = await response.json() as { checkpoint?: ReviewCheckpoint; error?: string };
+  if (!response.ok || !body.checkpoint) throw new Error(body.error ?? "Wingdiff could not complete this review.");
+  return body.checkpoint;
+}
+
+export async function fetchSessionUpdate(id: string, signal?: AbortSignal): Promise<StoredReviewUpdate | null> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/update`, { signal });
+  const body = await response.json() as { update?: StoredReviewUpdate | null; error?: string };
+  if (!response.ok) throw new Error(body.error ?? "Wingdiff could not load update evidence.");
+  return body.update ?? null;
+}
+
+export async function refreshReviewSession(id: string): Promise<ReviewRefreshResult> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/refresh`, { method: "POST" });
+  const body = await response.json() as Partial<ReviewRefreshResult> & { error?: string };
+  if (!response.ok || !body.status || !body.session) throw new Error(body.error ?? "Wingdiff could not check for updates.");
+  return body as ReviewRefreshResult;
+}
+
 export function evidenceBlocks(session: AcquiredReviewSession): EvidenceBlock[] {
-  return session.evidence.files.map((file, fileIndex) => {
+  return evidenceBlocksFor(session.evidence);
+}
+
+export function evidenceBlocksFor(evidence: AcquiredReviewSession["evidence"]): EvidenceBlock[] {
+  return evidence.files.map((file, fileIndex) => {
     const numberedLines = file.hunks.flatMap((hunk) => hunk.lines.flatMap((line) => [line.oldLine, line.newLine]))
       .filter((line): line is number => line !== undefined);
     return {
@@ -158,9 +223,13 @@ export function evidenceBlocks(session: AcquiredReviewSession): EvidenceBlock[] 
   });
 }
 
-export function generatedTourStops(session: AcquiredReviewSession, generated: GeneratedSessionTour): TourStop[] {
+export function generatedTourStops(
+  session: AcquiredReviewSession,
+  generated: GeneratedSessionTour,
+  evidence: AcquiredReviewSession["evidence"] = session.evidence,
+): TourStop[] {
   const anchors = new Map(generated.anchors.map((anchor) => [anchor.id, anchor]));
-  const blocks = new Map(evidenceBlocks(session).map((block) => [block.path, block]));
+  const blocks = new Map(evidenceBlocksFor(evidence).map((block) => [block.path, block]));
 
   return generated.tour.stops.map((stop, index) => {
     const allAnchorIds = [

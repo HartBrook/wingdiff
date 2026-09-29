@@ -39,6 +39,7 @@ describe("generated tour contract", () => {
 
     expect(input.pullRequest.baseSha).toBe("c".repeat(40));
     expect(input.pullRequest.headSha).toBe(metadata.head.sha);
+    expect(input.pullRequest.baseRef).toBe("reviewed-head");
   });
 
   it("accepts concise, fully grounded stops", () => {
