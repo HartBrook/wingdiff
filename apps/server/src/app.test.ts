@@ -58,6 +58,38 @@ describe("generated tour API", () => {
     expect(resumed.status).toBe(200);
     expect(resumedBody).toEqual(createdBody);
   });
+
+  it("stages only comments anchored to the pinned diff", async () => {
+    store = new SessionStore(":memory:");
+    const session = store.upsertReadySession(target, metadata, evidence);
+    const app = createApp({}, { sessionStore: store, providers: new Map() });
+    server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => server!.once("listening", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const url = `http://127.0.0.1:${port}/api/sessions/${session.id}/comments`;
+    const input = {
+      stopId: "atomic-counter", evidenceId: "session-0-src/counter.ts", path: "src/counter.ts",
+      side: "RIGHT", startLine: 2, endLine: 2, body: "Does this preserve expiry?",
+      severity: "medium", fingerprint: "new-counter",
+    };
+
+    const created = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+    });
+    const createdBody = await created.json() as { comment: { id: string } };
+    expect(created.status).toBe(201);
+
+    const listed = await fetch(url);
+    expect(await listed.json()).toMatchObject({ comments: [{ ...input, id: createdBody.comment.id }] });
+
+    const stale = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...input, fingerprint: "stale" }),
+    });
+    expect(stale.status).toBe(400);
+
+    const removed = await fetch(`${url}/${createdBody.comment.id}`, { method: "DELETE" });
+    expect(removed.status).toBe(204);
+  });
 });
 
 const target = parsePullRequestTarget("https://github.com/openai/codex/pull/42");

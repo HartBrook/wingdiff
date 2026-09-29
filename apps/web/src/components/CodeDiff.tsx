@@ -4,6 +4,7 @@ import { Icon } from "./Icon";
 
 interface Selection {
   evidenceId: string;
+  side?: "LEFT" | "RIGHT";
   start: number;
   end: number;
 }
@@ -11,7 +12,7 @@ interface Selection {
 interface CodeDiffProps {
   evidence: EvidenceBlock;
   selection?: Selection | null;
-  onSelectLine?: (evidenceId: string, line: number, extend: boolean) => void;
+  onSelectLine?: (evidenceId: string, line: number, side: "LEFT" | "RIGHT", extend: boolean) => void;
   onAsk?: () => void;
   onComment?: () => void;
   minimal?: boolean;
@@ -47,10 +48,12 @@ export function CodeDiff({
 
       <div className="diff-card__code" role="table">
         {evidence.lines.map((line, index) => {
-          const lineNumber = line.newLine ?? line.oldLine;
+          const side = line.kind === "deletion" ? "LEFT" : "RIGHT";
+          const lineNumber = side === "RIGHT" ? line.newLine : line.oldLine;
           const selected = Boolean(
             lineNumber &&
             selection?.evidenceId === evidence.id &&
+            (!selection.side || selection.side === side) &&
             lineNumber >= Math.min(selection.start, selection.end) &&
             lineNumber <= Math.max(selection.start, selection.end),
           );
@@ -68,7 +71,7 @@ export function CodeDiff({
                     aria-label={`Select line ${lineNumber ?? "context"}`}
                     className="diff-line__number"
                     disabled={!onSelectLine || !lineNumber}
-                    onClick={(event) => lineNumber && onSelectLine?.(evidence.id, lineNumber, event.shiftKey)}
+                    onClick={(event) => lineNumber && onSelectLine?.(evidence.id, lineNumber, side, event.shiftKey)}
                     type="button"
                   >
                     {lineNumber}
@@ -125,4 +128,3 @@ function highlight(line: DiffLine) {
     return <Fragment key={`${token}-${index}`}><span className={className}>{token}</span></Fragment>;
   });
 }
-

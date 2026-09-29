@@ -141,6 +141,22 @@ export interface SessionUpdateContext {
   baselineCheckpoint: ReviewCheckpoint;
 }
 
+export interface StoredDraftReviewComment {
+  id: string;
+  sessionId: string;
+  stopId: string;
+  evidenceId: string;
+  path: string;
+  side: "LEFT" | "RIGHT";
+  startLine: number;
+  endLine: number;
+  body: string;
+  severity: "high" | "medium" | "low";
+  fingerprint: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ReviewRefreshResult {
   status: "current" | "updated";
   session: AcquiredReviewSession;
@@ -210,6 +226,34 @@ export async function fetchSessionUpdate(id: string, signal?: AbortSignal): Prom
   return body.update && body.baselineCheckpoint ? { update: body.update, baselineCheckpoint: body.baselineCheckpoint } : null;
 }
 
+export async function fetchDraftComments(id: string, signal?: AbortSignal): Promise<StoredDraftReviewComment[]> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/comments`, { signal });
+  const body = await response.json() as { comments?: StoredDraftReviewComment[]; error?: string };
+  if (!response.ok || !body.comments) throw new Error(body.error ?? "Wingdiff could not load draft comments.");
+  return body.comments;
+}
+
+export async function createDraftComment(
+  id: string,
+  comment: Omit<StoredDraftReviewComment, "id" | "sessionId" | "createdAt" | "updatedAt">,
+): Promise<StoredDraftReviewComment> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/comments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(comment),
+  });
+  const body = await response.json() as { comment?: StoredDraftReviewComment; error?: string };
+  if (!response.ok || !body.comment) throw new Error(body.error ?? "Wingdiff could not stage this comment.");
+  return body.comment;
+}
+
+export async function deleteDraftComment(id: string, commentId: string): Promise<void> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/comments/${encodeURIComponent(commentId)}`, { method: "DELETE" });
+  if (response.ok) return;
+  const body = await response.json() as { error?: string };
+  throw new Error(body.error ?? "Wingdiff could not remove this draft comment.");
+}
+
 export async function refreshReviewSession(id: string): Promise<ReviewRefreshResult> {
   const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/refresh`, { method: "POST" });
   const body = await response.json() as Partial<ReviewRefreshResult> & { error?: string };
@@ -237,6 +281,7 @@ export function evidenceBlocksFor(evidence: AcquiredReviewSession["evidence"]): 
         ...hunk.lines.map((line) => ({
           kind: line.kind,
           content: line.content,
+          fingerprint: line.fingerprint,
           ...(line.oldLine === undefined ? {} : { oldLine: line.oldLine }),
           ...(line.newLine === undefined ? {} : { newLine: line.newLine }),
         })),

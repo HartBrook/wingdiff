@@ -1,5 +1,6 @@
 import express from "express";
 import { acquireReviewSession, refreshReviewSession, type AcquisitionDependencies } from "./acquisition.js";
+import { validateDraftComment } from "./comments.js";
 import { inspectLocalTarget } from "./preflight.js";
 import { createProviders, publicProviders, validateSelection } from "./providers/index.js";
 import type { ProviderId, TextProvider } from "./providers/types.js";
@@ -106,6 +107,43 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
       const message = error instanceof Error ? error.message : "Wingdiff could not save this review checkpoint.";
       response.status(400).json({ error: message });
     }
+  });
+
+  app.get("/api/sessions/:id/comments", (request, response) => {
+    const session = sessionStore.getSession(request.params.id);
+    if (!session) {
+      response.status(404).json({ error: "Review session not found." });
+      return;
+    }
+    response.json({ comments: sessionStore.listDraftComments(session.id) });
+  });
+
+  app.post("/api/sessions/:id/comments", (request, response) => {
+    try {
+      const session = sessionStore.getSession(request.params.id);
+      if (!session) {
+        response.status(404).json({ error: "Review session not found." });
+        return;
+      }
+      const comment = validateDraftComment(request.body, session.evidence);
+      response.status(201).json({ comment: sessionStore.saveDraftComment(session.id, comment) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Wingdiff could not stage this comment.";
+      response.status(400).json({ error: message });
+    }
+  });
+
+  app.delete("/api/sessions/:id/comments/:commentId", (request, response) => {
+    const session = sessionStore.getSession(request.params.id);
+    if (!session) {
+      response.status(404).json({ error: "Review session not found." });
+      return;
+    }
+    if (!sessionStore.deleteDraftComment(session.id, request.params.commentId)) {
+      response.status(404).json({ error: "Draft comment not found." });
+      return;
+    }
+    response.status(204).end();
   });
 
   app.post("/api/sessions/:id/refresh", async (request, response) => {

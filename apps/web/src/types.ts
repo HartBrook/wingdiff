@@ -45,6 +45,7 @@ export interface DiffLine {
   newLine?: number;
   content: string;
   emphasized?: boolean;
+  fingerprint?: string;
 }
 
 export interface EvidenceBlock {
@@ -111,10 +112,12 @@ export interface DraftComment {
   stopId: string;
   evidenceId: string;
   path: string;
+  side?: "LEFT" | "RIGHT";
   startLine: number;
   endLine: number;
   body: string;
   severity: RiskLevel;
+  fingerprint?: string;
 }
 
 export interface NotebookEntry {

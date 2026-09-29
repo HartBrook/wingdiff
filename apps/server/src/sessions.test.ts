@@ -94,7 +94,22 @@ describe("local review sessions", () => {
       selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
       tour: { summary: "The counter change is small and focused." },
     });
-    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(5);
+    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(6);
+    store.close();
+  });
+
+  it("persists session-scoped draft comments", () => {
+    const store = new SessionStore(":memory:", () => new Date("2026-09-29T12:00:00Z"));
+    const session = store.upsertReadySession(target, metadata(), evidence());
+    const comment = store.saveDraftComment(session.id, {
+      stopId: "counter", evidenceId: "counter-file", path: "src/counter.ts", side: "RIGHT",
+      startLine: 2, endLine: 2, body: "Does this preserve expiry?", severity: "medium", fingerprint: "line-new",
+    });
+
+    expect(store.listDraftComments(session.id)).toEqual([comment]);
+    expect(comment).toMatchObject({ sessionId: session.id, stopId: "counter", severity: "medium" });
+    expect(store.deleteDraftComment(session.id, comment.id)).toBe(true);
+    expect(store.listDraftComments(session.id)).toEqual([]);
     store.close();
   });
 

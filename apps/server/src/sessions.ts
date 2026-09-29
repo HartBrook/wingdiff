@@ -75,6 +75,24 @@ export interface StoredTour {
   updatedAt: string;
 }
 
+export interface DraftReviewComment {
+  id: string;
+  sessionId: string;
+  stopId: string;
+  evidenceId: string;
+  path: string;
+  side: "LEFT" | "RIGHT";
+  startLine: number;
+  endLine: number;
+  body: string;
+  severity: "high" | "medium" | "low";
+  fingerprint: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type NewDraftReviewComment = Omit<DraftReviewComment, "id" | "sessionId" | "createdAt" | "updatedAt">;
+
 export class SessionStore {
   readonly database: DatabaseSync;
 
@@ -305,6 +323,36 @@ export class SessionStore {
     };
   }
 
+  listDraftComments(sessionId: string): DraftReviewComment[] {
+    this.requireSession(sessionId);
+    return this.database.prepare(`
+      SELECT * FROM draft_comments WHERE session_id = ? ORDER BY created_at, id
+    `).all(sessionId).map(rowToDraftComment);
+  }
+
+  saveDraftComment(sessionId: string, comment: NewDraftReviewComment): DraftReviewComment {
+    this.requireSession(sessionId);
+    const id = randomUUID();
+    const timestamp = this.now().toISOString();
+    this.database.prepare(`
+      INSERT INTO draft_comments (
+        id, session_id, stop_id, evidence_id, path, side, start_line, end_line,
+        body, severity, fingerprint, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id, sessionId, comment.stopId, comment.evidenceId, comment.path, comment.side,
+      comment.startLine, comment.endLine, comment.body, comment.severity, comment.fingerprint,
+      timestamp, timestamp,
+    );
+    return this.listDraftComments(sessionId).find((draft) => draft.id === id)!;
+  }
+
+  deleteDraftComment(sessionId: string, commentId: string): boolean {
+    this.requireSession(sessionId);
+    return this.database.prepare("DELETE FROM draft_comments WHERE id = ? AND session_id = ?")
+      .run(commentId, sessionId).changes > 0;
+  }
+
   close() {
     this.database.close();
   }
@@ -326,7 +374,7 @@ export function defaultDatabasePath(environment: NodeJS.ProcessEnv = process.env
 
 function migrate(database: DatabaseSync) {
   let version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
-  if (version > 5) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
+  if (version > 6) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
 
   if (version === 0) database.exec(`
     BEGIN;
@@ -449,6 +497,17 @@ function migrate(database: DatabaseSync) {
     PRAGMA user_version = 5;
     COMMIT;
   `);
+
+  version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+  if (version === 5) database.exec(`
+    BEGIN;
+    ALTER TABLE draft_comments ADD COLUMN stop_id TEXT NOT NULL DEFAULT '';
+    ALTER TABLE draft_comments ADD COLUMN evidence_id TEXT NOT NULL DEFAULT '';
+    ALTER TABLE draft_comments ADD COLUMN severity TEXT NOT NULL DEFAULT 'low'
+      CHECK (severity IN ('high', 'medium', 'low'));
+    PRAGMA user_version = 6;
+    COMMIT;
+  `);
 }
 
 function rowToSession(row: Record<string, unknown>): ReviewSession {
@@ -458,6 +517,24 @@ function rowToSession(row: Record<string, unknown>): ReviewSession {
     metadata: JSON.parse(String(row.metadata_json)) as PullRequestMetadata,
     evidence: JSON.parse(String(row.evidence_json)) as PullRequestEvidence,
     status: String(row.status) as SessionStatus,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function rowToDraftComment(row: Record<string, unknown>): DraftReviewComment {
+  return {
+    id: String(row.id),
+    sessionId: String(row.session_id),
+    stopId: String(row.stop_id),
+    evidenceId: String(row.evidence_id),
+    path: String(row.path),
+    side: String(row.side) as DraftReviewComment["side"],
+    startLine: Number(row.start_line),
+    endLine: Number(row.end_line),
+    body: String(row.body),
+    severity: String(row.severity) as DraftReviewComment["severity"],
+    fingerprint: String(row.fingerprint),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };

@@ -27,11 +27,13 @@ import { addRecentTarget, parseLaunchRoute, preparePullRequestTarget, type Launc
 import { claimKindLabel, compareSeverity } from "./reviewPresentation";
 import {
   createReviewSession,
+  createDraftComment,
   completeReviewCheckpoint,
   checkpointFindings,
   evidenceBlocksFor,
   fetchReviewCheckpoint,
   fetchReviewSession,
+  fetchDraftComments,
   fetchSessionTour,
   fetchSessionUpdate,
   generatedTourStops,
@@ -47,6 +49,7 @@ import {
 
 interface Selection {
   evidenceId: string;
+  side?: "LEFT" | "RIGHT";
   start: number;
   end: number;
 }
@@ -54,8 +57,10 @@ interface Selection {
 interface ComposerState {
   stop: TourStop;
   evidence: EvidenceBlock;
+  side?: "LEFT" | "RIGHT";
   startLine: number;
   endLine: number;
+  fingerprint?: string;
   body: string;
   severity: RiskLevel;
 }
@@ -222,7 +227,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   const [activeEvidenceId, setActiveEvidenceId] = useState<string | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [statuses, setStatuses] = usePersistentState<Record<string, StopStatus>>(`wingdiff:statuses:${session.metadata.head.sha}`, {});
-  const [comments, setComments] = usePersistentState<DraftComment[]>(`wingdiff:comments:${session.metadata.head.sha}`, []);
+  const [comments, setComments] = useState<DraftComment[]>([]);
   const [composer, setComposer] = useState<ComposerState | null>(null);
   const generated = tours[reviewScope];
   const scopedEvidence = reviewScope === "update" && update ? update.evidence : session.evidence;
@@ -250,15 +255,17 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       fetchSessionTour(session.id, "update", controller.signal),
       fetchSessionUpdate(session.id, controller.signal),
       fetchReviewCheckpoint(session.id, controller.signal),
+      fetchDraftComments(session.id, controller.signal),
       fetchProviders(controller.signal).then((availableProviders) => {
         setProviders(availableProviders);
         setModelSelection((current) => preferredAvailableSelection(availableProviders, current));
       }),
-    ]).then(([fullTour, updateTour, updateContext, storedCheckpoint]) => {
+    ]).then(([fullTour, updateTour, updateContext, storedCheckpoint, storedComments]) => {
       setTours({ full: fullTour, update: updateTour });
       setUpdate(updateContext?.update ?? null);
       setBaselineCheckpoint(updateContext?.baselineCheckpoint ?? null);
       setCheckpoint(storedCheckpoint);
+      setComments(storedComments);
       if (updateContext) setReviewScope("update");
     }).catch((caught) => {
       if (caught instanceof DOMException && caught.name === "AbortError") return;
@@ -332,9 +339,9 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     setError(null);
   }
 
-  function selectLine(evidenceId: string, line: number, extend: boolean) {
-    setSelection((current) => !extend || !current || current.evidenceId !== evidenceId
-      ? { evidenceId, start: line, end: line }
+  function selectLine(evidenceId: string, line: number, side: "LEFT" | "RIGHT", extend: boolean) {
+    setSelection((current) => !extend || !current || current.evidenceId !== evidenceId || current.side !== side
+      ? { evidenceId, side, start: line, end: line }
       : { ...current, end: line });
   }
 
@@ -343,24 +350,44 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     const selectedEvidence = activeStop.evidence.find((item) => item.id === selection?.evidenceId);
     const findingEvidence = activeStop.evidence.find((item) => item.id === activeStop.finding?.evidenceId);
     const evidence = selectedEvidence ?? (useFinding ? findingEvidence : activeEvidence) ?? activeEvidence;
+    const anchor = commentAnchor(evidence, selection?.evidenceId === evidence.id ? selection : null);
+    if (!anchor) {
+      setError("This evidence does not contain a line that GitHub can anchor a comment to.");
+      return;
+    }
     setComposer({
       stop: activeStop,
       evidence,
-      startLine: selection?.evidenceId === evidence.id ? Math.min(selection.start, selection.end) : evidence.startLine,
-      endLine: selection?.evidenceId === evidence.id ? Math.max(selection.start, selection.end) : evidence.endLine,
+      side: anchor.side,
+      startLine: anchor.startLine,
+      endLine: anchor.endLine,
+      fingerprint: anchor.fingerprint,
       body: useFinding ? activeStop.finding?.suggestedComment ?? "" : "",
       severity: useFinding ? activeStop.finding?.severity ?? "medium" : "low",
     });
   }
 
-  function stageComment() {
-    if (!composer?.body.trim()) return;
-    setComments((current) => [...current, {
-      id: crypto.randomUUID(), stopId: composer.stop.id, evidenceId: composer.evidence.id,
-      path: composer.evidence.path, startLine: composer.startLine, endLine: composer.endLine,
-      body: composer.body.trim(), severity: composer.severity,
-    }]);
-    setComposer(null);
+  async function stageComment() {
+    if (!composer?.body.trim() || !composer.side || !composer.fingerprint) return;
+    setError(null);
+    try {
+      const saved = await createDraftComment(session.id, {
+        stopId: composer.stop.id,
+        evidenceId: composer.evidence.id,
+        path: composer.evidence.path,
+        side: composer.side,
+        startLine: composer.startLine,
+        endLine: composer.endLine,
+        body: composer.body.trim(),
+        severity: composer.severity,
+        fingerprint: composer.fingerprint,
+      });
+      setComments((current) => [...current, saved]);
+      setComposer(null);
+      setNotice("Draft comment saved locally.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Wingdiff could not stage this comment.");
+    }
   }
 
   function markUnderstood() {
@@ -478,7 +505,7 @@ function AcquiredTourView({ activeEvidence, activeEvidenceId, activeFindingRevis
   onFindingComment: () => void;
   onFlag: () => void;
   onNavigate: (delta: number) => void;
-  onSelectLine: (evidenceId: string, line: number, extend: boolean) => void;
+  onSelectLine: (evidenceId: string, line: number, side: "LEFT" | "RIGHT", extend: boolean) => void;
   onUnderstood: () => void;
   selection: Selection | null;
   status: StopStatus;
@@ -629,10 +656,10 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
     }));
   }
 
-  function selectLine(evidenceId: string, line: number, extend: boolean) {
+  function selectLine(evidenceId: string, line: number, side: "LEFT" | "RIGHT", extend: boolean) {
     setSelection((current) => {
-      if (!extend || !current || current.evidenceId !== evidenceId) {
-        return { evidenceId, start: line, end: line };
+      if (!extend || !current || current.evidenceId !== evidenceId || current.side !== side) {
+        return { evidenceId, side, start: line, end: line };
       }
       return { ...current, end: line };
     });
@@ -923,7 +950,7 @@ function Summary({ onBegin, onReviewMode, onSelectStop, reviewMode }: { onBegin:
   );
 }
 
-function TourView({ activeEvidence, activeEvidenceId, activeIndex, comments, findingRevision, onAsk, onComment, onEvidence, onFindingComment, onFlag, onNavigate, onSelectLine, onUnderstood, reviewMode, selection, status, stop, totalStops }: { activeEvidence: EvidenceBlock; activeEvidenceId: string | null; activeIndex: number; comments: number; findingRevision?: FindingRevision; onAsk: () => void; onComment: () => void; onEvidence: (id: string) => void; onFindingComment: () => void; onFlag: () => void; onNavigate: (delta: number) => void; onSelectLine: (evidenceId: string, line: number, extend: boolean) => void; onUnderstood: () => void; reviewMode: ReviewMode; selection: Selection | null; status: StopStatus; stop: TourStop; totalStops: number }) {
+function TourView({ activeEvidence, activeEvidenceId, activeIndex, comments, findingRevision, onAsk, onComment, onEvidence, onFindingComment, onFlag, onNavigate, onSelectLine, onUnderstood, reviewMode, selection, status, stop, totalStops }: { activeEvidence: EvidenceBlock; activeEvidenceId: string | null; activeIndex: number; comments: number; findingRevision?: FindingRevision; onAsk: () => void; onComment: () => void; onEvidence: (id: string) => void; onFindingComment: () => void; onFlag: () => void; onNavigate: (delta: number) => void; onSelectLine: (evidenceId: string, line: number, side: "LEFT" | "RIGHT", extend: boolean) => void; onUnderstood: () => void; reviewMode: ReviewMode; selection: Selection | null; status: StopStatus; stop: TourStop; totalStops: number }) {
   return (
     <div className="page page--tour" key={stop.id}>
       <header className="stop-header"><div className="stop-header__topline"><div className="eyebrow">{activeIndex + 1}/{totalStops} · {reviewMode === "update" ? "changed since review" : stop.eyebrow}</div></div><h1>{stop.title}</h1><p>{stop.summary}</p><div className="stop-actions"><button className={`button button--quiet ${status === "flagged" ? "is-flagged" : ""}`} onClick={onFlag} type="button"><Icon name="flag" size={15} />{status === "flagged" ? "Flagged" : "Flag"}</button><button className="button button--quiet" onClick={onAsk} type="button"><Icon name="spark" size={15} />Ask</button><button className="button button--secondary" onClick={onComment} type="button"><Icon name="comment" size={15} />Comment</button>{comments > 0 && <span className="draft-count">{comments} draft</span>}</div></header>
@@ -994,6 +1021,7 @@ function ModelPicker({ onClose, onSelection, providers, selection }: { onClose: 
 function CommentComposer({ composer, headSha = pullRequest.headSha, onCancel, onChange, onSeverity, onStage }: { composer: ComposerState; headSha?: string; onCancel: () => void; onChange: (value: string) => void; onSeverity: (value: RiskLevel) => void; onStage: () => void }) {
   const commentSelection: Selection = {
     evidenceId: composer.evidence.id,
+    side: composer.side,
     start: composer.startLine,
     end: composer.endLine,
   };
@@ -1002,7 +1030,7 @@ function CommentComposer({ composer, headSha = pullRequest.headSha, onCancel, on
     <header><div><div className="eyebrow">Draft review comment</div><h2>{fileName(composer.evidence.path)}:{composer.startLine}{composer.endLine !== composer.startLine ? `–${composer.endLine}` : ""}</h2></div><button aria-label="Close comment composer" className="icon-button" onClick={onCancel} type="button"><Icon name="x" size={17} /></button></header>
     <div className="comment-workbench">
       <section className="comment-code"><div className="section-label"><span>Code context</span><small>Selected lines stay highlighted</small></div><CodeDiff evidence={composer.evidence} minimal selection={commentSelection} /></section>
-      <section className="comment-editor"><div className="comment-anchor"><Icon name="code" size={14} /><span>{composer.evidence.path}</span><code>{headSha}</code></div><label htmlFor="review-comment">Comment</label><textarea autoFocus id="review-comment" onChange={(event) => onChange(event.target.value)} placeholder="What should the author know?" rows={9} value={composer.body} /><div className="comment-severity"><span>Severity</span>{(["low", "medium", "high"] as RiskLevel[]).map((level) => <button className={composer.severity === level ? "is-active" : ""} key={level} onClick={() => onSeverity(level)} type="button"><i className={`severity-dot severity-dot--${level}`} />{level}</button>)}</div><footer><button className="button button--quiet" onClick={onCancel} type="button">Cancel</button><button className="button button--primary" disabled={!composer.body.trim()} onClick={onStage} type="button">Add to review <Icon name="arrow-right" size={15} /></button></footer></section>
+      <section className="comment-editor"><div className="comment-anchor"><Icon name="code" size={14} /><span>{composer.evidence.path}:{composer.startLine}{composer.endLine !== composer.startLine ? `–${composer.endLine}` : ""}{composer.side ? ` · ${composer.side.toLowerCase()}` : ""}</span><code>{headSha}</code></div><label htmlFor="review-comment">Comment</label><textarea autoFocus id="review-comment" onChange={(event) => onChange(event.target.value)} placeholder="What should the author know?" rows={9} value={composer.body} /><div className="comment-severity"><span>Severity</span>{(["low", "medium", "high"] as RiskLevel[]).map((level) => <button className={composer.severity === level ? "is-active" : ""} key={level} onClick={() => onSeverity(level)} type="button"><i className={`severity-dot severity-dot--${level}`} />{level}</button>)}</div><footer><button className="button button--quiet" onClick={onCancel} type="button">Cancel</button><button className="button button--primary" disabled={!composer.body.trim()} onClick={onStage} type="button">Add to review <Icon name="arrow-right" size={15} /></button></footer></section>
     </div>
   </section></div>;
 }
@@ -1039,6 +1067,24 @@ function usePersistentState<T>(key: string, fallback: T) {
 function shortTitle(title: string) { return title.replace(/^The /, "").replace(/^Every /, "").replace(/^Delay /, ""); }
 function fileName(path: string) { return path.split("/").at(-1) ?? path; }
 function directoryName(path: string) { const pieces = path.split("/"); pieces.pop(); return pieces.length ? `${pieces.join("/")}/` : ""; }
+function commentAnchor(evidence: EvidenceBlock, selection: Selection | null) {
+  if (selection?.side) {
+    const startLine = Math.min(selection.start, selection.end);
+    const endLine = Math.max(selection.start, selection.end);
+    const line = evidence.lines.find((candidate) => (
+      selection.side === "RIGHT" ? candidate.newLine : candidate.oldLine
+    ) === endLine);
+    if (line?.fingerprint) return { side: selection.side, startLine, endLine, fingerprint: line.fingerprint };
+  }
+  const line = evidence.lines.find((candidate) => candidate.emphasized && candidate.fingerprint && candidate.newLine !== undefined)
+    ?? evidence.lines.find((candidate) => candidate.kind === "addition" && candidate.fingerprint)
+    ?? evidence.lines.find((candidate) => candidate.kind === "context" && candidate.fingerprint)
+    ?? evidence.lines.find((candidate) => candidate.kind === "deletion" && candidate.fingerprint);
+  if (!line?.fingerprint) return null;
+  const side = line.kind === "deletion" ? "LEFT" as const : "RIGHT" as const;
+  const lineNumber = side === "RIGHT" ? line.newLine : line.oldLine;
+  return lineNumber === undefined ? null : { side, startLine: lineNumber, endLine: lineNumber, fingerprint: line.fingerprint };
+}
 function continuityLabel(state: GeneratedSessionTour["tour"]["findingRevisions"][number]["state"]) {
   if (state === "still-applies") return "still applies";
   if (state === "appears-addressed") return "appears addressed";
