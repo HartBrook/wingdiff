@@ -47,6 +47,12 @@ Wingdiff reads metadata through `gh`, fetches missing objects into private `refs
 
 From the real-PR Summary, choose a configured model and select **Generate guided review**. The model organizes the validated diff into semantic stops, ranks concrete findings by severity, and references opaque evidence anchors. Wingdiff rejects the result unless every changed file is covered and every claim or finding resolves to an exact known anchor. Generated tours are pinned to the acquired head SHA and can be resumed locally.
 
+### Review author updates
+
+After visiting every stop, select **Complete review** to create an explicit checkpoint at the current head SHA. **Check for updates** then reacquires the pull request without checking it out or running its code. If the author pushed a new head, Wingdiff opens a new local session in **Since your review** mode using the exact reviewed-head → current-head diff.
+
+The **Entire PR** scope remains available as an independent backstop. Update and full-PR tours are generated and persisted separately, and every acquired revision is retained under a private `refs/wingdiff/pull/.../revisions/...` reference so a later force-push does not erase the comparison baseline.
+
 ## Portable, local-first AI
 
 Wingdiff has no hosted service dependency. By default, its loopback server delegates model work to Codex CLI, which keeps authentication in the supported CLI credential store instead of asking Wingdiff to handle a key.
