@@ -34,6 +34,7 @@ import {
   deleteDraftComment,
   evidenceBlocksFor,
   fetchReviewCheckpoint,
+  fetchReviewProgress,
   fetchReviewSession,
   fetchDraftComments,
   fetchInvestigationEntries,
@@ -47,11 +48,13 @@ import {
   publishReview,
   revisionStopIndex,
   saveReviewDraft,
+  saveReviewProgress,
   updateInvestigationEntry,
   type AcquiredReviewSession,
   type FindingCheckpoint,
   type GeneratedSessionTour,
   type ReviewCheckpoint,
+  type ReviewProgressSnapshot,
   type StoredReviewSubmission,
   type StoredReviewUpdate,
 } from "./session";
@@ -221,7 +224,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   const [reviewScope, setReviewScope] = useState<AcquiredScope>("full");
   const [update, setUpdate] = useState<StoredReviewUpdate | null>(null);
   const [baselineCheckpoint, setBaselineCheckpoint] = useState<ReviewCheckpoint | null>(null);
-  const [checkpoint, setCheckpoint] = useState<ReviewCheckpoint | null>(null);
+  const [checkpoints, setCheckpoints] = useState<Record<AcquiredScope, ReviewCheckpoint | null>>({ full: null, update: null });
   const [tourLoading, setTourLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [completing, setCompleting] = useState(false);
@@ -235,7 +238,11 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   const [activeIndex, setActiveIndex] = useState(0);
   const [activeEvidenceId, setActiveEvidenceId] = useState<string | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
-  const [statuses, setStatuses] = usePersistentState<Record<string, StopStatus>>(`wingdiff:statuses:${session.metadata.head.sha}`, {});
+  const [progress, setProgress] = useState<ReviewProgressSnapshot>({
+    activeScope: null,
+    activeStopIds: { full: null, update: null },
+    scopes: { full: {}, update: {} },
+  });
   const [comments, setComments] = useState<DraftComment[]>([]);
   const [notebook, setNotebook] = useState<NotebookEntry[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -249,6 +256,8 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   const [publishingReview, setPublishingReview] = useState(false);
   const [submission, setSubmission] = useState<StoredReviewSubmission | null>(null);
   const generated = tours[reviewScope];
+  const checkpoint = checkpoints[reviewScope];
+  const statuses = progress.scopes[reviewScope];
   const scopedEvidence = reviewScope === "update" && update ? update.evidence : session.evidence;
   const blocks = useMemo(() => evidenceBlocksFor(scopedEvidence), [scopedEvidence]);
   const stops = useMemo(() => generated ? generatedTourStops(session, generated, scopedEvidence) : [], [generated, scopedEvidence, session]);
@@ -263,6 +272,14 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     const prior = baselineCheckpoint?.findingRevisions.find((finding) => finding.findingId === revision.findingId);
     return prior && revisionStopIndex(generated, revision.anchorIds) === activeIndex ? [{ prior, revision }] : [];
   }) ?? [];
+  const inheritedStopIds = useMemo(() => {
+    if (reviewScope !== "full" || !update || !baselineCheckpoint) return new Set<string>();
+    const changedPaths = new Set(update.evidence.files.flatMap((file) => [file.path, ...(file.oldPath ? [file.oldPath] : [])]));
+    return new Set(stops.filter((stop) => {
+      const prior = baselineCheckpoint.coverage[`full-${stop.id}`] ?? baselineCheckpoint.coverage[stop.id];
+      return prior === "understood" && stop.evidence.every((evidence) => !changedPaths.has(evidence.path));
+    }).map((stop) => stop.id));
+  }, [baselineCheckpoint, reviewScope, stops, update]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -274,7 +291,9 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       fetchSessionTour(session.id, "full", controller.signal),
       fetchSessionTour(session.id, "update", controller.signal),
       fetchSessionUpdate(session.id, controller.signal),
-      fetchReviewCheckpoint(session.id, controller.signal),
+      fetchReviewCheckpoint(session.id, "full", controller.signal),
+      fetchReviewCheckpoint(session.id, "update", controller.signal),
+      fetchReviewProgress(session.id, controller.signal),
       fetchDraftComments(session.id, controller.signal),
       fetchInvestigationEntries(session.id, controller.signal),
       fetchReviewDraft(session.id, controller.signal),
@@ -283,17 +302,25 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
         setProviders(availableProviders);
         setModelSelection((current) => preferredAvailableSelection(availableProviders, current));
       }),
-    ]).then(([fullTour, updateTour, updateContext, storedCheckpoint, storedComments, storedNotebook, storedReviewDraft, storedSubmission]) => {
+    ]).then(([fullTour, updateTour, updateContext, fullCheckpoint, updateCheckpoint, storedProgress, storedComments, storedNotebook, storedReviewDraft, storedSubmission]) => {
       setTours({ full: fullTour, update: updateTour });
       setUpdate(updateContext?.update ?? null);
       setBaselineCheckpoint(updateContext?.baselineCheckpoint ?? null);
-      setCheckpoint(storedCheckpoint);
+      setCheckpoints({ full: fullCheckpoint, update: updateCheckpoint });
+      setProgress(storedProgress);
       setComments(storedComments);
       setNotebook(storedNotebook);
       setReviewSummary(storedReviewDraft?.body ?? "");
       setDisposition(storedReviewDraft?.event ?? "COMMENT");
       setSubmission(storedSubmission);
-      if (updateContext) setReviewScope("update");
+      const restoredScope = storedProgress.activeScope === "update" && !updateContext
+        ? "full"
+        : storedProgress.activeScope ?? (updateContext ? "update" : "full");
+      setReviewScope(restoredScope);
+      const restoredTour = restoredScope === "update" ? updateTour : fullTour;
+      const restoredStopId = storedProgress.activeStopIds[restoredScope];
+      const restoredIndex = restoredTour?.tour.stops.findIndex((stop) => stop.id === restoredStopId) ?? -1;
+      setActiveIndex(restoredIndex >= 0 ? restoredIndex : 0);
     }).catch((caught) => {
       if (caught instanceof DOMException && caught.name === "AbortError") return;
       setError(caught instanceof Error ? caught.message : "Wingdiff could not prepare this review.");
@@ -317,6 +344,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       const result = await generateSessionTour(session.id, modelSelection, reviewScope);
       setTours((current) => ({ ...current, [reviewScope]: result }));
       setActiveIndex(0);
+      if (result.tour.stops[0]) void persistProgress(reviewScope, result.tour.stops[0].id);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Wingdiff could not generate this guided tour.");
     } finally {
@@ -329,13 +357,16 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     setCompleting(true);
     setError(null);
     try {
-      const coverage = Object.fromEntries(stops.map((stop) => [
-        `${reviewScope}-${stop.id}`,
-        statuses[stop.id] === "flagged" ? "flagged" : "understood",
-      ]));
+      const coverage = {
+        ...(reviewScope === "update" ? baselineCheckpoint?.coverage ?? {} : {}),
+        ...Object.fromEntries(stops.map((stop) => [
+          `${reviewScope}-${stop.id}`,
+          statuses[stop.id] === "flagged" ? "flagged" : "understood",
+        ])),
+      };
       const findingRevisions = checkpointFindings(generated, stops, baselineCheckpoint);
       const saved = await completeReviewCheckpoint(session.id, reviewScope, coverage, findingRevisions);
-      setCheckpoint(saved);
+      setCheckpoints((current) => ({ ...current, [reviewScope]: saved }));
       setNotice(`Review checkpoint saved at ${saved.reviewedHeadSha.slice(0, 7)}.`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Wingdiff could not complete this review.");
@@ -361,9 +392,47 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
 
   function selectScope(scope: AcquiredScope) {
     setReviewScope(scope);
-    setActiveIndex(0);
+    const scopeStops = tours[scope]?.tour.stops ?? [];
+    const restoredIndex = scopeStops.findIndex((stop) => stop.id === progress.activeStopIds[scope]);
+    const nextIndex = restoredIndex >= 0 ? restoredIndex : 0;
+    setActiveIndex(nextIndex);
     setView("summary");
     setError(null);
+    if (scopeStops[nextIndex]) void persistProgress(scope, scopeStops[nextIndex].id);
+  }
+
+  async function persistProgress(
+    scope: AcquiredScope,
+    activeStopId: string,
+    change?: { stopId: string; status: StopStatus },
+  ) {
+    try {
+      await saveReviewProgress(session.id, scope, activeStopId, change);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Wingdiff could not save review progress.");
+    }
+  }
+
+  function selectStop(index: number) {
+    const next = stops[index];
+    if (!next) return;
+    setActiveIndex(index);
+    void persistProgress(reviewScope, next.id);
+  }
+
+  function navigateStop(delta: number) {
+    const nextIndex = Math.max(0, Math.min(stops.length - 1, activeIndex + delta));
+    selectStop(nextIndex);
+  }
+
+  function setStopStatus(stopId: string, status: StopStatus, activeStopId = stopId) {
+    setProgress((current) => ({
+      ...current,
+      activeScope: reviewScope,
+      activeStopIds: { ...current.activeStopIds, [reviewScope]: activeStopId },
+      scopes: { ...current.scopes, [reviewScope]: { ...current.scopes[reviewScope], [stopId]: status } },
+    }));
+    void persistProgress(reviewScope, activeStopId, { stopId, status });
   }
 
   function selectLine(evidenceId: string, line: number, side: "LEFT" | "RIGHT", extend: boolean) {
@@ -535,20 +604,26 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
 
   function markUnderstood() {
     if (!activeStop) return;
-    setStatuses((current) => ({ ...current, [activeStop.id]: "understood" }));
-    if (activeIndex < stops.length - 1) setActiveIndex((current) => current + 1);
+    const next = stops[activeIndex + 1];
+    setStopStatus(activeStop.id, "understood", next?.id ?? activeStop.id);
+    if (next) setActiveIndex(activeIndex + 1);
     else setView("summary");
+  }
+
+  function toggleFlag() {
+    if (!activeStop) return;
+    setStopStatus(activeStop.id, statuses[activeStop.id] === "flagged" ? "unseen" : "flagged");
   }
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       const target = event.target as HTMLElement;
       if (target.matches("input, textarea, [contenteditable='true']")) return;
-      if (event.key === "j" && view === "tour") setActiveIndex((current) => Math.min(stops.length - 1, current + 1));
-      if (event.key === "k" && view === "tour") setActiveIndex((current) => Math.max(0, current - 1));
+      if (event.key === "j" && view === "tour") navigateStop(1);
+      if (event.key === "k" && view === "tour") navigateStop(-1);
       if (event.key === "a" && view === "tour") setDrawerOpen(true);
       if (event.key === "c" && view === "tour") openComment();
-      if (event.key === "f" && view === "tour" && activeStop) setStatuses((current) => ({ ...current, [activeStop.id]: current[activeStop.id] === "flagged" ? "unseen" : "flagged" }));
+      if (event.key === "f" && view === "tour") toggleFlag();
       if (event.key === "d") setView((current) => current === "browse" ? (generated ? "tour" : "summary") : "browse");
       if (event.key === "r") setView("review");
       if (event.key === "Escape") {
@@ -576,10 +651,10 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       <button aria-label={`Use ${theme === "dark" ? "light" : "dark"} theme`} className="icon-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} type="button"><Icon name={theme === "dark" ? "sun" : "moon"} size={17} /></button>
     </header>
     {view === "tour" && generated && activeStop && activeEvidence ? <div className={`workspace acquired-workspace ${mobileRouteOpen ? "is-mobile-open" : ""}`}>
-      <AcquiredTourRail activeIndex={activeIndex} onBrowse={() => { setView("browse"); setMobileRouteOpen(false); }} onReview={() => { setView("review"); setMobileRouteOpen(false); }} onSelect={(index) => { setActiveIndex(index); setMobileRouteOpen(false); }} onSummary={() => { setView("summary"); setMobileRouteOpen(false); }} statuses={statuses} stops={stops} />
-      <main className="main-canvas"><AcquiredTourView activeEvidence={activeEvidence} activeEvidenceId={activeEvidenceId} activeFindingRevisions={activeFindingRevisions} activeIndex={activeIndex} comments={comments.filter((comment) => comment.stopId === activeStop.id).length} headSha={metadata.head.sha} onAsk={(prompt) => { setDrawerOpen(true); if (prompt) void askQuestion(prompt); }} onComment={() => openComment(false)} onEvidence={setActiveEvidenceId} onFindingComment={() => openComment(true)} onFlag={() => setStatuses((current) => ({ ...current, [activeStop.id]: current[activeStop.id] === "flagged" ? "unseen" : "flagged" }))} onNavigate={(delta) => setActiveIndex((current) => Math.max(0, Math.min(stops.length - 1, current + delta)))} onSelectLine={selectLine} onUnderstood={markUnderstood} selection={selection} status={statuses[activeStop.id] ?? "unseen"} stop={activeStop} totalStops={stops.length} /></main>
+      <AcquiredTourRail activeIndex={activeIndex} inheritedStopIds={inheritedStopIds} onBrowse={() => { setView("browse"); setMobileRouteOpen(false); }} onReview={() => { setView("review"); setMobileRouteOpen(false); }} onSelect={(index) => { selectStop(index); setMobileRouteOpen(false); }} onSummary={() => { setView("summary"); setMobileRouteOpen(false); }} statuses={statuses} stops={stops} />
+      <main className="main-canvas"><AcquiredTourView activeEvidence={activeEvidence} activeEvidenceId={activeEvidenceId} activeFindingRevisions={activeFindingRevisions} activeIndex={activeIndex} comments={comments.filter((comment) => comment.stopId === activeStop.id).length} headSha={metadata.head.sha} onAsk={(prompt) => { setDrawerOpen(true); if (prompt) void askQuestion(prompt); }} onComment={() => openComment(false)} onEvidence={setActiveEvidenceId} onFindingComment={() => openComment(true)} onFlag={toggleFlag} onNavigate={navigateStop} onSelectLine={selectLine} onUnderstood={markUnderstood} selection={selection} status={statuses[activeStop.id] ?? "unseen"} stop={activeStop} totalStops={stops.length} /></main>
     </div> : <main className="main-canvas acquired-canvas">
-      {view === "summary" ? <AcquiredSummary activeModel={activeModelLabel} baselineCheckpoint={baselineCheckpoint} checkpoint={checkpoint} completing={completing} error={error} generated={generated} generating={generating} modelReady={Boolean(activeProvider?.configured)} notice={notice} onBegin={() => { setActiveIndex(0); setView("tour"); }} onBrowse={() => setView("browse")} onCheckUpdates={() => void checkForUpdates()} onComplete={() => void completeReview()} onGenerate={() => void generateTour()} onScope={selectScope} onSelectStop={(index) => { setActiveIndex(index); setView("tour"); }} refreshing={refreshing} reviewScope={reviewScope} scopedEvidence={scopedEvidence} session={session} statuses={statuses} stops={stops} tourLoading={tourLoading} update={update} /> : view === "browse" ? <AcquiredBrowse blocks={blocks} onSummary={() => setView("summary")} scope={reviewScope} session={session} /> : <AcquiredReviewDesk comments={comments} disposition={disposition} error={error} headSha={metadata.head.sha} onBack={() => setView(generated ? "tour" : "summary")} onDisposition={(event) => { setDisposition(event); void persistReviewDraft(reviewSummary, event); }} onPublish={() => void publishReviewToGitHub()} onRemoveComment={(id) => void removeComment(id)} onSave={() => void persistReviewDraft()} onSummary={setReviewSummary} publishing={publishingReview} saving={savingReview} statuses={statuses} stops={stops} submission={submission} summary={reviewSummary} />}
+      {view === "summary" ? <AcquiredSummary activeModel={activeModelLabel} baselineCheckpoint={baselineCheckpoint} checkpoint={checkpoint} completing={completing} error={error} generated={generated} generating={generating} modelReady={Boolean(activeProvider?.configured)} notice={notice} onBegin={() => { selectStop(activeIndex); setView("tour"); }} onBrowse={() => setView("browse")} onCheckUpdates={() => void checkForUpdates()} onComplete={() => void completeReview()} onGenerate={() => void generateTour()} onScope={selectScope} onSelectStop={(index) => { selectStop(index); setView("tour"); }} refreshing={refreshing} reviewScope={reviewScope} scopedEvidence={scopedEvidence} session={session} statuses={statuses} stops={stops} tourLoading={tourLoading} update={update} /> : view === "browse" ? <AcquiredBrowse blocks={blocks} onSummary={() => setView("summary")} scope={reviewScope} session={session} /> : <AcquiredReviewDesk comments={comments} disposition={disposition} error={error} headSha={metadata.head.sha} onBack={() => setView(generated ? "tour" : "summary")} onDisposition={(event) => { setDisposition(event); void persistReviewDraft(reviewSummary, event); }} onPublish={() => void publishReviewToGitHub()} onRemoveComment={(id) => void removeComment(id)} onSave={() => void persistReviewDraft()} onSummary={setReviewSummary} publishing={publishingReview} saving={savingReview} statuses={statuses} stops={stops} submission={submission} summary={reviewSummary} />}
     </main>}
     {modelPickerOpen && <ModelPicker onClose={() => setModelPickerOpen(false)} onSelection={setModelSelection} providers={providers} selection={modelSelection} />}
     {drawerOpen && activeStop && activeEvidence && <InvestigationDrawer answering={answering} entries={stopNotebook} evidence={activeEvidence} headSha={metadata.head.sha} modelName={activeModelLabel} onAsk={askQuestion} onClose={closeInvestigation} onQuestion={setQuestion} onUseAnswer={useInvestigationAsComment} providerConfigured={Boolean(activeProvider?.configured)} question={question} stop={activeStop} />}
@@ -654,10 +729,10 @@ function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completi
   </div>;
 }
 
-function AcquiredTourRail({ activeIndex, onBrowse, onReview, onSelect, onSummary, statuses, stops }: { activeIndex: number; onBrowse: () => void; onReview: () => void; onSelect: (index: number) => void; onSummary: () => void; statuses: Record<string, StopStatus>; stops: TourStop[] }) {
+function AcquiredTourRail({ activeIndex, inheritedStopIds, onBrowse, onReview, onSelect, onSummary, statuses, stops }: { activeIndex: number; inheritedStopIds: Set<string>; onBrowse: () => void; onReview: () => void; onSelect: (index: number) => void; onSummary: () => void; statuses: Record<string, StopStatus>; stops: TourStop[] }) {
   const completed = stops.filter((stop) => statuses[stop.id] !== undefined && statuses[stop.id] !== "unseen").length;
   const progress = Math.round((completed / stops.length) * 100);
-  return <aside className="tour-rail"><div className="tour-rail__heading"><span>Review route</span><span>{stops.reduce((total, stop) => total + stop.minutes, 0)} min</span></div><nav aria-label="Review route" className="route-list"><button className="route-item route-item--brief" onClick={onSummary} type="button"><span className="route-item__marker"><Icon name="layers" size={14} /></span><span><strong>Summary</strong><small>Findings and intent</small></span></button><div className="route-list__line" />{stops.map((stop, index) => { const status = statuses[stop.id] ?? "unseen"; return <button className={`route-item ${activeIndex === index ? "is-active" : ""} is-${status}`} key={stop.id} onClick={() => onSelect(index)} type="button"><span className="route-item__marker">{status === "understood" ? <Icon name="check" size={13} /> : status === "flagged" ? <Icon name="flag" size={12} /> : index + 1}</span><span><strong>{stop.eyebrow}</strong><small>{shortTitle(stop.title)}</small></span>{stop.finding && <i className={`severity-dot severity-dot--${stop.finding.severity}`} />}</button>; })}<div className="route-list__line route-list__line--last" /><button className="route-item" onClick={onBrowse} type="button"><span className="route-item__marker"><Icon name="code" size={14} /></span><span><strong>Changed files</strong><small>Browse full diff</small></span></button><button className="route-item route-item--review" onClick={onReview} type="button"><span className="route-item__marker"><Icon name="shield" size={14} /></span><span><strong>Review desk</strong><small>Prepare your decision</small></span></button></nav><div className="rail-progress"><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><span>{progress}%</span></div><div><strong>{completed} of {stops.length}</strong><span>stops reviewed</span></div></div></aside>;
+  return <aside className="tour-rail"><div className="tour-rail__heading"><span>Review route</span><span>{stops.reduce((total, stop) => total + stop.minutes, 0)} min</span></div><nav aria-label="Review route" className="route-list"><button className="route-item route-item--brief" onClick={onSummary} type="button"><span className="route-item__marker"><Icon name="layers" size={14} /></span><span><strong>Summary</strong><small>Findings and intent</small></span></button><div className="route-list__line" />{stops.map((stop, index) => { const status = statuses[stop.id] ?? "unseen"; return <button className={`route-item ${activeIndex === index ? "is-active" : ""} is-${status}`} key={stop.id} onClick={() => onSelect(index)} type="button"><span className="route-item__marker">{status === "understood" ? <Icon name="check" size={13} /> : status === "flagged" ? <Icon name="flag" size={12} /> : index + 1}</span><span><strong>{stop.eyebrow}</strong><small>{shortTitle(stop.title)}</small></span>{stop.finding ? <i className={`severity-dot severity-dot--${stop.finding.severity}`} /> : status === "unseen" && inheritedStopIds.has(stop.id) ? <span className="coverage-mark">reviewed unchanged</span> : null}</button>; })}<div className="route-list__line route-list__line--last" /><button className="route-item" onClick={onBrowse} type="button"><span className="route-item__marker"><Icon name="code" size={14} /></span><span><strong>Changed files</strong><small>Browse full diff</small></span></button><button className="route-item route-item--review" onClick={onReview} type="button"><span className="route-item__marker"><Icon name="shield" size={14} /></span><span><strong>Review desk</strong><small>Prepare your decision</small></span></button></nav><div className="rail-progress"><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><span>{progress}%</span></div><div><strong>{completed} of {stops.length}</strong><span>stops reviewed</span></div></div></aside>;
 }
 
 function AcquiredTourView({ activeEvidence, activeEvidenceId, activeFindingRevisions, activeIndex, comments, headSha, onAsk, onComment, onEvidence, onFindingComment, onFlag, onNavigate, onSelectLine, onUnderstood, selection, status, stop, totalStops }: {

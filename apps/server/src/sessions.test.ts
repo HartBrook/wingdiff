@@ -61,6 +61,24 @@ describe("local review sessions", () => {
     store.close();
   });
 
+  it("keeps full and update checkpoints for the same head", () => {
+    const store = new SessionStore(":memory:");
+    const session = store.upsertReadySession(target, metadata(), evidence());
+    store.saveCheckpoint(session.id, {
+      reviewedHeadSha: session.metadata.head.sha, completedAt: "2026-09-29T12:10:00Z", scope: "full",
+      coverage: { "full-counter": "understood" }, findingRevisions: [],
+    });
+    store.saveCheckpoint(session.id, {
+      reviewedHeadSha: session.metadata.head.sha, completedAt: "2026-09-29T12:11:00Z", scope: "update",
+      coverage: { "update-counter": "flagged" }, findingRevisions: [],
+    });
+
+    expect(store.latestCheckpoint(session.id, "full")?.coverage).toEqual({ "full-counter": "understood" });
+    expect(store.latestCheckpoint(session.id, "update")?.coverage).toEqual({ "update-counter": "flagged" });
+    expect(store.latestCheckpoint(session.id)?.scope).toBe("update");
+    store.close();
+  });
+
   it("stores one generated tour for the pinned session revision", () => {
     const times = [new Date("2026-09-29T12:00:00Z"), new Date("2026-09-29T12:02:00Z")];
     const store = new SessionStore(":memory:", () => times.shift()!);
@@ -94,7 +112,7 @@ describe("local review sessions", () => {
       selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
       tour: { summary: "The counter change is small and focused." },
     });
-    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(9);
+    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(11);
     store.close();
   });
 
@@ -147,6 +165,22 @@ describe("local review sessions", () => {
     expect(store.updateInvestigationEntry(session.id, entry.id, "The increment is atomic.", "complete"))
       .toMatchObject({ answer: "The increment is atomic.", status: "complete" });
     expect(store.listInvestigationEntries(session.id)).toHaveLength(1);
+    store.close();
+  });
+
+  it("persists scope-aware review progress and position", () => {
+    const store = new SessionStore(":memory:");
+    const session = store.upsertReadySession(target, metadata(), evidence());
+
+    store.saveReviewProgress(session.id, "full", "counter", { stopId: "counter", status: "understood" });
+    store.saveReviewProgress(session.id, "update", "counter-update", { stopId: "counter-update", status: "flagged" });
+    store.saveReviewProgress(session.id, "full", "tests");
+
+    expect(store.getReviewProgress(session.id)).toEqual({
+      activeScope: "full",
+      activeStopIds: { full: "tests", update: "counter-update" },
+      scopes: { full: { counter: "understood" }, update: { "counter-update": "flagged" } },
+    });
     store.close();
   });
 

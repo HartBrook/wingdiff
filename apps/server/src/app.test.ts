@@ -178,6 +178,30 @@ describe("generated tour API", () => {
     });
     expect(invalid.status).toBe(400);
   });
+
+  it("persists scope-aware review progress", async () => {
+    store = new SessionStore(":memory:");
+    const session = store.upsertReadySession(target, metadata, evidence);
+    const app = createApp({}, { sessionStore: store, providers: new Map() });
+    server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => server!.once("listening", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const url = `http://127.0.0.1:${port}/api/sessions/${session.id}/progress`;
+
+    const saved = await fetch(url, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        scope: "update", activeStopId: "atomic-counter",
+        change: { stopId: "atomic-counter", status: "understood" },
+      }),
+    });
+    expect(saved.status).toBe(200);
+    expect(await (await fetch(url)).json()).toEqual({ progress: {
+      activeScope: "update",
+      activeStopIds: { full: null, update: "atomic-counter" },
+      scopes: { full: {}, update: { "atomic-counter": "understood" } },
+    } });
+  });
 });
 
 const target = parsePullRequestTarget("https://github.com/openai/codex/pull/42");

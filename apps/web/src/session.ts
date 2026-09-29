@@ -1,4 +1,4 @@
-import type { AnswerStatus, Confidence, EvidenceBlock, ModelSelection, ProviderId, TourStop } from "./types";
+import type { AnswerStatus, Confidence, EvidenceBlock, ModelSelection, ProviderId, StopStatus, TourStop } from "./types";
 import type { PullRequestTarget } from "./launcher";
 
 export interface SessionEvidenceLine {
@@ -189,6 +189,12 @@ export interface StoredInvestigationEntry {
   updatedAt: string;
 }
 
+export interface ReviewProgressSnapshot {
+  activeScope: "full" | "update" | null;
+  activeStopIds: Record<"full" | "update", string | null>;
+  scopes: Record<"full" | "update", Record<string, StopStatus>>;
+}
+
 export interface ReviewRefreshResult {
   status: "current" | "updated";
   session: AcquiredReviewSession;
@@ -228,11 +234,34 @@ export async function generateSessionTour(
   return body.generated;
 }
 
-export async function fetchReviewCheckpoint(id: string, signal?: AbortSignal): Promise<ReviewCheckpoint | null> {
-  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/checkpoint`, { signal });
+export async function fetchReviewCheckpoint(id: string, scope: "full" | "update", signal?: AbortSignal): Promise<ReviewCheckpoint | null> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/checkpoint?scope=${scope}`, { signal });
   const body = await response.json() as { checkpoint?: ReviewCheckpoint | null; error?: string };
   if (!response.ok) throw new Error(body.error ?? "Wingdiff could not load this review checkpoint.");
   return body.checkpoint ?? null;
+}
+
+export async function fetchReviewProgress(id: string, signal?: AbortSignal): Promise<ReviewProgressSnapshot> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/progress`, { signal });
+  const body = await response.json() as { progress?: ReviewProgressSnapshot; error?: string };
+  if (!response.ok || !body.progress) throw new Error(body.error ?? "Wingdiff could not load review progress.");
+  return body.progress;
+}
+
+export async function saveReviewProgress(
+  id: string,
+  scope: "full" | "update",
+  activeStopId: string,
+  change?: { stopId: string; status: StopStatus },
+): Promise<ReviewProgressSnapshot> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/progress`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scope, activeStopId, change }),
+  });
+  const body = await response.json() as { progress?: ReviewProgressSnapshot; error?: string };
+  if (!response.ok || !body.progress) throw new Error(body.error ?? "Wingdiff could not save review progress.");
+  return body.progress;
 }
 
 export async function completeReviewCheckpoint(

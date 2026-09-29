@@ -6,7 +6,7 @@ import { inspectLocalTarget } from "./preflight.js";
 import { createProviders, publicProviders, validateSelection } from "./providers/index.js";
 import type { ProviderId, TextProvider } from "./providers/types.js";
 import { SessionStore } from "./sessions.js";
-import type { FindingCheckpoint, InvestigationEntry, ReviewDraft, TourScope } from "./sessions.js";
+import type { FindingCheckpoint, InvestigationEntry, ReviewDraft, ReviewProgressStatus, TourScope } from "./sessions.js";
 import { parsePullRequestTarget } from "./targets.js";
 import { generateSessionTour, getSessionTour } from "./tourService.js";
 import { validateInvestigationContext } from "./validation.js";
@@ -86,7 +86,12 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
       response.status(404).json({ error: "Review session not found." });
       return;
     }
-    response.json({ checkpoint: sessionStore.latestCheckpoint(session.id) ?? null });
+    try {
+      const scope = request.query.scope === undefined ? undefined : tourScope(request.query.scope);
+      response.json({ checkpoint: sessionStore.latestCheckpoint(session.id, scope) ?? null });
+    } catch (error) {
+      response.status(400).json({ error: error instanceof Error ? error.message : "Invalid checkpoint scope." });
+    }
   });
 
   app.post("/api/sessions/:id/checkpoint", (request, response) => {
@@ -110,6 +115,30 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
       response.status(201).json({ checkpoint });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Wingdiff could not save this review checkpoint.";
+      response.status(400).json({ error: message });
+    }
+  });
+
+  app.get("/api/sessions/:id/progress", (request, response) => {
+    const session = sessionStore.getSession(request.params.id);
+    if (!session) {
+      response.status(404).json({ error: "Review session not found." });
+      return;
+    }
+    response.json({ progress: sessionStore.getReviewProgress(session.id) });
+  });
+
+  app.put("/api/sessions/:id/progress", (request, response) => {
+    try {
+      const session = sessionStore.getSession(request.params.id);
+      if (!session) {
+        response.status(404).json({ error: "Review session not found." });
+        return;
+      }
+      const input = reviewProgressInput(request.body);
+      response.json({ progress: sessionStore.saveReviewProgress(session.id, input.scope, input.activeStopId, input.change) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Wingdiff could not save review progress.";
       response.status(400).json({ error: message });
     }
   });
@@ -478,6 +507,28 @@ function reviewCoverage(input: unknown): Record<string, string> {
   }
   if (Object.keys(coverage).length === 0) throw new Error("Review coverage cannot be empty.");
   return coverage;
+}
+
+function reviewProgressInput(input: unknown): {
+  scope: TourScope;
+  activeStopId: string;
+  change?: { stopId: string; status: ReviewProgressStatus };
+} {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Review progress is required.");
+  const value = input as Record<string, unknown>;
+  const scope = tourScope(value.scope);
+  const activeStopId = requiredText(value.activeStopId, "Active review stop", 128);
+  if (value.change === undefined) return { scope, activeStopId };
+  if (!value.change || typeof value.change !== "object" || Array.isArray(value.change)) {
+    throw new Error("Review progress change is invalid.");
+  }
+  const change = value.change as Record<string, unknown>;
+  const stopId = requiredText(change.stopId, "Review stop", 128);
+  const status = change.status;
+  if (status !== "unseen" && status !== "understood" && status !== "flagged" && status !== "skipped") {
+    throw new Error("Review progress status is invalid.");
+  }
+  return { scope, activeStopId, change: { stopId, status } };
 }
 
 function tourScope(input: unknown): TourScope {

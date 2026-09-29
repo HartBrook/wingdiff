@@ -11,6 +11,7 @@ import { parsePullRequestTarget, type PullRequestTarget } from "./targets.js";
 
 export type SessionStatus = "acquiring" | "ready" | "failed";
 export type TourScope = "full" | "update";
+export type ReviewProgressStatus = "unseen" | "understood" | "flagged" | "skipped";
 
 export interface ReviewSession {
   id: string;
@@ -125,6 +126,12 @@ export interface InvestigationEntry {
   updatedAt: string;
 }
 
+export interface ReviewProgressSnapshot {
+  activeScope: TourScope | null;
+  activeStopIds: Record<TourScope, string | null>;
+  scopes: Record<TourScope, Record<string, ReviewProgressStatus>>;
+}
+
 export class SessionStore {
   readonly database: DatabaseSync;
 
@@ -196,13 +203,61 @@ export class SessionStore {
     }));
   }
 
+  getReviewProgress(sessionId: string): ReviewProgressSnapshot {
+    this.requireSession(sessionId);
+    const rows = this.database.prepare(`
+      SELECT scope, stop_id, status FROM review_progress WHERE session_id = ? ORDER BY scope, stop_id
+    `).all(sessionId);
+    const state = this.database.prepare("SELECT * FROM review_state WHERE session_id = ?").get(sessionId);
+    const scopes: ReviewProgressSnapshot["scopes"] = { full: {}, update: {} };
+    for (const row of rows) {
+      const scope = String(row.scope) as TourScope;
+      scopes[scope][String(row.stop_id)] = String(row.status) as ReviewProgressStatus;
+    }
+    return {
+      activeScope: state ? String(state.active_scope) as TourScope : null,
+      activeStopIds: {
+        full: state?.full_stop_id ? String(state.full_stop_id) : null,
+        update: state?.update_stop_id ? String(state.update_stop_id) : null,
+      },
+      scopes,
+    };
+  }
+
+  saveReviewProgress(
+    sessionId: string,
+    scope: TourScope,
+    activeStopId: string,
+    change?: { stopId: string; status: ReviewProgressStatus },
+  ): ReviewProgressSnapshot {
+    this.requireSession(sessionId);
+    const timestamp = this.now().toISOString();
+    if (change) this.database.prepare(`
+      INSERT INTO review_progress (session_id, scope, stop_id, status, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(session_id, scope, stop_id) DO UPDATE SET status = excluded.status, updated_at = excluded.updated_at
+    `).run(sessionId, scope, change.stopId, change.status, timestamp);
+    const fullStopId = scope === "full" ? activeStopId : null;
+    const updateStopId = scope === "update" ? activeStopId : null;
+    this.database.prepare(`
+      INSERT INTO review_state (session_id, active_scope, full_stop_id, update_stop_id, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        active_scope = excluded.active_scope,
+        full_stop_id = COALESCE(excluded.full_stop_id, review_state.full_stop_id),
+        update_stop_id = COALESCE(excluded.update_stop_id, review_state.update_stop_id),
+        updated_at = excluded.updated_at
+    `).run(sessionId, scope, fullStopId, updateStopId, timestamp);
+    return this.getReviewProgress(sessionId);
+  }
+
   saveCheckpoint(sessionId: string, checkpoint: ReviewCheckpoint) {
     this.requireSession(sessionId);
     this.database.prepare(`
       INSERT INTO review_checkpoints (
         session_id, reviewed_head_sha, completed_at, scope, coverage_json, finding_revisions_json
       ) VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(session_id, reviewed_head_sha) DO UPDATE SET
+      ON CONFLICT(session_id, reviewed_head_sha, scope) DO UPDATE SET
         completed_at = excluded.completed_at,
         scope = excluded.scope,
         coverage_json = excluded.coverage_json,
@@ -217,11 +272,14 @@ export class SessionStore {
     );
   }
 
-  latestCheckpoint(sessionId: string): ReviewCheckpoint | undefined {
-    const row = this.database.prepare(`
+  latestCheckpoint(sessionId: string, scope?: TourScope): ReviewCheckpoint | undefined {
+    const row = this.database.prepare(scope ? `
+      SELECT reviewed_head_sha, completed_at, scope, coverage_json, finding_revisions_json
+      FROM review_checkpoints WHERE session_id = ? AND scope = ? ORDER BY completed_at DESC LIMIT 1
+    ` : `
       SELECT reviewed_head_sha, completed_at, scope, coverage_json, finding_revisions_json
       FROM review_checkpoints WHERE session_id = ? ORDER BY completed_at DESC LIMIT 1
-    `).get(sessionId);
+    `).get(...(scope ? [sessionId, scope] : [sessionId]));
     if (!row) return undefined;
     return {
       reviewedHeadSha: String(row.reviewed_head_sha),
@@ -507,7 +565,7 @@ export function defaultDatabasePath(environment: NodeJS.ProcessEnv = process.env
 
 function migrate(database: DatabaseSync) {
   let version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
-  if (version > 9) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
+  if (version > 11) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
 
   if (version === 0) database.exec(`
     BEGIN;
@@ -691,6 +749,54 @@ function migrate(database: DatabaseSync) {
     );
     CREATE INDEX investigation_entries_session ON investigation_entries(session_id, created_at);
     PRAGMA user_version = 9;
+    COMMIT;
+  `);
+
+  version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+  if (version === 9) database.exec(`
+    BEGIN;
+    ALTER TABLE review_progress RENAME TO review_progress_v9;
+    CREATE TABLE review_progress (
+      session_id TEXT NOT NULL REFERENCES review_sessions(id) ON DELETE CASCADE,
+      scope TEXT NOT NULL CHECK (scope IN ('full', 'update')),
+      stop_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('unseen', 'understood', 'flagged', 'skipped')),
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(session_id, scope, stop_id)
+    );
+    INSERT INTO review_progress (session_id, scope, stop_id, status, updated_at)
+    SELECT session_id, 'full', stop_id, status, updated_at FROM review_progress_v9;
+    DROP TABLE review_progress_v9;
+    CREATE TABLE review_state (
+      session_id TEXT PRIMARY KEY REFERENCES review_sessions(id) ON DELETE CASCADE,
+      active_scope TEXT NOT NULL CHECK (active_scope IN ('full', 'update')),
+      full_stop_id TEXT,
+      update_stop_id TEXT,
+      updated_at TEXT NOT NULL
+    );
+    PRAGMA user_version = 10;
+    COMMIT;
+  `);
+
+  version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+  if (version === 10) database.exec(`
+    BEGIN;
+    ALTER TABLE review_checkpoints RENAME TO review_checkpoints_v10;
+    CREATE TABLE review_checkpoints (
+      session_id TEXT NOT NULL REFERENCES review_sessions(id) ON DELETE CASCADE,
+      reviewed_head_sha TEXT NOT NULL,
+      completed_at TEXT NOT NULL,
+      scope TEXT NOT NULL CHECK (scope IN ('full', 'update')),
+      coverage_json TEXT NOT NULL,
+      finding_revisions_json TEXT NOT NULL,
+      PRIMARY KEY(session_id, reviewed_head_sha, scope)
+    );
+    INSERT INTO review_checkpoints (
+      session_id, reviewed_head_sha, completed_at, scope, coverage_json, finding_revisions_json
+    ) SELECT session_id, reviewed_head_sha, completed_at, scope, coverage_json, finding_revisions_json
+      FROM review_checkpoints_v10;
+    DROP TABLE review_checkpoints_v10;
+    PRAGMA user_version = 11;
     COMMIT;
   `);
 }
