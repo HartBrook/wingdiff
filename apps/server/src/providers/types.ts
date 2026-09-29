@@ -1,3 +1,5 @@
+import type { TourGenerationInput } from "../tour.js";
+
 export type ProviderId = "codex" | "openai" | "anthropic";
 export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -55,6 +57,11 @@ export interface InvestigationContext {
 
 export interface TextProvider {
   readonly id: ProviderId;
+  generateTour(
+    selection: ModelSelection,
+    input: TourGenerationInput,
+    signal?: AbortSignal,
+  ): Promise<unknown>;
   streamInvestigation(
     selection: ModelSelection,
     context: InvestigationContext,

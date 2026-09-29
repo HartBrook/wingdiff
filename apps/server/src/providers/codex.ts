@@ -1,8 +1,10 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildInvestigationPrompt, INVESTIGATION_INSTRUCTIONS } from "./prompt.js";
+import { buildTourRequestPrompt, parseStructuredJson, TOUR_INSTRUCTIONS, TOUR_JSON_SCHEMA } from "./tourPrompt.js";
+import type { TourGenerationInput } from "../tour.js";
 import type { InvestigationContext, ModelSelection, TextProvider } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
@@ -28,6 +30,44 @@ export class CodexCliProvider implements TextProvider {
     private readonly executable = "codex",
     private readonly environment: NodeJS.ProcessEnv = process.env,
   ) {}
+
+  async generateTour(
+    selection: ModelSelection,
+    input: TourGenerationInput,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const workingDirectory = await mkdtemp(path.join(tmpdir(), "wingdiff-codex-"));
+    const schemaPath = path.join(workingDirectory, "tour-schema.json");
+    const outputPath = path.join(workingDirectory, "tour-output.json");
+    await writeFile(schemaPath, JSON.stringify(TOUR_JSON_SCHEMA), "utf8");
+    const prompt = `${TOUR_INSTRUCTIONS}\n\nDo not use tools, inspect the filesystem, or execute commands. Answer only from the review evidence below.\n\n${buildTourRequestPrompt(input)}`;
+
+    try {
+      await runCodex(this.executable, this.environment, workingDirectory, [
+        "exec",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "read-only",
+        "--color",
+        "never",
+        "--model",
+        selection.model,
+        "-c",
+        `model_reasoning_effort="${selection.reasoningEffort}"`,
+        "--output-schema",
+        schemaPath,
+        "--output-last-message",
+        outputPath,
+        "-",
+      ], prompt, signal);
+      return parseStructuredJson(await readFile(outputPath, "utf8"));
+    } finally {
+      await rm(workingDirectory, { recursive: true, force: true });
+    }
+  }
 
   async *streamInvestigation(
     selection: ModelSelection,
@@ -95,6 +135,51 @@ export class CodexCliProvider implements TextProvider {
       signal?.removeEventListener("abort", abort);
       await rm(workingDirectory, { recursive: true, force: true });
     }
+  }
+}
+
+async function runCodex(
+  executable: string,
+  environment: NodeJS.ProcessEnv,
+  workingDirectory: string,
+  arguments_: string[],
+  prompt: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const child = spawn(executable, arguments_, {
+    cwd: workingDirectory,
+    env: environment,
+    stdio: ["pipe", "ignore", "pipe"],
+    windowsHide: true,
+  });
+  const completion = new Promise<number | null>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", resolve);
+  });
+  let stderr = "";
+  let timedOut = false;
+  const abort = () => child.kill("SIGTERM");
+  const timeoutMs = parseTimeout(environment.WINGDIFF_CODEX_TIMEOUT_MS);
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    child.kill("SIGTERM");
+  }, timeoutMs);
+  signal?.addEventListener("abort", abort, { once: true });
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr = `${stderr}${chunk}`.slice(-MAX_ERROR_LENGTH);
+  });
+  child.stdin.on("error", () => undefined);
+  child.stdin.end(prompt);
+
+  try {
+    const exitCode = await completion;
+    if (signal?.aborted) throw new Error("Codex CLI tour generation was canceled.");
+    if (timedOut) throw new Error(`Codex CLI exceeded the ${Math.round(timeoutMs / 1_000)} second timeout.`);
+    if (exitCode !== 0) throw new Error(cleanCliError(stderr) || `Codex CLI exited with status ${String(exitCode)}.`);
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abort);
   }
 }
 
