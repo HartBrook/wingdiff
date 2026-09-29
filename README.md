@@ -13,7 +13,7 @@ This repository contains the local-first review foundation described in the [pro
 - Review desk with coverage, summary, inline comments, and disposition
 - Dark/light themes, keyboard navigation, responsive layout, and local persistence
 
-Real pull requests can be acquired and turned into grounded guided tours. Review comments can be staged and resumed locally; GitHub review submission remains simulated. Contextual investigation defaults to the locally installed Codex CLI using its existing ChatGPT sign-in. Direct OpenAI and Anthropic APIs remain optional; the demo uses clearly labeled fixture answers when no provider is available.
+Real pull requests can be acquired, turned into grounded guided tours, and reviewed through GitHub. Review comments, the summary, disposition, and submitted-review receipt are persisted locally. The fixture demo still simulates submission. Contextual investigation defaults to the locally installed Codex CLI using its existing ChatGPT sign-in. Direct OpenAI and Anthropic APIs remain optional; the demo uses clearly labeled fixture answers when no provider is available.
 
 ## Run locally
 
@@ -48,6 +48,8 @@ Wingdiff reads metadata through `gh`, fetches missing objects into private `refs
 From the real-PR Summary, choose a configured model and select **Generate guided review**. The model organizes the validated diff into semantic stops, ranks concrete findings by severity, and references opaque evidence anchors. Wingdiff rejects the result unless every changed file is covered and every claim or finding resolves to an exact known anchor. Generated tours are pinned to the acquired head SHA and can be resumed locally.
 
 Comments drafted from a real tour are also pinned to the acquired diff. Wingdiff records the GitHub side and exact line range, verifies the terminal line fingerprint against the canonical pull-request diff, and stores accepted drafts in the local SQLite session. A stale, cross-hunk, wrong-side, or non-diff anchor is rejected before it can enter the review queue.
+
+The real-PR **Review desk** presents the exact summary, disposition, and inline-comment batch before an explicit publish action. Immediately before publishing, Wingdiff rereads the pull request through the authenticated GitHub CLI, blocks a moved or closed head, and revalidates every stored anchor. It then sends one batch review using `commit_id`, `line`, `side`, and optional multi-line coordinates. A successful GitHub receipt is saved locally, and duplicate publication for the same pinned head is blocked. The authenticated GitHub identity needs pull-request write permission to publish.
 
 ### Review author updates
 
