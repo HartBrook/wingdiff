@@ -100,6 +100,17 @@ export interface ReviewDraft {
   updatedAt: string;
 }
 
+export interface SubmittedReview {
+  sessionId: string;
+  headSha: string;
+  githubReviewId: number;
+  url: string;
+  event: ReviewDraft["event"];
+  body: string;
+  comments: DraftReviewComment[];
+  submittedAt: string;
+}
+
 export class SessionStore {
   readonly database: DatabaseSync;
 
@@ -385,6 +396,41 @@ export class SessionStore {
     return this.getReviewDraft(sessionId)!;
   }
 
+  getSubmittedReview(sessionId: string, headSha: string): SubmittedReview | undefined {
+    this.requireSession(sessionId);
+    const row = this.database.prepare("SELECT * FROM submitted_reviews WHERE session_id = ? AND head_sha = ?")
+      .get(sessionId, headSha);
+    if (!row) return undefined;
+    return {
+      sessionId: String(row.session_id),
+      headSha: String(row.head_sha),
+      githubReviewId: Number(row.github_review_id),
+      url: String(row.url),
+      event: String(row.event) as ReviewDraft["event"],
+      body: String(row.body),
+      comments: JSON.parse(String(row.comments_json)) as DraftReviewComment[],
+      submittedAt: String(row.submitted_at),
+    };
+  }
+
+  saveSubmittedReview(
+    sessionId: string,
+    headSha: string,
+    githubReviewId: number,
+    url: string,
+    draft: Pick<ReviewDraft, "body" | "event">,
+    comments: DraftReviewComment[],
+  ): SubmittedReview {
+    this.requireSession(sessionId);
+    const submittedAt = this.now().toISOString();
+    this.database.prepare(`
+      INSERT INTO submitted_reviews (
+        session_id, head_sha, github_review_id, url, event, body, comments_json, submitted_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(sessionId, headSha, githubReviewId, url, draft.event, draft.body, JSON.stringify(comments), submittedAt);
+    return this.getSubmittedReview(sessionId, headSha)!;
+  }
+
   close() {
     this.database.close();
   }
@@ -406,7 +452,7 @@ export function defaultDatabasePath(environment: NodeJS.ProcessEnv = process.env
 
 function migrate(database: DatabaseSync) {
   let version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
-  if (version > 7) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
+  if (version > 8) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
 
   if (version === 0) database.exec(`
     BEGIN;
@@ -551,6 +597,24 @@ function migrate(database: DatabaseSync) {
       updated_at TEXT NOT NULL
     );
     PRAGMA user_version = 7;
+    COMMIT;
+  `);
+
+  version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+  if (version === 7) database.exec(`
+    BEGIN;
+    CREATE TABLE submitted_reviews (
+      session_id TEXT NOT NULL REFERENCES review_sessions(id) ON DELETE CASCADE,
+      head_sha TEXT NOT NULL,
+      github_review_id INTEGER NOT NULL,
+      url TEXT NOT NULL,
+      event TEXT NOT NULL CHECK (event IN ('COMMENT', 'APPROVE', 'REQUEST_CHANGES')),
+      body TEXT NOT NULL,
+      comments_json TEXT NOT NULL,
+      submitted_at TEXT NOT NULL,
+      PRIMARY KEY(session_id, head_sha)
+    );
+    PRAGMA user_version = 8;
     COMMIT;
   `);
 }

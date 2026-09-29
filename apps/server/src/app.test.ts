@@ -62,7 +62,18 @@ describe("generated tour API", () => {
   it("stages only comments anchored to the pinned diff", async () => {
     store = new SessionStore(":memory:");
     const session = store.upsertReadySession(target, metadata, evidence);
-    const app = createApp({}, { sessionStore: store, providers: new Map() });
+    let publishedComments = 0;
+    const app = createApp({}, {
+      sessionStore: store,
+      providers: new Map(),
+      reviewSubmissionDependencies: {
+        readMetadata: async () => metadata,
+        publishReview: async (_target, _cwd, _headSha, _draft, comments) => {
+          publishedComments = comments.length;
+          return { id: 91, url: "https://github.com/openai/codex/pull/42#pullrequestreview-91", state: "APPROVED" };
+        },
+      },
+    });
     server = app.listen(0, "127.0.0.1");
     await new Promise<void>((resolve) => server!.once("listening", resolve));
     const port = (server.address() as AddressInfo).port;
@@ -99,6 +110,15 @@ describe("generated tour API", () => {
     expect(await (await fetch(draftUrl)).json()).toMatchObject({
       draft: { body: "The implementation looks ready.", event: "APPROVE" },
     });
+
+    const submissionUrl = `http://127.0.0.1:${port}/api/sessions/${session.id}/review-submission`;
+    const submitted = await fetch(submissionUrl, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body: "The implementation looks ready.", event: "APPROVE" }),
+    });
+    expect(submitted.status).toBe(201);
+    expect(publishedComments).toBe(0);
+    expect(await (await fetch(submissionUrl)).json()).toMatchObject({ submission: { githubReviewId: 91, event: "APPROVE" } });
   });
 });
 

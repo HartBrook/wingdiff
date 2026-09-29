@@ -5,16 +5,18 @@ import { inspectLocalTarget } from "./preflight.js";
 import { createProviders, publicProviders, validateSelection } from "./providers/index.js";
 import type { ProviderId, TextProvider } from "./providers/types.js";
 import { SessionStore } from "./sessions.js";
-import type { FindingCheckpoint, TourScope } from "./sessions.js";
+import type { FindingCheckpoint, ReviewDraft, TourScope } from "./sessions.js";
 import { parsePullRequestTarget } from "./targets.js";
 import { generateSessionTour, getSessionTour } from "./tourService.js";
 import { validateInvestigationContext } from "./validation.js";
+import { submitSessionReview, type ReviewSubmissionDependencies } from "./reviews.js";
 
 export interface AppOptions {
   cwd?: string;
   sessionStore?: SessionStore;
   providers?: Map<ProviderId, TextProvider>;
   acquisitionDependencies?: AcquisitionDependencies;
+  reviewSubmissionDependencies?: ReviewSubmissionDependencies;
 }
 
 export function createApp(environment: NodeJS.ProcessEnv = process.env, options: AppOptions = {}) {
@@ -125,6 +127,10 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
         response.status(404).json({ error: "Review session not found." });
         return;
       }
+      if (sessionStore.getSubmittedReview(session.id, session.metadata.head.sha)) {
+        response.status(409).json({ error: "This review has already been published." });
+        return;
+      }
       const comment = validateDraftComment(request.body, session.evidence);
       response.status(201).json({ comment: sessionStore.saveDraftComment(session.id, comment) });
     } catch (error) {
@@ -137,6 +143,10 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
     const session = sessionStore.getSession(request.params.id);
     if (!session) {
       response.status(404).json({ error: "Review session not found." });
+      return;
+    }
+    if (sessionStore.getSubmittedReview(session.id, session.metadata.head.sha)) {
+      response.status(409).json({ error: "This review has already been published." });
       return;
     }
     if (!sessionStore.deleteDraftComment(session.id, request.params.commentId)) {
@@ -162,13 +172,48 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
         response.status(404).json({ error: "Review session not found." });
         return;
       }
-      const body = typeof request.body?.body === "string" ? request.body.body : "";
-      if (body.length > 65_536) throw new Error("Review summary exceeds 65536 characters.");
-      const event = request.body?.event;
-      if (!["COMMENT", "APPROVE", "REQUEST_CHANGES"].includes(event)) throw new Error("Review disposition is invalid.");
-      response.json({ draft: sessionStore.saveReviewDraft(session.id, body, event) });
+      if (sessionStore.getSubmittedReview(session.id, session.metadata.head.sha)) {
+        throw new Error("A review has already been published for this pinned head.");
+      }
+      const draft = reviewDraftInput(request.body);
+      response.json({ draft: sessionStore.saveReviewDraft(session.id, draft.body, draft.event) });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Wingdiff could not save this review draft.";
+      response.status(400).json({ error: message });
+    }
+  });
+
+  app.get("/api/sessions/:id/review-submission", (request, response) => {
+    const session = sessionStore.getSession(request.params.id);
+    if (!session) {
+      response.status(404).json({ error: "Review session not found." });
+      return;
+    }
+    response.json({ submission: sessionStore.getSubmittedReview(session.id, session.metadata.head.sha) ?? null });
+  });
+
+  app.post("/api/sessions/:id/review-submission", async (request, response) => {
+    try {
+      const session = sessionStore.getSession(request.params.id);
+      if (!session) {
+        response.status(404).json({ error: "Review session not found." });
+        return;
+      }
+      if (sessionStore.getSubmittedReview(session.id, session.metadata.head.sha)) {
+        throw new Error("A review has already been published for this pinned head.");
+      }
+      const draft = reviewDraftInput(request.body);
+      sessionStore.saveReviewDraft(session.id, draft.body, draft.event);
+      const submission = await submitSessionReview(
+        session,
+        sessionStore,
+        cwd,
+        draft,
+        options.reviewSubmissionDependencies,
+      );
+      response.status(201).json({ submission });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Wingdiff could not publish this review.";
       response.status(400).json({ error: message });
     }
   });
@@ -361,6 +406,16 @@ function findingCheckpoints(input: unknown) {
       : [];
     return { findingId, title, summary, severity, state, pathHints } as FindingCheckpoint;
   });
+}
+
+function reviewDraftInput(input: unknown): Pick<ReviewDraft, "body" | "event"> {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Review draft is required.");
+  const value = input as Record<string, unknown>;
+  const body = typeof value.body === "string" ? value.body : "";
+  if (body.length > 65_536) throw new Error("Review summary exceeds 65536 characters.");
+  const event = value.event;
+  if (event !== "COMMENT" && event !== "APPROVE" && event !== "REQUEST_CHANGES") throw new Error("Review disposition is invalid.");
+  return { body, event };
 }
 
 function requiredText(input: unknown, label: string, maximum: number): string {

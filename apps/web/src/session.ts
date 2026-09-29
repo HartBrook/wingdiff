@@ -164,6 +164,17 @@ export interface StoredReviewDraft {
   updatedAt: string;
 }
 
+export interface StoredReviewSubmission {
+  sessionId: string;
+  headSha: string;
+  githubReviewId: number;
+  url: string;
+  event: StoredReviewDraft["event"];
+  body: string;
+  comments: StoredDraftReviewComment[];
+  submittedAt: string;
+}
+
 export interface ReviewRefreshResult {
   status: "current" | "updated";
   session: AcquiredReviewSession;
@@ -281,6 +292,28 @@ export async function saveReviewDraft(
   const result = await response.json() as { draft?: StoredReviewDraft; error?: string };
   if (!response.ok || !result.draft) throw new Error(result.error ?? "Wingdiff could not save this review draft.");
   return result.draft;
+}
+
+export async function fetchReviewSubmission(id: string, signal?: AbortSignal): Promise<StoredReviewSubmission | null> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/review-submission`, { signal });
+  const body = await response.json() as { submission?: StoredReviewSubmission | null; error?: string };
+  if (!response.ok) throw new Error(body.error ?? "Wingdiff could not load the submitted review.");
+  return body.submission ?? null;
+}
+
+export async function publishReview(
+  id: string,
+  body: string,
+  event: StoredReviewDraft["event"],
+): Promise<StoredReviewSubmission> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/review-submission`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ body, event }),
+  });
+  const result = await response.json() as { submission?: StoredReviewSubmission; error?: string };
+  if (!response.ok || !result.submission) throw new Error(result.error ?? "Wingdiff could not publish this review.");
+  return result.submission;
 }
 
 export async function refreshReviewSession(id: string): Promise<ReviewRefreshResult> {

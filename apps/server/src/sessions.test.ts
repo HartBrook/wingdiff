@@ -94,7 +94,7 @@ describe("local review sessions", () => {
       selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
       tour: { summary: "The counter change is small and focused." },
     });
-    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(7);
+    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(8);
     store.close();
   });
 
@@ -125,6 +125,10 @@ describe("local review sessions", () => {
       updatedAt: "2026-09-29T12:00:00.000Z",
     });
     expect(store.getReviewDraft(session.id)?.event).toBe("COMMENT");
+    expect(store.saveSubmittedReview(session.id, session.metadata.head.sha, 91, "https://github.com/review/91", {
+      body: "Ready after the expiry question is answered.", event: "COMMENT",
+    }, [])).toMatchObject({ githubReviewId: 91, event: "COMMENT", comments: [] });
+    expect(store.getSubmittedReview(session.id, session.metadata.head.sha)?.url).toBe("https://github.com/review/91");
     store.close();
   });
 

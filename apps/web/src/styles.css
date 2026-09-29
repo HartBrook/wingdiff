@@ -454,6 +454,9 @@ code, kbd { font-family: var(--mono); }
 .disposition-list strong, .disposition-list small { display: block; }.disposition-list strong { font-size: 10px; }.disposition-list small { margin-top: 3px; color: var(--text-4); font-size: 8px; }
 .publish-preview { display: grid; margin: 18px 0; padding: 13px; gap: 5px; border: 1px solid var(--border-soft); border-radius: 9px; background: var(--canvas-soft); }
 .publish-preview span { margin-bottom: 3px; color: var(--text-4); font-size: 8px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }.publish-preview strong { font-size: 9px; font-weight: 500; }.publish-preview small { margin-top: 3px; color: var(--text-4); font-size: 8px; }
+.submitted-review { display: flex; align-items: center; gap: 10px; }
+.submitted-review strong, .submitted-review small { display: block; }
+.submitted-review strong { font-size: 11px; }.submitted-review small { margin-top: 3px; color: var(--text-4); font-size: 8px; }
 .button--publish { width: 100%; min-height: 42px; color: #17141f; background: var(--accent); }.button--publish:hover { background: var(--accent-strong); }
 .publish-note { display: flex; margin: 11px 0 0; align-items: flex-start; gap: 5px; color: var(--text-4); font-size: 7px; line-height: 1.5; }
 
