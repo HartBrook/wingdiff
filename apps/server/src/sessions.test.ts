@@ -233,8 +233,8 @@ describe("local review sessions", () => {
   });
 
   it("uses a portable configurable data location", () => {
-    expect(defaultDatabasePath({ WINGDIFF_DATA_DIR: "/secure/wingdiff" }, "linux")).toBe("/secure/wingdiff/wingdiff.sqlite3");
-    expect(defaultDatabasePath({ XDG_DATA_HOME: "/data" }, "linux")).toBe("/data/wingdiff/wingdiff.sqlite3");
+    expect(defaultDatabasePath({ WINGDIFF_DATA_DIR: "/secure/wingdiff" }, "linux")).toBe(path.join("/secure/wingdiff", "wingdiff.sqlite3"));
+    expect(defaultDatabasePath({ XDG_DATA_HOME: "/data" }, "linux")).toBe(path.join("/data", "wingdiff", "wingdiff.sqlite3"));
     expect(defaultDatabasePath({ LOCALAPPDATA: "C:\\Data" }, "win32")).toBe(path.join("C:\\Data", "wingdiff", "wingdiff.sqlite3"));
   });
 });

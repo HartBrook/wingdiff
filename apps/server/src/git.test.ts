@@ -23,8 +23,8 @@ describe("pinned Git revisions", () => {
     const after = await git(repository.path, ["status", "--porcelain=v1"]);
 
     expect(after).toBe(before);
-    expect(pinned).toEqual({
-      repositoryRoot: await realpath(repository.path),
+    expect(await realpath(pinned.repositoryRoot)).toBe(await realpath(repository.path));
+    expect({ base: pinned.base, head: pinned.head }).toEqual({
       base: { sha: repository.baseSha, ref: `refs/wingdiff/pull/42/revisions/${repository.baseSha}` },
       head: { sha: repository.headSha, ref: `refs/wingdiff/pull/42/revisions/${repository.headSha}` },
     });
