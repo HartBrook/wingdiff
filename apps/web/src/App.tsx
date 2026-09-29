@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { mockAnswers, pullRequest, reviewUpdate, tourStops, updateStops } from "./fixture";
 import {
   DEFAULT_SELECTION,
@@ -28,6 +28,7 @@ import { claimKindLabel, compareSeverity } from "./reviewPresentation";
 import {
   createReviewSession,
   createDraftComment,
+  createInvestigationEntry,
   completeReviewCheckpoint,
   checkpointFindings,
   deleteDraftComment,
@@ -35,6 +36,7 @@ import {
   fetchReviewCheckpoint,
   fetchReviewSession,
   fetchDraftComments,
+  fetchInvestigationEntries,
   fetchReviewDraft,
   fetchReviewSubmission,
   fetchSessionTour,
@@ -45,6 +47,7 @@ import {
   publishReview,
   revisionStopIndex,
   saveReviewDraft,
+  updateInvestigationEntry,
   type AcquiredReviewSession,
   type FindingCheckpoint,
   type GeneratedSessionTour,
@@ -234,6 +237,11 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   const [selection, setSelection] = useState<Selection | null>(null);
   const [statuses, setStatuses] = usePersistentState<Record<string, StopStatus>>(`wingdiff:statuses:${session.metadata.head.sha}`, {});
   const [comments, setComments] = useState<DraftComment[]>([]);
+  const [notebook, setNotebook] = useState<NotebookEntry[]>([]);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [question, setQuestion] = useState("");
+  const [answering, setAnswering] = useState(false);
+  const investigationAbort = useRef<AbortController | null>(null);
   const [composer, setComposer] = useState<ComposerState | null>(null);
   const [reviewSummary, setReviewSummary] = useState("");
   const [disposition, setDisposition] = useState<ReviewDisposition>("COMMENT");
@@ -247,6 +255,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   const metadata = session.metadata;
   const activeStop = stops[activeIndex];
   const activeEvidence = activeStop?.evidence.find((item) => item.id === activeEvidenceId) ?? activeStop?.evidence[0];
+  const stopNotebook = activeStop ? notebook.filter((entry) => entry.stopId === activeStop.id) : [];
   const activeProvider = providers.find((provider) => provider.id === modelSelection.provider);
   const activeModel = selectedModel(providers, modelSelection);
   const activeModelLabel = activeProvider ? `${activeProvider.name} · ${activeModel.name}` : activeModel.name;
@@ -267,18 +276,20 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       fetchSessionUpdate(session.id, controller.signal),
       fetchReviewCheckpoint(session.id, controller.signal),
       fetchDraftComments(session.id, controller.signal),
+      fetchInvestigationEntries(session.id, controller.signal),
       fetchReviewDraft(session.id, controller.signal),
       fetchReviewSubmission(session.id, controller.signal),
       fetchProviders(controller.signal).then((availableProviders) => {
         setProviders(availableProviders);
         setModelSelection((current) => preferredAvailableSelection(availableProviders, current));
       }),
-    ]).then(([fullTour, updateTour, updateContext, storedCheckpoint, storedComments, storedReviewDraft, storedSubmission]) => {
+    ]).then(([fullTour, updateTour, updateContext, storedCheckpoint, storedComments, storedNotebook, storedReviewDraft, storedSubmission]) => {
       setTours({ full: fullTour, update: updateTour });
       setUpdate(updateContext?.update ?? null);
       setBaselineCheckpoint(updateContext?.baselineCheckpoint ?? null);
       setCheckpoint(storedCheckpoint);
       setComments(storedComments);
+      setNotebook(storedNotebook);
       setReviewSummary(storedReviewDraft?.body ?? "");
       setDisposition(storedReviewDraft?.event ?? "COMMENT");
       setSubmission(storedSubmission);
@@ -361,16 +372,17 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       : { ...current, end: line });
   }
 
-  function openComment(useFinding = false) {
+  function openComment(useFinding = false, initialBody = "", preferredEvidenceId?: string) {
     if (submission) {
       setError("This review has already been published to GitHub.");
       setView("review");
       return;
     }
     if (!activeStop || !activeEvidence) return;
+    const preferredEvidence = activeStop.evidence.find((item) => item.id === preferredEvidenceId);
     const selectedEvidence = activeStop.evidence.find((item) => item.id === selection?.evidenceId);
     const findingEvidence = activeStop.evidence.find((item) => item.id === activeStop.finding?.evidenceId);
-    const evidence = selectedEvidence ?? (useFinding ? findingEvidence : activeEvidence) ?? activeEvidence;
+    const evidence = preferredEvidence ?? selectedEvidence ?? (useFinding ? findingEvidence : activeEvidence) ?? activeEvidence;
     const anchor = commentAnchor(evidence, selection?.evidenceId === evidence.id ? selection : null);
     if (!anchor) {
       setError("This evidence does not contain a line that GitHub can anchor a comment to.");
@@ -383,7 +395,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       startLine: anchor.startLine,
       endLine: anchor.endLine,
       fingerprint: anchor.fingerprint,
-      body: useFinding ? activeStop.finding?.suggestedComment ?? "" : "",
+      body: initialBody || (useFinding ? activeStop.finding?.suggestedComment ?? "" : ""),
       severity: useFinding ? activeStop.finding?.severity ?? "medium" : "low",
     });
   }
@@ -452,12 +464,103 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     }
   }
 
+  async function askQuestion(prompt?: string) {
+    const value = (prompt ?? question).trim();
+    if (!value || answering || !activeStop || !activeEvidence) return;
+    if (!activeProvider?.configured) {
+      setModelPickerOpen(true);
+      return;
+    }
+    setQuestion("");
+    setAnswering(true);
+    setError(null);
+    const controller = new AbortController();
+    investigationAbort.current = controller;
+    let entryId: string | undefined;
+    let answer = "";
+    try {
+      const entry = await createInvestigationEntry(session.id, {
+        stopId: activeStop.id,
+        evidenceId: activeEvidence.id,
+        question: value,
+        provider: modelSelection.provider,
+        model: activeModelLabel,
+      });
+      entryId = entry.id;
+      setNotebook((current) => [...current, entry]);
+      await streamInvestigation({
+        selection: modelSelection,
+        stop: activeStop,
+        question: value,
+        signal: controller.signal,
+        onDelta: (delta) => {
+          answer += delta;
+          setNotebook((current) => current.map((item) => item.id === entry.id ? { ...item, answer } : item));
+        },
+      });
+      const saved = await updateInvestigationEntry(session.id, entry.id, answer, "complete");
+      setNotebook((current) => current.map((item) => item.id === entry.id ? saved : item));
+    } catch (caught) {
+      const interrupted = caught instanceof DOMException && caught.name === "AbortError";
+      const message = interrupted
+        ? "Investigation stopped."
+        : caught instanceof Error ? caught.message : "The model request failed.";
+      const errorAnswer = answer || message;
+      if (entryId) {
+        try {
+          const saved = await updateInvestigationEntry(session.id, entryId, errorAnswer, "error");
+          setNotebook((current) => current.map((item) => item.id === entryId ? saved : item));
+        } catch {
+          updateNotebookEntry(setNotebook, entryId, { answer: errorAnswer, status: "error" });
+        }
+      } else if (!interrupted) {
+        setError(message);
+      }
+    } finally {
+      if (investigationAbort.current === controller) investigationAbort.current = null;
+      setAnswering(false);
+    }
+  }
+
+  function closeInvestigation() {
+    investigationAbort.current?.abort();
+    setDrawerOpen(false);
+  }
+
+  function useInvestigationAsComment(entry: NotebookEntry) {
+    if (!entry.answer.trim() || entry.status !== "complete") return;
+    openComment(false, entry.answer.trim(), entry.evidenceId);
+    setDrawerOpen(false);
+  }
+
   function markUnderstood() {
     if (!activeStop) return;
     setStatuses((current) => ({ ...current, [activeStop.id]: "understood" }));
     if (activeIndex < stops.length - 1) setActiveIndex((current) => current + 1);
     else setView("summary");
   }
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement;
+      if (target.matches("input, textarea, [contenteditable='true']")) return;
+      if (event.key === "j" && view === "tour") setActiveIndex((current) => Math.min(stops.length - 1, current + 1));
+      if (event.key === "k" && view === "tour") setActiveIndex((current) => Math.max(0, current - 1));
+      if (event.key === "a" && view === "tour") setDrawerOpen(true);
+      if (event.key === "c" && view === "tour") openComment();
+      if (event.key === "f" && view === "tour" && activeStop) setStatuses((current) => ({ ...current, [activeStop.id]: current[activeStop.id] === "flagged" ? "unseen" : "flagged" }));
+      if (event.key === "d") setView((current) => current === "browse" ? (generated ? "tour" : "summary") : "browse");
+      if (event.key === "r") setView("review");
+      if (event.key === "Escape") {
+        closeInvestigation();
+        setComposer(null);
+        setMobileRouteOpen(false);
+        setModelPickerOpen(false);
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  });
 
   return <div className="app-shell acquired-shell">
     <header className="topbar">
@@ -474,11 +577,12 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     </header>
     {view === "tour" && generated && activeStop && activeEvidence ? <div className={`workspace acquired-workspace ${mobileRouteOpen ? "is-mobile-open" : ""}`}>
       <AcquiredTourRail activeIndex={activeIndex} onBrowse={() => { setView("browse"); setMobileRouteOpen(false); }} onReview={() => { setView("review"); setMobileRouteOpen(false); }} onSelect={(index) => { setActiveIndex(index); setMobileRouteOpen(false); }} onSummary={() => { setView("summary"); setMobileRouteOpen(false); }} statuses={statuses} stops={stops} />
-      <main className="main-canvas"><AcquiredTourView activeEvidence={activeEvidence} activeEvidenceId={activeEvidenceId} activeFindingRevisions={activeFindingRevisions} activeIndex={activeIndex} comments={comments.filter((comment) => comment.stopId === activeStop.id).length} headSha={metadata.head.sha} onComment={() => openComment(false)} onEvidence={setActiveEvidenceId} onFindingComment={() => openComment(true)} onFlag={() => setStatuses((current) => ({ ...current, [activeStop.id]: current[activeStop.id] === "flagged" ? "unseen" : "flagged" }))} onNavigate={(delta) => setActiveIndex((current) => Math.max(0, Math.min(stops.length - 1, current + delta)))} onSelectLine={selectLine} onUnderstood={markUnderstood} selection={selection} status={statuses[activeStop.id] ?? "unseen"} stop={activeStop} totalStops={stops.length} /></main>
+      <main className="main-canvas"><AcquiredTourView activeEvidence={activeEvidence} activeEvidenceId={activeEvidenceId} activeFindingRevisions={activeFindingRevisions} activeIndex={activeIndex} comments={comments.filter((comment) => comment.stopId === activeStop.id).length} headSha={metadata.head.sha} onAsk={(prompt) => { setDrawerOpen(true); if (prompt) void askQuestion(prompt); }} onComment={() => openComment(false)} onEvidence={setActiveEvidenceId} onFindingComment={() => openComment(true)} onFlag={() => setStatuses((current) => ({ ...current, [activeStop.id]: current[activeStop.id] === "flagged" ? "unseen" : "flagged" }))} onNavigate={(delta) => setActiveIndex((current) => Math.max(0, Math.min(stops.length - 1, current + delta)))} onSelectLine={selectLine} onUnderstood={markUnderstood} selection={selection} status={statuses[activeStop.id] ?? "unseen"} stop={activeStop} totalStops={stops.length} /></main>
     </div> : <main className="main-canvas acquired-canvas">
       {view === "summary" ? <AcquiredSummary activeModel={activeModelLabel} baselineCheckpoint={baselineCheckpoint} checkpoint={checkpoint} completing={completing} error={error} generated={generated} generating={generating} modelReady={Boolean(activeProvider?.configured)} notice={notice} onBegin={() => { setActiveIndex(0); setView("tour"); }} onBrowse={() => setView("browse")} onCheckUpdates={() => void checkForUpdates()} onComplete={() => void completeReview()} onGenerate={() => void generateTour()} onScope={selectScope} onSelectStop={(index) => { setActiveIndex(index); setView("tour"); }} refreshing={refreshing} reviewScope={reviewScope} scopedEvidence={scopedEvidence} session={session} statuses={statuses} stops={stops} tourLoading={tourLoading} update={update} /> : view === "browse" ? <AcquiredBrowse blocks={blocks} onSummary={() => setView("summary")} scope={reviewScope} session={session} /> : <AcquiredReviewDesk comments={comments} disposition={disposition} error={error} headSha={metadata.head.sha} onBack={() => setView(generated ? "tour" : "summary")} onDisposition={(event) => { setDisposition(event); void persistReviewDraft(reviewSummary, event); }} onPublish={() => void publishReviewToGitHub()} onRemoveComment={(id) => void removeComment(id)} onSave={() => void persistReviewDraft()} onSummary={setReviewSummary} publishing={publishingReview} saving={savingReview} statuses={statuses} stops={stops} submission={submission} summary={reviewSummary} />}
     </main>}
     {modelPickerOpen && <ModelPicker onClose={() => setModelPickerOpen(false)} onSelection={setModelSelection} providers={providers} selection={modelSelection} />}
+    {drawerOpen && activeStop && activeEvidence && <InvestigationDrawer answering={answering} entries={stopNotebook} evidence={activeEvidence} headSha={metadata.head.sha} modelName={activeModelLabel} onAsk={askQuestion} onClose={closeInvestigation} onQuestion={setQuestion} onUseAnswer={useInvestigationAsComment} providerConfigured={Boolean(activeProvider?.configured)} question={question} stop={activeStop} />}
     {composer && <CommentComposer composer={composer} headSha={metadata.head.sha} onCancel={() => setComposer(null)} onChange={(body) => setComposer((current) => current ? { ...current, body } : null)} onSeverity={(severity) => setComposer((current) => current ? { ...current, severity } : null)} onStage={stageComment} />}
   </div>;
 }
@@ -556,13 +660,14 @@ function AcquiredTourRail({ activeIndex, onBrowse, onReview, onSelect, onSummary
   return <aside className="tour-rail"><div className="tour-rail__heading"><span>Review route</span><span>{stops.reduce((total, stop) => total + stop.minutes, 0)} min</span></div><nav aria-label="Review route" className="route-list"><button className="route-item route-item--brief" onClick={onSummary} type="button"><span className="route-item__marker"><Icon name="layers" size={14} /></span><span><strong>Summary</strong><small>Findings and intent</small></span></button><div className="route-list__line" />{stops.map((stop, index) => { const status = statuses[stop.id] ?? "unseen"; return <button className={`route-item ${activeIndex === index ? "is-active" : ""} is-${status}`} key={stop.id} onClick={() => onSelect(index)} type="button"><span className="route-item__marker">{status === "understood" ? <Icon name="check" size={13} /> : status === "flagged" ? <Icon name="flag" size={12} /> : index + 1}</span><span><strong>{stop.eyebrow}</strong><small>{shortTitle(stop.title)}</small></span>{stop.finding && <i className={`severity-dot severity-dot--${stop.finding.severity}`} />}</button>; })}<div className="route-list__line route-list__line--last" /><button className="route-item" onClick={onBrowse} type="button"><span className="route-item__marker"><Icon name="code" size={14} /></span><span><strong>Changed files</strong><small>Browse full diff</small></span></button><button className="route-item route-item--review" onClick={onReview} type="button"><span className="route-item__marker"><Icon name="shield" size={14} /></span><span><strong>Review desk</strong><small>Prepare your decision</small></span></button></nav><div className="rail-progress"><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><span>{progress}%</span></div><div><strong>{completed} of {stops.length}</strong><span>stops reviewed</span></div></div></aside>;
 }
 
-function AcquiredTourView({ activeEvidence, activeEvidenceId, activeFindingRevisions, activeIndex, comments, headSha, onComment, onEvidence, onFindingComment, onFlag, onNavigate, onSelectLine, onUnderstood, selection, status, stop, totalStops }: {
+function AcquiredTourView({ activeEvidence, activeEvidenceId, activeFindingRevisions, activeIndex, comments, headSha, onAsk, onComment, onEvidence, onFindingComment, onFlag, onNavigate, onSelectLine, onUnderstood, selection, status, stop, totalStops }: {
   activeEvidence: EvidenceBlock;
   activeEvidenceId: string | null;
   activeFindingRevisions: Array<{ prior: FindingCheckpoint; revision: GeneratedSessionTour["tour"]["findingRevisions"][number] }>;
   activeIndex: number;
   comments: number;
   headSha: string;
+  onAsk: (prompt?: string) => void;
   onComment: () => void;
   onEvidence: (id: string) => void;
   onFindingComment: () => void;
@@ -576,9 +681,9 @@ function AcquiredTourView({ activeEvidence, activeEvidenceId, activeFindingRevis
   totalStops: number;
 }) {
   return <div className="page page--tour" key={stop.id}>
-    <header className="stop-header"><div className="stop-header__topline"><div className="eyebrow">{activeIndex + 1}/{totalStops} · {stop.eyebrow}</div></div><h1>{stop.title}</h1><p>{stop.summary}</p><div className="stop-actions"><button className={`button button--quiet ${status === "flagged" ? "is-flagged" : ""}`} onClick={onFlag} type="button"><Icon name="flag" size={15} />{status === "flagged" ? "Flagged" : "Flag"}</button><button className="button button--secondary" onClick={onComment} type="button"><Icon name="comment" size={15} />Comment</button>{comments > 0 && <span className="draft-count">{comments} draft</span>}</div></header>
+    <header className="stop-header"><div className="stop-header__topline"><div className="eyebrow">{activeIndex + 1}/{totalStops} · {stop.eyebrow}</div></div><h1>{stop.title}</h1><p>{stop.summary}</p><div className="stop-actions"><button className="button button--quiet" onClick={() => onAsk()} type="button"><Icon name="spark" size={15} />Ask</button><button className={`button button--quiet ${status === "flagged" ? "is-flagged" : ""}`} onClick={onFlag} type="button"><Icon name="flag" size={15} />{status === "flagged" ? "Flagged" : "Flag"}</button><button className="button button--secondary" onClick={onComment} type="button"><Icon name="comment" size={15} />Comment</button>{comments > 0 && <span className="draft-count">{comments} draft</span>}</div></header>
     <div className="tour-grid">
-      <section className="evidence-column"><div className="section-label"><span>Code change</span><button type="button"><Icon name="code" size={13} /> {headSha.slice(0, 7)}</button></div>{stop.evidence.length > 1 && <div className="evidence-tabs">{stop.evidence.map((item) => <button className={item.id === activeEvidenceId ? "is-active" : ""} key={item.id} onClick={() => onEvidence(item.id)} type="button">{item.label}<span>{fileName(item.path)}</span></button>)}</div>}<CodeDiff evidence={activeEvidence} onComment={onComment} onSelectLine={onSelectLine} selection={selection} /></section>
+      <section className="evidence-column"><div className="section-label"><span>Code change</span><button type="button"><Icon name="code" size={13} /> {headSha.slice(0, 7)}</button></div>{stop.evidence.length > 1 && <div className="evidence-tabs">{stop.evidence.map((item) => <button className={item.id === activeEvidenceId ? "is-active" : ""} key={item.id} onClick={() => onEvidence(item.id)} type="button">{item.label}<span>{fileName(item.path)}</span></button>)}</div>}<CodeDiff evidence={activeEvidence} onAsk={() => onAsk()} onComment={onComment} onSelectLine={onSelectLine} selection={selection} /></section>
       <aside className="insight-column">
         <section className="insight-section finding-section">
           <div className="section-label"><span>{activeFindingRevisions.length || stop.finding ? "Review findings" : "Review finding"}</span></div>
@@ -586,7 +691,7 @@ function AcquiredTourView({ activeEvidence, activeEvidenceId, activeFindingRevis
           {stop.finding ? <article className={`finding-card finding-card--${stop.finding.severity}`}><header><span className={`risk-level risk-level--${stop.finding.severity}`}>{stop.finding.severity}</span><span>{stop.finding.category}</span></header><h3>{stop.finding.title}</h3><p>{stop.finding.body}</p><button className="button button--finding" onClick={onFindingComment} type="button"><Icon name="comment" size={14} /> Draft from finding</button></article> : !activeFindingRevisions.length && <article className="finding-clear"><span><Icon name="check" size={17} /></span><div><h3>No blocking finding here</h3><p>Nothing in this stop currently argues against approval.</p></div></article>}
         </section>
         <section className="insight-section"><div className="section-label"><span>Observations</span></div><div className="observation-list">{stop.claims.map((claim) => <article className={`observation observation--${claim.kind}`} key={claim.id}><header><span>{claimKindLabel(claim.kind)}</span><small>{claim.confidence} confidence</small></header><p>{claim.text}</p><button type="button"><Icon name="code" size={13} /> {claim.evidenceIds.length} code anchor{claim.evidenceIds.length === 1 ? "" : "s"}</button></article>)}</div></section>
-        {stop.prompts.length > 0 && <section className="insight-section review-prompts"><div className="section-label"><span>Questions to verify</span></div>{stop.prompts.map((prompt, index) => <div className="acquired-prompt" key={prompt}><span>{String(index + 1).padStart(2, "0")}</span>{prompt}</div>)}</section>}
+        {stop.prompts.length > 0 && <section className="insight-section review-prompts"><div className="section-label"><span>Questions to verify</span></div>{stop.prompts.map((prompt, index) => <button className="acquired-prompt" key={prompt} onClick={() => onAsk(prompt)} type="button"><span>{String(index + 1).padStart(2, "0")}</span>{prompt}</button>)}</section>}
       </aside>
     </div>
     <footer className="stop-footer"><button aria-label="Previous stop" className="button button--quiet" disabled={activeIndex === 0} onClick={() => onNavigate(-1)} type="button"><Icon name="arrow-left" size={16} /> Previous</button><span>{status === "understood" ? "Marked understood" : status === "flagged" ? "Flagged for review" : "Ready for your judgment"}</span><button className="button button--complete" onClick={onUnderstood} type="button"><Icon name="check" size={16} />{activeIndex === totalStops - 1 ? "Mark understood & finish" : "Mark understood"}<Icon name="arrow-right" size={16} /></button></footer>
@@ -759,10 +864,11 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
     });
   }
 
-  function openComment(useFinding = false) {
+  function openComment(useFinding = false, initialBody = "", preferredEvidenceId?: string) {
+    const preferredEvidence = activeStop.evidence.find((item) => item.id === preferredEvidenceId);
     const selectedEvidence = activeStop.evidence.find((item) => item.id === selection?.evidenceId);
     const findingEvidence = activeStop.evidence.find((item) => item.id === activeStop.finding?.evidenceId);
-    const evidence = selectedEvidence ?? (useFinding ? findingEvidence : activeEvidence) ?? activeEvidence;
+    const evidence = preferredEvidence ?? selectedEvidence ?? (useFinding ? findingEvidence : activeEvidence) ?? activeEvidence;
     const start = selection?.evidenceId === evidence.id
       ? Math.min(selection.start, selection.end)
       : evidence.startLine;
@@ -774,7 +880,7 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
       evidence,
       startLine: start,
       endLine: end,
-      body: useFinding ? activeStop.finding?.suggestedComment ?? "" : "",
+      body: initialBody || (useFinding ? activeStop.finding?.suggestedComment ?? "" : ""),
       severity: useFinding ? activeStop.finding?.severity ?? "medium" : "low",
     });
   }
@@ -939,10 +1045,12 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
           answering={answering}
           entries={stopNotebook}
           evidence={activeEvidence}
+          headSha={pullRequest.headSha}
           modelName={activeModelLabel}
           onAsk={askQuestion}
           onClose={() => setDrawerOpen(false)}
           onQuestion={setQuestion}
+          onUseAnswer={(entry) => { openComment(false, entry.answer, entry.evidenceId); setDrawerOpen(false); }}
           question={question}
           providerConfigured={Boolean(activeProvider?.configured)}
           stop={activeStop}
@@ -1074,7 +1182,7 @@ function ReviewDesk({ comments, disposition, onBack, onDisposition, onPublish, o
   return <div className="page page--review"><header className="review-header"><button className="back-link" onClick={onBack} type="button"><Icon name="arrow-left" size={15} /> Back to tour</button><div className="eyebrow">Review desk</div><h1>Turn your understanding into a decision.</h1><p>Everything below is local until you publish. Preview the exact review GitHub will receive.</p></header><div className="review-summary-strip"><div><span className="summary-icon summary-icon--green"><Icon name="check" /></span><span><strong>{understood}/{tourStops.length}</strong><small>stops understood</small></span></div><div><span className="summary-icon summary-icon--amber"><Icon name="flag" /></span><span><strong>{flagged}</strong><small>open flag{flagged === 1 ? "" : "s"}</small></span></div><div><span className="summary-icon summary-icon--blue"><Icon name="comment" /></span><span><strong>{comments.length}</strong><small>draft comment{comments.length === 1 ? "" : "s"}</small></span></div><div className="review-sha"><span className="live-dot" /><span><strong>Head is current</strong><small>{pullRequest.headSha} · checked just now</small></span></div></div><div className="review-grid"><div className="review-main"><section className="review-section"><header><div><span>01</span><div><h2>Review summary</h2><p>Set the context before inline feedback.</p></div></div><small>{summary.length} characters</small></header><textarea onChange={(event) => onSummary(event.target.value)} rows={6} value={summary} /></section><section className="review-section"><header><div><span>02</span><div><h2>Inline comments</h2><p>Anchors are pinned to {pullRequest.headSha}.</p></div></div><small>{comments.length} draft{comments.length === 1 ? "" : "s"}</small></header>{comments.length === 0 ? <div className="empty-comments"><Icon name="comment" /><strong>No inline comments yet</strong><span>You can still publish a summary-only review.</span></div> : <div className="review-comments">{comments.map((comment) => <article key={comment.id}><header><span className={`risk-level risk-level--${comment.severity}`}>{comment.severity}</span><code>{comment.path}:{comment.startLine}{comment.endLine !== comment.startLine ? `–${comment.endLine}` : ""}</code><button aria-label="Remove draft comment" onClick={() => onRemoveComment(comment.id)} type="button"><Icon name="x" size={15} /></button></header><p>{comment.body}</p></article>)}</div>}</section></div><aside className="publish-card"><div className="eyebrow">Final disposition</div><h2>How should GitHub record this review?</h2><div className="disposition-list">{(["COMMENT", "APPROVE", "REQUEST_CHANGES"] as ReviewDisposition[]).map((value) => <button className={disposition === value ? "is-active" : ""} key={value} onClick={() => onDisposition(value)} type="button"><span className="radio"><i /></span><span><strong>{labelDisposition(value)}</strong><small>{dispositionDescription(value)}</small></span></button>)}</div><div className="publish-preview"><span>Will publish</span><strong>{comments.length} inline comment{comments.length === 1 ? "" : "s"}</strong><strong>1 review summary</strong><small>as @alex-rivera</small></div><button className="button button--publish" onClick={onPublish} type="button">Publish review to GitHub <Icon name="external" size={16} /></button><p className="publish-note"><Icon name="shield" size={13} /> This prototype simulates submission. No network request will be made.</p></aside></div></div>;
 }
 
-function InvestigationDrawer({ answering, entries, evidence, modelName, onAsk, onClose, onQuestion, providerConfigured, question, stop }: { answering: boolean; entries: NotebookEntry[]; evidence: EvidenceBlock; modelName: string; onAsk: (prompt?: string) => void; onClose: () => void; onQuestion: (value: string) => void; providerConfigured: boolean; question: string; stop: TourStop }) {
+function InvestigationDrawer({ answering, entries, evidence, headSha, modelName, onAsk, onClose, onQuestion, onUseAnswer, providerConfigured, question, stop }: { answering: boolean; entries: NotebookEntry[]; evidence: EvidenceBlock; headSha: string; modelName: string; onAsk: (prompt?: string) => void; onClose: () => void; onQuestion: (value: string) => void; onUseAnswer: (entry: NotebookEntry) => void; providerConfigured: boolean; question: string; stop: TourStop }) {
   return <>
     <button aria-label="Close investigation" className="drawer-backdrop" onClick={onClose} type="button" />
     <aside aria-label="Investigation notebook" className="investigation-drawer">
@@ -1082,10 +1190,10 @@ function InvestigationDrawer({ answering, entries, evidence, modelName, onAsk, o
         <div><span className="card-icon card-icon--spark"><Icon name="spark" size={17} /></span><div><div className="eyebrow">Investigation notebook</div><strong>{stop.eyebrow}</strong></div></div>
         <div className="drawer-header-actions"><span className={`drawer-model ${providerConfigured ? "is-live" : ""}`}><i />{providerConfigured ? modelName : "Fixture answers"}</span><button aria-label="Close investigation" className="icon-button" onClick={onClose} type="button"><Icon name="x" size={17} /></button></div>
       </header>
-      <div className="drawer-context"><span>Attached evidence</span><div><Icon name="code" size={14} /><span><strong>{fileName(evidence.path)}</strong><small>lines {evidence.startLine}–{evidence.endLine} · {pullRequest.headSha}</small></span><Icon name="check" size={13} /></div></div>
+      <div className="drawer-context"><span>Attached evidence</span><div><Icon name="code" size={14} /><span><strong>{fileName(evidence.path)}</strong><small>lines {evidence.startLine}–{evidence.endLine} · {headSha.slice(0, 12)}</small></span><Icon name="check" size={13} /></div></div>
       <div className="drawer-thread">
         {entries.length === 0 && <div className="drawer-intro"><h2>Ask about this change</h2><div className="suggested-questions">{stop.prompts.map((prompt) => <button key={prompt} onClick={() => onAsk(prompt)} type="button">{prompt}<Icon name="arrow-right" size={13} /></button>)}</div></div>}
-        {entries.map((entry) => <div className="thread-entry" key={entry.id}><div className="thread-question"><span>You</span><p>{entry.question}</p></div><div className={`thread-answer ${entry.status === "error" ? "is-error" : ""}`}><header><span className="card-icon card-icon--spark"><Icon name="spark" size={14} /></span><strong>{entry.model ?? "Guided fixture"}</strong><small><i className="confidence-dot" /> {entry.provider === "fixture" || !entry.provider ? "Fixture response" : "Grounded in current evidence"}</small></header>{entry.answer ? <p>{entry.answer}</p> : <div className="inline-thinking"><i /><i /><i /></div>}<button disabled={entry.status === "streaming"} type="button"><Icon name="comment" size={13} /> Use as comment</button></div></div>)}
+        {entries.map((entry) => <div className="thread-entry" key={entry.id}><div className="thread-question"><span>You</span><p>{entry.question}</p></div><div className={`thread-answer ${entry.status === "error" ? "is-error" : ""}`}><header><span className="card-icon card-icon--spark"><Icon name="spark" size={14} /></span><strong>{entry.model ?? "Guided fixture"}</strong><small><i className="confidence-dot" /> {entry.provider === "fixture" || !entry.provider ? "Fixture response" : "Grounded in current evidence"}</small></header>{entry.answer ? <p>{entry.answer}</p> : <div className="inline-thinking"><i /><i /><i /></div>}<button disabled={entry.status !== "complete" || !entry.answer.trim()} onClick={() => onUseAnswer(entry)} type="button"><Icon name="comment" size={13} /> Use as comment</button></div></div>)}
         {answering && entries.every((entry) => entry.status !== "streaming") && <div className="thinking"><i /><i /><i /><span>Tracing the evidence…</span></div>}
       </div>
       <form className="drawer-input" onSubmit={(event) => { event.preventDefault(); onAsk(); }}><textarea aria-label="Ask about this change" onChange={(event) => onQuestion(event.target.value)} placeholder="Ask about behavior, failure modes, or context…" rows={3} value={question} /><div><span><kbd>↵</kbd> to ask · {providerConfigured ? `using ${modelName}` : "fixture mode"}</span><button aria-label="Ask question" disabled={!question.trim() || answering} type="submit"><Icon name="arrow-right" size={17} /></button></div></form>

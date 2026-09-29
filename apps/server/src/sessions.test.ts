@@ -94,7 +94,7 @@ describe("local review sessions", () => {
       selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
       tour: { summary: "The counter change is small and focused." },
     });
-    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(8);
+    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(9);
     store.close();
   });
 
@@ -129,6 +129,24 @@ describe("local review sessions", () => {
       body: "Ready after the expiry question is answered.", event: "COMMENT",
     }, [])).toMatchObject({ githubReviewId: 91, event: "COMMENT", comments: [] });
     expect(store.getSubmittedReview(session.id, session.metadata.head.sha)?.url).toBe("https://github.com/review/91");
+    store.close();
+  });
+
+  it("persists investigation notebook entries", () => {
+    const times = [
+      new Date("2026-09-29T12:00:00Z"),
+      new Date("2026-09-29T12:01:00Z"),
+      new Date("2026-09-29T12:02:00Z"),
+    ];
+    const store = new SessionStore(":memory:", () => times.shift()!);
+    const session = store.upsertReadySession(target, metadata(), evidence());
+    const entry = store.createInvestigationEntry(session.id, {
+      stopId: "counter", evidenceId: "counter-file", question: "Can this race?", provider: "codex", model: "gpt-6-sol",
+    });
+    expect(entry.status).toBe("streaming");
+    expect(store.updateInvestigationEntry(session.id, entry.id, "The increment is atomic.", "complete"))
+      .toMatchObject({ answer: "The increment is atomic.", status: "complete" });
+    expect(store.listInvestigationEntries(session.id)).toHaveLength(1);
     store.close();
   });
 

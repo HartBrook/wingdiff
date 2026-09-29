@@ -123,9 +123,10 @@ export interface DraftComment {
 export interface NotebookEntry {
   id: string;
   stopId: string;
+  evidenceId?: string;
   question: string;
   answer: string;
-  createdAt: number;
+  createdAt: number | string;
   provider: ProviderId | "fixture";
   model: string;
   status: AnswerStatus;

@@ -142,6 +142,42 @@ describe("generated tour API", () => {
     expect(publishedComments).toBe(0);
     expect(await (await fetch(submissionUrl)).json()).toMatchObject({ submission: { githubReviewId: 91, event: "APPROVE" } });
   });
+
+  it("persists a session investigation notebook", async () => {
+    store = new SessionStore(":memory:");
+    const session = store.upsertReadySession(target, metadata, evidence);
+    const app = createApp({}, { sessionStore: store, providers: new Map() });
+    server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => server!.once("listening", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const url = `http://127.0.0.1:${port}/api/sessions/${session.id}/investigations`;
+
+    const created = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        stopId: "atomic-counter", evidenceId: "session-0-src/counter.ts", question: "Can this race?",
+        provider: "codex", model: "gpt-6-sol",
+      }),
+    });
+    const createdBody = await created.json() as { entry: { id: string; status: string } };
+    expect(created.status).toBe(201);
+    expect(createdBody.entry.status).toBe("streaming");
+
+    const saved = await fetch(`${url}/${createdBody.entry.id}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ answer: "The increment is atomic.", status: "complete" }),
+    });
+    expect(saved.status).toBe(200);
+    expect(await (await fetch(url)).json()).toMatchObject({ entries: [{
+      id: createdBody.entry.id, answer: "The increment is atomic.", status: "complete",
+    }] });
+
+    const invalid = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stopId: "atomic-counter", evidenceId: "evidence", question: "?", provider: "other", model: "x" }),
+    });
+    expect(invalid.status).toBe(400);
+  });
 });
 
 const target = parsePullRequestTarget("https://github.com/openai/codex/pull/42");

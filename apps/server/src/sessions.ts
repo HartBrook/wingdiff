@@ -111,6 +111,20 @@ export interface SubmittedReview {
   submittedAt: string;
 }
 
+export interface InvestigationEntry {
+  id: string;
+  sessionId: string;
+  stopId: string;
+  evidenceId: string;
+  question: string;
+  answer: string;
+  provider: "codex" | "openai" | "anthropic";
+  model: string;
+  status: "streaming" | "complete" | "error";
+  createdAt: string;
+  updatedAt: string;
+}
+
 export class SessionStore {
   readonly database: DatabaseSync;
 
@@ -431,6 +445,47 @@ export class SessionStore {
     return this.getSubmittedReview(sessionId, headSha)!;
   }
 
+  listInvestigationEntries(sessionId: string): InvestigationEntry[] {
+    this.requireSession(sessionId);
+    return this.database.prepare(`
+      SELECT * FROM investigation_entries WHERE session_id = ? ORDER BY created_at, id
+    `).all(sessionId).map(rowToInvestigationEntry);
+  }
+
+  createInvestigationEntry(
+    sessionId: string,
+    input: Pick<InvestigationEntry, "stopId" | "evidenceId" | "question" | "provider" | "model">,
+  ): InvestigationEntry {
+    this.requireSession(sessionId);
+    const id = randomUUID();
+    const timestamp = this.now().toISOString();
+    this.database.prepare(`
+      INSERT INTO investigation_entries (
+        id, session_id, stop_id, evidence_id, question, answer, provider, model, status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, '', ?, ?, 'streaming', ?, ?)
+    `).run(id, sessionId, input.stopId, input.evidenceId, input.question, input.provider, input.model, timestamp, timestamp);
+    return this.getInvestigationEntry(sessionId, id)!;
+  }
+
+  updateInvestigationEntry(
+    sessionId: string,
+    id: string,
+    answer: string,
+    status: InvestigationEntry["status"],
+  ): InvestigationEntry | undefined {
+    this.requireSession(sessionId);
+    this.database.prepare(`
+      UPDATE investigation_entries SET answer = ?, status = ?, updated_at = ?
+      WHERE id = ? AND session_id = ?
+    `).run(answer, status, this.now().toISOString(), id, sessionId);
+    return this.getInvestigationEntry(sessionId, id);
+  }
+
+  private getInvestigationEntry(sessionId: string, id: string): InvestigationEntry | undefined {
+    const row = this.database.prepare("SELECT * FROM investigation_entries WHERE id = ? AND session_id = ?").get(id, sessionId);
+    return row ? rowToInvestigationEntry(row) : undefined;
+  }
+
   close() {
     this.database.close();
   }
@@ -452,7 +507,7 @@ export function defaultDatabasePath(environment: NodeJS.ProcessEnv = process.env
 
 function migrate(database: DatabaseSync) {
   let version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
-  if (version > 8) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
+  if (version > 9) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
 
   if (version === 0) database.exec(`
     BEGIN;
@@ -617,6 +672,27 @@ function migrate(database: DatabaseSync) {
     PRAGMA user_version = 8;
     COMMIT;
   `);
+
+  version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+  if (version === 8) database.exec(`
+    BEGIN;
+    CREATE TABLE investigation_entries (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES review_sessions(id) ON DELETE CASCADE,
+      stop_id TEXT NOT NULL,
+      evidence_id TEXT NOT NULL,
+      question TEXT NOT NULL,
+      answer TEXT NOT NULL,
+      provider TEXT NOT NULL CHECK (provider IN ('codex', 'openai', 'anthropic')),
+      model TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('streaming', 'complete', 'error')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX investigation_entries_session ON investigation_entries(session_id, created_at);
+    PRAGMA user_version = 9;
+    COMMIT;
+  `);
 }
 
 function rowToSession(row: Record<string, unknown>): ReviewSession {
@@ -644,6 +720,22 @@ function rowToDraftComment(row: Record<string, unknown>): DraftReviewComment {
     body: String(row.body),
     severity: String(row.severity) as DraftReviewComment["severity"],
     fingerprint: String(row.fingerprint),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+function rowToInvestigationEntry(row: Record<string, unknown>): InvestigationEntry {
+  return {
+    id: String(row.id),
+    sessionId: String(row.session_id),
+    stopId: String(row.stop_id),
+    evidenceId: String(row.evidence_id),
+    question: String(row.question),
+    answer: String(row.answer),
+    provider: String(row.provider) as InvestigationEntry["provider"],
+    model: String(row.model),
+    status: String(row.status) as InvestigationEntry["status"],
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };

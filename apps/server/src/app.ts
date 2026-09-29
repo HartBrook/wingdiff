@@ -6,7 +6,7 @@ import { inspectLocalTarget } from "./preflight.js";
 import { createProviders, publicProviders, validateSelection } from "./providers/index.js";
 import type { ProviderId, TextProvider } from "./providers/types.js";
 import { SessionStore } from "./sessions.js";
-import type { FindingCheckpoint, ReviewDraft, TourScope } from "./sessions.js";
+import type { FindingCheckpoint, InvestigationEntry, ReviewDraft, TourScope } from "./sessions.js";
 import { parsePullRequestTarget } from "./targets.js";
 import { generateSessionTour, getSessionTour } from "./tourService.js";
 import { validateInvestigationContext } from "./validation.js";
@@ -157,6 +157,50 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
       return;
     }
     response.status(204).end();
+  });
+
+  app.get("/api/sessions/:id/investigations", (request, response) => {
+    const session = sessionStore.getSession(request.params.id);
+    if (!session) {
+      response.status(404).json({ error: "Review session not found." });
+      return;
+    }
+    response.json({ entries: sessionStore.listInvestigationEntries(session.id) });
+  });
+
+  app.post("/api/sessions/:id/investigations", (request, response) => {
+    try {
+      const session = sessionStore.getSession(request.params.id);
+      if (!session) {
+        response.status(404).json({ error: "Review session not found." });
+        return;
+      }
+      const input = investigationEntryInput(request.body);
+      response.status(201).json({ entry: sessionStore.createInvestigationEntry(session.id, input) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Wingdiff could not start this investigation.";
+      response.status(400).json({ error: message });
+    }
+  });
+
+  app.patch("/api/sessions/:id/investigations/:entryId", (request, response) => {
+    try {
+      const session = sessionStore.getSession(request.params.id);
+      if (!session) {
+        response.status(404).json({ error: "Review session not found." });
+        return;
+      }
+      const update = investigationEntryUpdate(request.body);
+      const entry = sessionStore.updateInvestigationEntry(session.id, request.params.entryId, update.answer, update.status);
+      if (!entry) {
+        response.status(404).json({ error: "Investigation entry not found." });
+        return;
+      }
+      response.json({ entry });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Wingdiff could not save this investigation.";
+      response.status(400).json({ error: message });
+    }
   });
 
   app.get("/api/sessions/:id/review-draft", (request, response) => {
@@ -474,6 +518,32 @@ function reviewDraftInput(input: unknown): Pick<ReviewDraft, "body" | "event"> {
   const event = value.event;
   if (event !== "COMMENT" && event !== "APPROVE" && event !== "REQUEST_CHANGES") throw new Error("Review disposition is invalid.");
   return { body, event };
+}
+
+function investigationEntryInput(input: unknown): Pick<InvestigationEntry, "stopId" | "evidenceId" | "question" | "provider" | "model"> {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Investigation context is required.");
+  const value = input as Record<string, unknown>;
+  const provider = value.provider;
+  if (provider !== "codex" && provider !== "openai" && provider !== "anthropic") {
+    throw new Error("Investigation provider is invalid.");
+  }
+  return {
+    stopId: requiredText(value.stopId, "Investigation stop", 128),
+    evidenceId: requiredText(value.evidenceId, "Investigation evidence", 1024),
+    question: requiredText(value.question, "Investigation question", 4_000),
+    provider,
+    model: requiredText(value.model, "Investigation model", 128),
+  };
+}
+
+function investigationEntryUpdate(input: unknown): Pick<InvestigationEntry, "answer" | "status"> {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Investigation result is required.");
+  const value = input as Record<string, unknown>;
+  if (typeof value.answer !== "string" || value.answer.length > 65_536) {
+    throw new Error("Investigation answer must be at most 65536 characters.");
+  }
+  if (value.status !== "complete" && value.status !== "error") throw new Error("Investigation status is invalid.");
+  return { answer: value.answer, status: value.status };
 }
 
 function requiredText(input: unknown, label: string, maximum: number): string {

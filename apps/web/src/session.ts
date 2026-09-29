@@ -1,4 +1,4 @@
-import type { Confidence, EvidenceBlock, ModelSelection, TourStop } from "./types";
+import type { AnswerStatus, Confidence, EvidenceBlock, ModelSelection, ProviderId, TourStop } from "./types";
 import type { PullRequestTarget } from "./launcher";
 
 export interface SessionEvidenceLine {
@@ -175,6 +175,20 @@ export interface StoredReviewSubmission {
   submittedAt: string;
 }
 
+export interface StoredInvestigationEntry {
+  id: string;
+  sessionId: string;
+  stopId: string;
+  evidenceId: string;
+  question: string;
+  answer: string;
+  provider: ProviderId;
+  model: string;
+  status: AnswerStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ReviewRefreshResult {
   status: "current" | "updated";
   session: AcquiredReviewSession;
@@ -270,6 +284,43 @@ export async function deleteDraftComment(id: string, commentId: string): Promise
   if (response.ok) return;
   const body = await response.json() as { error?: string };
   throw new Error(body.error ?? "Wingdiff could not remove this draft comment.");
+}
+
+export async function fetchInvestigationEntries(id: string, signal?: AbortSignal): Promise<StoredInvestigationEntry[]> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/investigations`, { signal });
+  const body = await response.json() as { entries?: StoredInvestigationEntry[]; error?: string };
+  if (!response.ok || !body.entries) throw new Error(body.error ?? "Wingdiff could not load the investigation notebook.");
+  return body.entries;
+}
+
+export async function createInvestigationEntry(
+  id: string,
+  input: Pick<StoredInvestigationEntry, "stopId" | "evidenceId" | "question" | "provider" | "model">,
+): Promise<StoredInvestigationEntry> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/investigations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body = await response.json() as { entry?: StoredInvestigationEntry; error?: string };
+  if (!response.ok || !body.entry) throw new Error(body.error ?? "Wingdiff could not start this investigation.");
+  return body.entry;
+}
+
+export async function updateInvestigationEntry(
+  id: string,
+  entryId: string,
+  answer: string,
+  status: "complete" | "error",
+): Promise<StoredInvestigationEntry> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/investigations/${encodeURIComponent(entryId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ answer, status }),
+  });
+  const body = await response.json() as { entry?: StoredInvestigationEntry; error?: string };
+  if (!response.ok || !body.entry) throw new Error(body.error ?? "Wingdiff could not save this investigation.");
+  return body.entry;
 }
 
 export async function fetchReviewDraft(id: string, signal?: AbortSignal): Promise<StoredReviewDraft | null> {
