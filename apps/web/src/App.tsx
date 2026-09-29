@@ -23,7 +23,7 @@ import type {
 } from "./types";
 import { CodeDiff } from "./components/CodeDiff";
 import { Icon } from "./components/Icon";
-import { addRecentTarget, parseLaunchRoute, preparePullRequestTarget, type PullRequestTarget, type TargetPreparation } from "./launcher";
+import { addRecentTarget, parseLaunchRoute, preparePullRequestTarget, type LaunchRoute, type PullRequestTarget, type TargetPreparation } from "./launcher";
 import { claimKindLabel, compareSeverity } from "./reviewPresentation";
 
 interface Selection {
@@ -50,13 +50,22 @@ const rankedFindings = tourStops
   .sort((left, right) => compareSeverity(left.finding.severity, right.finding.severity));
 
 export default function App() {
-  const route = useMemo(() => parseLaunchRoute(window.location.search), []);
-  const [demoOpen, setDemoOpen] = useState(route.demo);
+  const [route, setRoute] = useState<LaunchRoute>(() => parseLaunchRoute(window.location.search));
 
-  if (demoOpen) return <ReviewApp />;
+  useEffect(() => {
+    const syncRoute = () => setRoute(parseLaunchRoute(window.location.search));
+    window.addEventListener("popstate", syncRoute);
+    return () => window.removeEventListener("popstate", syncRoute);
+  }, []);
+
+  function navigate(search: string) {
+    window.history.pushState({}, "", `${window.location.pathname}${search}`);
+    setRoute(parseLaunchRoute(search));
+  }
+
+  if (route.demo) return <ReviewApp onHome={() => navigate("")} />;
   return <Launcher initialTarget={route.target} onDemo={() => {
-    window.history.pushState({}, "", "?demo=1");
-    setDemoOpen(true);
+    navigate("?demo=1");
   }} />;
 }
 
@@ -132,7 +141,7 @@ function Launcher({ initialTarget, onDemo }: { initialTarget?: string; onDemo: (
   </div>;
 }
 
-function ReviewApp() {
+function ReviewApp({ onHome }: { onHome: () => void }) {
   const [view, setView] = useState<View>("brief");
   const [reviewMode, setReviewMode] = useState<ReviewMode>("update");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -362,6 +371,7 @@ function ReviewApp() {
       <TopBar
         activeModel={activeModelLabel}
         comments={comments.length}
+        onHome={onHome}
         onMenu={() => setMobileNavOpen((open) => !open)}
         onModel={() => setModelPickerOpen(true)}
         onReview={() => setView("review")}
@@ -476,12 +486,13 @@ function ReviewApp() {
   );
 }
 
-function TopBar({ activeModel, comments, onMenu, onModel, onReview, onTheme, providerConfigured, theme }: { activeModel: string; comments: number; onMenu: () => void; onModel: () => void; onReview: () => void; onTheme: () => void; providerConfigured: boolean; theme: "dark" | "light" }) {
+function TopBar({ activeModel, comments, onHome, onMenu, onModel, onReview, onTheme, providerConfigured, theme }: { activeModel: string; comments: number; onHome: () => void; onMenu: () => void; onModel: () => void; onReview: () => void; onTheme: () => void; providerConfigured: boolean; theme: "dark" | "light" }) {
   return (
     <header className="topbar">
       <button aria-label="Open navigation" className="icon-button mobile-menu" onClick={onMenu} type="button"><Icon name="menu" /></button>
       <div className="brand"><span className="brand__mark"><Icon name="route" size={19} /></span><span>wingdiff</span></div>
       <div className="topbar__divider" />
+      <button className="home-button" onClick={onHome} type="button"><Icon name="arrow-left" size={14} /><span>New review</span></button>
       <div className="pr-identity"><span>{pullRequest.repository}</span><strong>#{pullRequest.number}</strong><span className="pr-identity__title">{pullRequest.title}</span></div>
       <div className="topbar__spacer" />
       <button className="model-button" onClick={onModel} type="button">

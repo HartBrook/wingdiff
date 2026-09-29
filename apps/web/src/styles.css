@@ -114,6 +114,7 @@ code, kbd { font-family: var(--mono); }
 .brand { display: flex; align-items: center; gap: 9px; min-width: 235px; font-weight: 700; letter-spacing: -.02em; }
 .brand__mark { display: grid; width: 31px; height: 31px; place-items: center; color: #15131f; border-radius: 9px; background: var(--accent); box-shadow: 0 0 24px var(--accent-soft); }
 .topbar__divider { width: 1px; height: 22px; background: var(--border); }
+.home-button { display: inline-flex; height: 32px; align-items: center; padding: 0 9px; gap: 6px; color: var(--text-3); border: 1px solid transparent; border-radius: 8px; background: transparent; cursor: pointer; font-size: 10px; white-space: nowrap; }.home-button:hover { color: var(--text); border-color: var(--border); background: var(--surface); }
 .pr-identity { display: flex; min-width: 0; align-items: center; gap: 9px; color: var(--text-3); font-size: 13px; }
 .pr-identity strong { color: var(--text-2); font-family: var(--mono); font-size: 12px; }
 .pr-identity__title { max-width: min(32vw, 380px); overflow: hidden; color: var(--text); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
@@ -518,6 +519,7 @@ code, kbd { font-family: var(--mono); }
   .brief-grid { grid-template-columns: 1fr; }
   .panel--risk .risk-list { display: grid; grid-template-columns: 1fr 1fr; }
   .review-grid { grid-template-columns: minmax(0, 1fr) 300px; }
+  .home-button span { display: none; }
 }
 
 @media (max-width: 860px) {
