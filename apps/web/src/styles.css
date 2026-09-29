@@ -227,8 +227,16 @@ code, kbd { font-family: var(--mono); }
 .summary-finding-list button { display: grid; width: 100%; min-height: 92px; grid-template-columns: 30px 54px minmax(0, 1fr) 20px; align-items: center; padding: 15px 10px; gap: 12px; color: var(--text-3); border: 0; border-bottom: 1px solid var(--border-soft); background: transparent; cursor: pointer; text-align: left; }
 .summary-finding-list button:last-child { border-bottom: 0; }
 .summary-finding-list button:hover { border-radius: 10px; background: var(--surface-2); }
+.summary-finding-list button.is-static { cursor: default; }
+.summary-finding-list button.is-static:hover { border-radius: 0; background: transparent; }
+.summary-finding-group + .summary-finding-group { border-top: 1px solid var(--border); }
+.summary-finding-group__label { padding: 12px 22px 2px; color: var(--text-4); font-size: 8px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
 .finding-rank { color: var(--text-4); font-family: var(--mono); font-size: 9px; }
 .resolution-badge { display: inline-flex !important; align-items: center; justify-content: center; padding: 5px 6px; gap: 4px; color: var(--green); border: 1px solid color-mix(in srgb, var(--green) 30%, var(--border)); border-radius: 7px; background: var(--green-soft); font-size: 7px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.continuity-badge { display: inline-flex; align-items: center; justify-content: center; padding: 5px 6px; color: var(--text-3); border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); font-size: 7px; font-weight: 700; letter-spacing: .04em; line-height: 1.15; text-align: center; text-transform: uppercase; }
+.continuity-badge.is-still-applies { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 30%, var(--border)); background: var(--coral-soft); }
+.continuity-badge.is-recheck { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 30%, var(--border)); background: var(--amber-soft); }
+.continuity-badge.is-appears-addressed { color: var(--green); border-color: color-mix(in srgb, var(--green) 30%, var(--border)); background: var(--green-soft); }
 .summary-finding-list button > span:nth-child(3) { min-width: 0; }
 .summary-finding-list strong, .summary-finding-list small, .summary-finding-list em { display: block; }
 .summary-finding-list strong { color: var(--text); font-size: 12px; }
@@ -367,6 +375,14 @@ code, kbd { font-family: var(--mono); }
 .finding-card h3 { margin: 13px 0 7px; font-size: 13px; font-weight: 600; }
 .finding-card p { margin: 0; color: var(--text-3); font-size: 10px; line-height: 1.55; }
 .button--finding { width: 100%; margin-top: 14px; color: var(--text); border-color: var(--border-strong); background: var(--surface-2); }
+.continuity-card { padding: 16px; border: 1px solid color-mix(in srgb, var(--amber) 30%, var(--border)); border-radius: 12px; background: linear-gradient(145deg, var(--amber-soft), transparent), var(--surface); }
+.continuity-card + .continuity-card, .continuity-card + .finding-card { margin-top: 10px; }
+.continuity-card.is-still-applies { border-color: color-mix(in srgb, var(--coral) 30%, var(--border)); background: linear-gradient(145deg, var(--coral-soft), transparent), var(--surface); }
+.continuity-card.is-appears-addressed { border-color: color-mix(in srgb, var(--green) 27%, var(--border)); background: linear-gradient(145deg, var(--green-soft), transparent), var(--surface); }
+.continuity-card.is-superseded { border-color: var(--border); background: var(--surface); }
+.continuity-card header { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--text-4); font-size: 8px; }
+.continuity-card h3 { margin: 13px 0 7px; font-size: 13px; font-weight: 600; }
+.continuity-card p { margin: 0; color: var(--text-3); font-size: 10px; line-height: 1.55; }
 .finding-clear { display: flex; align-items: flex-start; padding: 15px; gap: 10px; border: 1px solid color-mix(in srgb, var(--green) 27%, var(--border)); border-radius: 12px; background: linear-gradient(145deg, var(--green-soft), transparent), var(--surface); }
 .finding-clear > span { display: grid; width: 28px; height: 28px; flex: 0 0 auto; place-items: center; color: var(--green); border-radius: 8px; background: var(--green-soft); }
 .finding-clear h3 { margin: 1px 0 5px; font-size: 11px; font-weight: 600; }.finding-clear p { margin: 0; color: var(--text-3); font-size: 9px; line-height: 1.5; }

@@ -135,7 +135,11 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
       response.status(404).json({ error: "Review session not found." });
       return;
     }
-    response.json({ update: sessionStore.getReviewUpdate(session.id) ?? null });
+    const update = sessionStore.getReviewUpdate(session.id);
+    response.json({
+      update: update ?? null,
+      baselineCheckpoint: update ? sessionStore.latestCheckpoint(update.baselineSessionId) ?? null : null,
+    });
   });
 
   app.get("/api/sessions/:id/tour", (request, response) => {

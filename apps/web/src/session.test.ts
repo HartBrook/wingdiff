@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { evidenceBlocks, generatedTourStops, type AcquiredReviewSession, type GeneratedSessionTour } from "./session";
+import {
+  checkpointFindings,
+  evidenceBlocks,
+  generatedTourStops,
+  revisionStopIndex,
+  type AcquiredReviewSession,
+  type GeneratedSessionTour,
+  type ReviewCheckpoint,
+} from "./session";
 
 describe("acquired session evidence", () => {
   it("adapts pinned evidence to the existing diff renderer", () => {
@@ -28,6 +36,7 @@ describe("acquired session evidence", () => {
       headSha: acquired.metadata.head.sha,
       tour: {
         summary: "The counter update is now atomic.",
+        findingRevisions: [],
         stops: [{
           id: "atomic-counter", title: "Counter update", summary: "Redis performs the increment.", purpose: "Check concurrency.",
           anchorIds: ["file-counter", "line-new"],
@@ -52,7 +61,75 @@ describe("acquired session evidence", () => {
     });
     expect(stops[0]?.evidence[0]?.lines.find((line) => line.newLine === 3)?.emphasized).toBe(true);
   });
+
+  it("carries finding continuity into the next checkpoint", () => {
+    const acquired = session();
+    const generated = generatedTour(acquired, "update");
+    generated.tour.findingRevisions = [{
+      findingId: "counter-race",
+      state: "appears-addressed",
+      summary: "The increment is now atomic in Redis.",
+      anchorIds: ["line-new"],
+    }];
+    const baseline: ReviewCheckpoint = {
+      reviewedHeadSha: "c".repeat(40), completedAt: "2026-09-29T11:00:00Z", scope: "full", coverage: {},
+      findingRevisions: [{ findingId: "counter-race", title: "Counter can race", severity: "high", state: "new", summary: "Read and write are separate.", pathHints: ["src/counter.ts"] }],
+    };
+
+    expect(revisionStopIndex(generated, ["line-new"])).toBe(0);
+    expect(checkpointFindings(generated, generatedTourStops(acquired, generated), baseline)).toEqual([{
+      findingId: "counter-race",
+      title: "Counter can race",
+      severity: "high",
+      state: "appears-addressed",
+      summary: "The increment is now atomic in Redis.",
+      pathHints: ["src/counter.ts"],
+    }]);
+  });
+
+  it("records new findings alongside terminal finding history", () => {
+    const acquired = session();
+    const generated = generatedTour(acquired, "update");
+    generated.tour.stops[0]!.finding = {
+      title: "Expiry may be lost", body: "INCR does not establish the expected expiry.", severity: "medium",
+      category: "Correctness", anchorIds: ["line-new"], suggestedComment: "Where is expiry preserved?",
+    };
+    const baseline: ReviewCheckpoint = {
+      reviewedHeadSha: "c".repeat(40), completedAt: "2026-09-29T11:00:00Z", scope: "full", coverage: {},
+      findingRevisions: [{ findingId: "old-race", title: "Old race", severity: "high", state: "resolved", summary: "Reviewer confirmed the fix.", pathHints: ["src/counter.ts"] }],
+    };
+
+    expect(checkpointFindings(generated, generatedTourStops(acquired, generated), baseline)).toEqual([
+      baseline.findingRevisions[0],
+      { findingId: "atomic-counter-finding", title: "Expiry may be lost", severity: "medium", state: "new", summary: "INCR does not establish the expected expiry.", pathHints: ["src/counter.ts"] },
+    ]);
+  });
 });
+
+function generatedTour(acquired: AcquiredReviewSession, scope: GeneratedSessionTour["scope"]): GeneratedSessionTour {
+  return {
+    sessionId: acquired.id,
+    scope,
+    selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
+    baseSha: acquired.metadata.base.sha,
+    headSha: acquired.metadata.head.sha,
+    tour: {
+      summary: "The counter update is now atomic.",
+      findingRevisions: [],
+      stops: [{
+        id: "atomic-counter", title: "Counter update", summary: "Redis performs the increment.", purpose: "Check concurrency.",
+        anchorIds: ["file-counter", "line-new"],
+        claims: [{ text: "The new path calls INCR.", kind: "fact", confidence: "high", anchorIds: ["line-new"] }],
+        prompts: [],
+      }],
+    },
+    anchors: [
+      { id: "file-counter", path: "src/counter.ts", kind: "file" },
+      { id: "line-new", path: "src/counter.ts", kind: "addition", newLine: 3, content: "return redis.incr(key);" },
+    ],
+    createdAt: "2026-09-29T12:01:00Z", updatedAt: "2026-09-29T12:01:00Z",
+  };
+}
 
 function session(): AcquiredReviewSession {
   return {

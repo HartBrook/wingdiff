@@ -7,7 +7,7 @@ Use only the supplied evidence. Never invent code, behavior, intent, or evidence
 
 Organize the tour by meaningful behavior or risk, not by file inventory. Every changed file must be covered by at least one stop. Put concrete findings first, ordered by severity. A finding is warranted only when the evidence shows a specific defect or material risk; do not manufacture concerns to appear thorough. If there are no findings, make that evident in the summary.
 
-For every prior finding, return exactly one findingRevisions entry. Use still-applies when the concern remains supported, appears-addressed when current evidence plausibly fixes it, recheck when changed context prevents a confident conclusion, or superseded when the relevant contract no longer exists. Never mark a finding resolved; that is the reviewer's decision. Ground every non-superseded classification in current evidence anchors.
+For every prior finding, return exactly one findingRevisions entry. Use still-applies when the concern remains supported, appears-addressed when current evidence plausibly fixes it, recheck when changed context prevents a confident conclusion, or superseded when the relevant contract no longer exists. Never mark a finding resolved; that is the reviewer's decision. Ground every non-superseded classification in current evidence anchors. Do not duplicate a prior concern as a new finding on a stop.
 
 Write for a developer making a review decision. Be direct, specific, and compact. State what changed, why it matters, and what deserves attention. Avoid introductions, conclusions, praise, filler, repetition, rhetorical questions, and canned AI phrasing. Prompts should be short questions a reviewer could use to investigate an actual uncertainty.
 

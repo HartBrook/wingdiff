@@ -98,6 +98,12 @@ export interface GeneratedSessionTour {
         suggestedComment: string;
       };
     }>;
+    findingRevisions: Array<{
+      findingId: string;
+      state: "still-applies" | "appears-addressed" | "recheck" | "superseded";
+      summary: string;
+      anchorIds: string[];
+    }>;
   };
   anchors: TourEvidenceAnchor[];
   createdAt: string;
@@ -107,8 +113,18 @@ export interface GeneratedSessionTour {
 export interface ReviewCheckpoint {
   reviewedHeadSha: string;
   completedAt: string;
+  scope: "full" | "update";
   coverage: Record<string, string>;
-  findingRevisions: unknown[];
+  findingRevisions: FindingCheckpoint[];
+}
+
+export interface FindingCheckpoint {
+  findingId: string;
+  title: string;
+  severity: "high" | "medium" | "low";
+  state: "new" | "still-applies" | "appears-addressed" | "recheck" | "superseded" | "resolved";
+  summary: string;
+  pathHints: string[];
 }
 
 export interface StoredReviewUpdate {
@@ -118,6 +134,11 @@ export interface StoredReviewUpdate {
   toHeadSha: string;
   evidence: AcquiredReviewSession["evidence"];
   createdAt: string;
+}
+
+export interface SessionUpdateContext {
+  update: StoredReviewUpdate;
+  baselineCheckpoint: ReviewCheckpoint;
 }
 
 export interface ReviewRefreshResult {
@@ -168,24 +189,25 @@ export async function fetchReviewCheckpoint(id: string, signal?: AbortSignal): P
 
 export async function completeReviewCheckpoint(
   id: string,
+  scope: "full" | "update",
   coverage: Record<string, string>,
-  findingRevisions: unknown[] = [],
+  findingRevisions: FindingCheckpoint[] = [],
 ): Promise<ReviewCheckpoint> {
   const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/checkpoint`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ coverage, findingRevisions }),
+    body: JSON.stringify({ scope, coverage, findingRevisions }),
   });
   const body = await response.json() as { checkpoint?: ReviewCheckpoint; error?: string };
   if (!response.ok || !body.checkpoint) throw new Error(body.error ?? "Wingdiff could not complete this review.");
   return body.checkpoint;
 }
 
-export async function fetchSessionUpdate(id: string, signal?: AbortSignal): Promise<StoredReviewUpdate | null> {
+export async function fetchSessionUpdate(id: string, signal?: AbortSignal): Promise<SessionUpdateContext | null> {
   const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/update`, { signal });
-  const body = await response.json() as { update?: StoredReviewUpdate | null; error?: string };
+  const body = await response.json() as { update?: StoredReviewUpdate | null; baselineCheckpoint?: ReviewCheckpoint | null; error?: string };
   if (!response.ok) throw new Error(body.error ?? "Wingdiff could not load update evidence.");
-  return body.update ?? null;
+  return body.update && body.baselineCheckpoint ? { update: body.update, baselineCheckpoint: body.baselineCheckpoint } : null;
 }
 
 export async function refreshReviewSession(id: string): Promise<ReviewRefreshResult> {
@@ -293,6 +315,76 @@ export function generatedTourStops(
       } : {}),
     };
   });
+}
+
+export function revisionStopIndex(generated: GeneratedSessionTour, revisionAnchorIds: string[]): number {
+  const anchors = new Map(generated.anchors.map((anchor) => [anchor.id, anchor]));
+  const revisionPaths = new Set(revisionAnchorIds.flatMap((id) => {
+    const path = anchors.get(id)?.path;
+    return path ? [path] : [];
+  }));
+
+  return generated.tour.stops.findIndex((stop) => {
+    const stopAnchorIds = [
+      ...stop.anchorIds,
+      ...stop.claims.flatMap((claim) => claim.anchorIds),
+      ...(stop.finding?.anchorIds ?? []),
+    ];
+    return stopAnchorIds.some((id) => revisionAnchorIds.includes(id) || revisionPaths.has(anchors.get(id)?.path ?? ""));
+  });
+}
+
+export function checkpointFindings(
+  generated: GeneratedSessionTour,
+  stops: TourStop[],
+  baseline: ReviewCheckpoint | null,
+): FindingCheckpoint[] {
+  const previous = new Map((baseline?.findingRevisions ?? []).map((finding) => [finding.findingId, finding]));
+  const anchors = new Map(generated.anchors.map((anchor) => [anchor.id, anchor]));
+  const next: FindingCheckpoint[] = [];
+
+  if (generated.scope === "update") {
+    for (const revision of generated.tour.findingRevisions) {
+      const prior = previous.get(revision.findingId);
+      if (!prior) continue;
+      const pathHints = [...new Set(revision.anchorIds.flatMap((id) => {
+        const path = anchors.get(id)?.path;
+        return path ? [path] : [];
+      }))];
+      next.push({
+        ...prior,
+        state: revision.state,
+        summary: revision.summary,
+        pathHints: pathHints.length ? pathHints : prior.pathHints,
+      });
+    }
+    for (const prior of previous.values()) {
+      if ((prior.state === "resolved" || prior.state === "superseded") && !next.some((finding) => finding.findingId === prior.findingId)) {
+        next.push(prior);
+      }
+    }
+  } else {
+    next.push(...previous.values());
+  }
+
+  generated.tour.stops.forEach((rawStop, index) => {
+    const finding = stops[index]?.finding;
+    if (!finding || next.some((candidate) => candidate.findingId === finding.id)) return;
+    const pathHints = [...new Set((rawStop.finding?.anchorIds ?? []).flatMap((id) => {
+      const path = anchors.get(id)?.path;
+      return path ? [path] : [];
+    }))];
+    next.push({
+      findingId: finding.id,
+      title: finding.title,
+      severity: finding.severity,
+      state: "new",
+      summary: finding.body,
+      pathHints,
+    });
+  });
+
+  return next;
 }
 
 async function sessionRequest(url: string, init?: RequestInit): Promise<AcquiredReviewSession> {
