@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evidenceBlocks, type AcquiredReviewSession } from "./session";
+import { evidenceBlocks, generatedTourStops, type AcquiredReviewSession, type GeneratedSessionTour } from "./session";
 
 describe("acquired session evidence", () => {
   it("adapts pinned evidence to the existing diff renderer", () => {
@@ -16,6 +16,39 @@ describe("acquired session evidence", () => {
         { kind: "addition", newLine: 3, content: "return redis.incr(key);" },
       ],
     }]);
+  });
+
+  it("adapts a grounded generated tour and emphasizes exact anchors", () => {
+    const acquired = session();
+    const generated: GeneratedSessionTour = {
+      sessionId: acquired.id,
+      selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
+      headSha: acquired.metadata.head.sha,
+      tour: {
+        summary: "The counter update is now atomic.",
+        stops: [{
+          id: "atomic-counter", title: "Counter update", summary: "Redis performs the increment.", purpose: "Check concurrency.",
+          anchorIds: ["file-counter", "line-new"],
+          claims: [{ text: "The new path calls INCR.", kind: "fact", confidence: "high", anchorIds: ["line-new"] }],
+          prompts: ["Does the client preserve atomicity?"],
+        }],
+      },
+      anchors: [
+        { id: "file-counter", path: "src/counter.ts", kind: "file" },
+        { id: "line-new", path: "src/counter.ts", kind: "addition", newLine: 3, content: "return redis.incr(key);" },
+      ],
+      createdAt: "2026-09-29T12:01:00Z", updatedAt: "2026-09-29T12:01:00Z",
+    };
+
+    const stops = generatedTourStops(acquired, generated);
+
+    expect(stops[0]).toMatchObject({
+      id: "atomic-counter",
+      eyebrow: "Code change",
+      evidence: [{ path: "src/counter.ts" }],
+      claims: [{ evidenceIds: ["session-0-src/counter.ts"] }],
+    });
+    expect(stops[0]?.evidence[0]?.lines.find((line) => line.newLine === 3)?.emphasized).toBe(true);
   });
 });
 

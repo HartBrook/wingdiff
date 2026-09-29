@@ -25,7 +25,16 @@ import { CodeDiff } from "./components/CodeDiff";
 import { Icon } from "./components/Icon";
 import { addRecentTarget, parseLaunchRoute, preparePullRequestTarget, type LaunchRoute, type PullRequestTarget, type TargetPreparation } from "./launcher";
 import { claimKindLabel, compareSeverity } from "./reviewPresentation";
-import { createReviewSession, evidenceBlocks, fetchReviewSession, type AcquiredReviewSession } from "./session";
+import {
+  createReviewSession,
+  evidenceBlocks,
+  fetchReviewSession,
+  fetchSessionTour,
+  generatedTourStops,
+  generateSessionTour,
+  type AcquiredReviewSession,
+  type GeneratedSessionTour,
+} from "./session";
 
 interface Selection {
   evidenceId: string;
@@ -181,14 +190,109 @@ function SessionLoader({ id, onHome }: { id: string; onHome: () => void }) {
 }
 
 function AcquiredReviewApp({ onHome, session }: { onHome: () => void; session: AcquiredReviewSession }) {
-  const [view, setView] = useState<"summary" | "browse">("summary");
+  const [view, setView] = useState<"summary" | "tour" | "browse">("summary");
   const [theme, setTheme] = usePersistentState<"dark" | "light">("wingdiff:theme", "dark");
+  const [generated, setGenerated] = useState<GeneratedSessionTour | null>(null);
+  const [tourLoading, setTourLoading] = useState(true);
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [providers, setProviders] = useState<ProviderDefinition[]>(FALLBACK_PROVIDERS);
+  const [modelSelection, setModelSelection] = usePersistentState<ModelSelection>("wingdiff:model", DEFAULT_SELECTION);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [activeEvidenceId, setActiveEvidenceId] = useState<string | null>(null);
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const [statuses, setStatuses] = usePersistentState<Record<string, StopStatus>>(`wingdiff:statuses:${session.metadata.head.sha}`, {});
+  const [comments, setComments] = usePersistentState<DraftComment[]>(`wingdiff:comments:${session.metadata.head.sha}`, []);
+  const [composer, setComposer] = useState<ComposerState | null>(null);
   const blocks = useMemo(() => evidenceBlocks(session), [session]);
+  const stops = useMemo(() => generated ? generatedTourStops(session, generated) : [], [generated, session]);
   const metadata = session.metadata;
+  const activeStop = stops[activeIndex];
+  const activeEvidence = activeStop?.evidence.find((item) => item.id === activeEvidenceId) ?? activeStop?.evidence[0];
+  const activeProvider = providers.find((provider) => provider.id === modelSelection.provider);
+  const activeModel = selectedModel(providers, modelSelection);
+  const activeModelLabel = activeProvider ? `${activeProvider.name} · ${activeModel.name}` : activeModel.name;
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    Promise.all([
+      fetchSessionTour(session.id, controller.signal).then(setGenerated),
+      fetchProviders(controller.signal).then((availableProviders) => {
+        setProviders(availableProviders);
+        setModelSelection((current) => preferredAvailableSelection(availableProviders, current));
+      }),
+    ]).catch((caught) => {
+      if (caught instanceof DOMException && caught.name === "AbortError") return;
+      setError(caught instanceof Error ? caught.message : "Wingdiff could not prepare this review.");
+    }).finally(() => setTourLoading(false));
+    return () => controller.abort();
+  }, [session.id]);
+
+  useEffect(() => {
+    setActiveEvidenceId(activeStop?.evidence[0]?.id ?? null);
+    setSelection(null);
+  }, [activeStop]);
+
+  async function generateTour() {
+    if (!activeProvider?.configured) {
+      setModelPickerOpen(true);
+      return;
+    }
+    setGenerating(true);
+    setError(null);
+    try {
+      const result = await generateSessionTour(session.id, modelSelection);
+      setGenerated(result);
+      setActiveIndex(0);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Wingdiff could not generate this guided tour.");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  function selectLine(evidenceId: string, line: number, extend: boolean) {
+    setSelection((current) => !extend || !current || current.evidenceId !== evidenceId
+      ? { evidenceId, start: line, end: line }
+      : { ...current, end: line });
+  }
+
+  function openComment(useFinding = false) {
+    if (!activeStop || !activeEvidence) return;
+    const selectedEvidence = activeStop.evidence.find((item) => item.id === selection?.evidenceId);
+    const findingEvidence = activeStop.evidence.find((item) => item.id === activeStop.finding?.evidenceId);
+    const evidence = selectedEvidence ?? (useFinding ? findingEvidence : activeEvidence) ?? activeEvidence;
+    setComposer({
+      stop: activeStop,
+      evidence,
+      startLine: selection?.evidenceId === evidence.id ? Math.min(selection.start, selection.end) : evidence.startLine,
+      endLine: selection?.evidenceId === evidence.id ? Math.max(selection.start, selection.end) : evidence.endLine,
+      body: useFinding ? activeStop.finding?.suggestedComment ?? "" : "",
+      severity: useFinding ? activeStop.finding?.severity ?? "medium" : "low",
+    });
+  }
+
+  function stageComment() {
+    if (!composer?.body.trim()) return;
+    setComments((current) => [...current, {
+      id: crypto.randomUUID(), stopId: composer.stop.id, evidenceId: composer.evidence.id,
+      path: composer.evidence.path, startLine: composer.startLine, endLine: composer.endLine,
+      body: composer.body.trim(), severity: composer.severity,
+    }]);
+    setComposer(null);
+  }
+
+  function markUnderstood() {
+    if (!activeStop) return;
+    setStatuses((current) => ({ ...current, [activeStop.id]: "understood" }));
+    if (activeIndex < stops.length - 1) setActiveIndex((current) => current + 1);
+    else setView("summary");
+  }
 
   return <div className="app-shell acquired-shell">
     <header className="topbar">
@@ -197,28 +301,52 @@ function AcquiredReviewApp({ onHome, session }: { onHome: () => void; session: A
       <button className="home-button" onClick={onHome} type="button"><Icon name="arrow-left" size={14} /><span>New review</span></button>
       <div className="pr-identity"><span>{metadata.repository}</span><strong>#{metadata.number}</strong><span className="pr-identity__title">{metadata.title}</span></div>
       <div className="topbar__spacer" />
+      <button className="model-button" onClick={() => setModelPickerOpen(true)} type="button"><span className="model-button__spark"><Icon name="spark" size={13} /></span><span><small>{activeProvider?.configured ? "Review model" : "Model setup"}</small><strong>{activeModelLabel}</strong></span><Icon name="chevron-right" size={13} /></button>
       <a className="button button--quiet acquired-github-link" href={metadata.url} rel="noreferrer" target="_blank">GitHub <Icon name="external" size={14} /></a>
       <button aria-label={`Use ${theme === "dark" ? "light" : "dark"} theme`} className="icon-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} type="button"><Icon name={theme === "dark" ? "sun" : "moon"} size={17} /></button>
     </header>
-    <main className="main-canvas acquired-canvas">
-      {view === "summary" ? <AcquiredSummary onBrowse={() => setView("browse")} session={session} /> : <AcquiredBrowse blocks={blocks} onSummary={() => setView("summary")} session={session} />}
-    </main>
+    {view === "tour" && generated && activeStop && activeEvidence ? <div className="workspace acquired-workspace">
+      <AcquiredTourRail activeIndex={activeIndex} onBrowse={() => setView("browse")} onSelect={setActiveIndex} onSummary={() => setView("summary")} statuses={statuses} stops={stops} />
+      <main className="main-canvas"><AcquiredTourView activeEvidence={activeEvidence} activeEvidenceId={activeEvidenceId} activeIndex={activeIndex} comments={comments.filter((comment) => comment.stopId === activeStop.id).length} headSha={metadata.head.sha} onComment={() => openComment(false)} onEvidence={setActiveEvidenceId} onFindingComment={() => openComment(true)} onFlag={() => setStatuses((current) => ({ ...current, [activeStop.id]: current[activeStop.id] === "flagged" ? "unseen" : "flagged" }))} onNavigate={(delta) => setActiveIndex((current) => Math.max(0, Math.min(stops.length - 1, current + delta)))} onSelectLine={selectLine} onUnderstood={markUnderstood} selection={selection} status={statuses[activeStop.id] ?? "unseen"} stop={activeStop} totalStops={stops.length} /></main>
+    </div> : <main className="main-canvas acquired-canvas">
+      {view === "summary" ? <AcquiredSummary activeModel={activeModelLabel} error={error} generated={generated} generating={generating} modelReady={Boolean(activeProvider?.configured)} onBegin={() => { setActiveIndex(0); setView("tour"); }} onBrowse={() => setView("browse")} onGenerate={() => void generateTour()} onSelectStop={(index) => { setActiveIndex(index); setView("tour"); }} session={session} stops={stops} tourLoading={tourLoading} /> : <AcquiredBrowse blocks={blocks} onSummary={() => setView("summary")} session={session} />}
+    </main>}
+    {modelPickerOpen && <ModelPicker onClose={() => setModelPickerOpen(false)} onSelection={setModelSelection} providers={providers} selection={modelSelection} />}
+    {composer && <CommentComposer composer={composer} headSha={metadata.head.sha} onCancel={() => setComposer(null)} onChange={(body) => setComposer((current) => current ? { ...current, body } : null)} onSeverity={(severity) => setComposer((current) => current ? { ...current, severity } : null)} onStage={stageComment} />}
   </div>;
 }
 
-function AcquiredSummary({ onBrowse, session }: { onBrowse: () => void; session: AcquiredReviewSession }) {
+function AcquiredSummary({ activeModel, error, generated, generating, modelReady, onBegin, onBrowse, onGenerate, onSelectStop, session, stops, tourLoading }: { activeModel: string; error: string | null; generated: GeneratedSessionTour | null; generating: boolean; modelReady: boolean; onBegin: () => void; onBrowse: () => void; onGenerate: () => void; onSelectStop: (index: number) => void; session: AcquiredReviewSession; stops: TourStop[]; tourLoading: boolean }) {
   const metadata = session.metadata;
   const initials = metadata.author.login.slice(0, 2).toUpperCase();
+  const findings = stops.flatMap((stop, stopIndex) => stop.finding ? [{ finding: stop.finding, stop, stopIndex }] : []).sort((left, right) => compareSeverity(left.finding.severity, right.finding.severity));
   return <div className="page page--brief">
     <div className="brief-hero">
       <div className="brief-hero__meta"><span className="avatar">{initials}</span><span><strong>{metadata.author.login}</strong> wants to merge</span><code>{metadata.head.ref}</code><Icon name="arrow-right" size={13} /><code>{metadata.base.ref}</code></div>
       <div className="brief-hero__title-row"><div><div className="eyebrow">Pull request #{metadata.number} · local evidence</div><h1>{metadata.title}</h1></div><div className={`check-badge ${metadata.checks.failed ? "is-failed" : ""}`}><Icon name={metadata.checks.failed ? "flag" : "check"} size={15} /><span>{metadata.checks.total ? <><strong>{metadata.checks.passed}/{metadata.checks.total}</strong> checks passed</> : <><strong>None</strong> reported</>}</span></div></div>
       <div className="brief-stats"><span><strong>{session.evidence.files.length}</strong> files</span><span><strong className="addition">+{session.evidence.additions}</strong><strong className="deletion">−{session.evidence.deletions}</strong> lines</span><span><strong>{metadata.commits.length}</strong> commits</span><span><code>{metadata.base.sha.slice(0, 7)}</code> → <code>{metadata.head.sha.slice(0, 7)}</code></span></div>
     </div>
-    <section className="summary-findings acquired-evidence-ready"><header><div><div className="eyebrow">Evidence ready</div><h2>The pull request is pinned and available locally</h2></div><span className="summary-verdict"><Icon name="code" size={14} />Not yet analyzed</span></header><div className="summary-clear"><Icon name="check" size={18} /><div><strong>{session.evidence.files.length} changed file{session.evidence.files.length === 1 ? "" : "s"} passed anchor validation.</strong><span>Browse the source evidence now. Semantic tour generation is the next layer.</span></div></div></section>
-    {metadata.body && <section className="summary-context acquired-description"><div><span>Author description</span><p>{metadata.body}</p></div></section>}
-    <section className="begin-card"><div><strong>Read-only evidence</strong><span>Exact diff between pinned base and head revisions</span></div><button className="button button--hero" onClick={onBrowse} type="button">Browse changed files <Icon name="arrow-right" /></button></section>
+    {generated ? <>
+      <section className="summary-findings"><header><div><div className="eyebrow">Findings · ranked by impact</div><h2>{findings.length ? `${findings.length} finding${findings.length === 1 ? "" : "s"} to review before approval` : "No findings currently block approval"}</h2></div><span className={`summary-verdict ${findings.some(({ finding }) => finding.severity === "high") ? "is-high" : findings.length ? "" : "is-clear"}`}><Icon name={findings.length ? "flag" : "check"} size={14} />{findings.length ? "Review needed" : "Approval looks likely"}</span></header>{findings.length ? <div className="summary-finding-list">{findings.map(({ finding, stop, stopIndex }, index) => <button key={finding.id} onClick={() => onSelectStop(stopIndex)} type="button"><span className="finding-rank">{String(index + 1).padStart(2, "0")}</span><span className={`risk-level risk-level--${finding.severity}`}>{finding.severity}</span><span><strong>{finding.title}</strong><small>{finding.body}</small><em>{finding.category} · {stop.title}</em></span><Icon name="chevron-right" size={16} /></button>)}</div> : <div className="summary-clear"><Icon name="check" size={18} /><div><strong>Nothing in the analyzed evidence currently argues against approval.</strong><span>The guided route still provides a full-PR backstop.</span></div></div>}</section>
+      <section className="summary-context"><div><span>Change</span><p>{generated.tour.summary}</p></div><div><span>Author intent</span><p>{metadata.body || "No pull request description was provided."}</p></div></section>
+      <section className="begin-card"><div><strong>{stops.length} review stop{stops.length === 1 ? "" : "s"}</strong><span>{stops.reduce((total, stop) => total + stop.minutes, 0)} min · pinned to {generated.headSha.slice(0, 7)}</span></div><button className="button button--hero" onClick={onBegin} type="button">Start review <Icon name="arrow-right" /></button></section>
+    </> : <>
+      <section className="summary-findings acquired-evidence-ready"><header><div><div className="eyebrow">Evidence ready</div><h2>The pull request is pinned and ready for a guided review</h2></div><span className="summary-verdict"><Icon name="code" size={14} />{tourLoading ? "Checking" : "Not analyzed"}</span></header><div className="summary-clear"><Icon name="check" size={18} /><div><strong>{session.evidence.files.length} changed file{session.evidence.files.length === 1 ? "" : "s"} passed anchor validation.</strong><span>Generate a semantic route with {activeModel}, or inspect the diff directly.</span></div></div></section>
+      {metadata.body && <section className="summary-context acquired-description"><div><span>Author description</span><p>{metadata.body}</p></div></section>}
+      {error && <div className="target-error acquired-generation-error" role="alert"><Icon name="flag" size={14} />{error}</div>}
+      <section className="begin-card"><div><strong>{modelReady ? activeModel : "Choose a configured model"}</strong><span>Analysis stays inside the local Wingdiff process</span></div><div className="acquired-start-actions"><button className="button button--quiet" onClick={onBrowse} type="button">Browse diff</button><button className="button button--hero" disabled={tourLoading || generating} onClick={onGenerate} type="button">{generating ? "Building tour…" : modelReady ? "Generate guided review" : "Choose model"} <Icon name="arrow-right" /></button></div></section>
+    </>}
   </div>;
+}
+
+function AcquiredTourRail({ activeIndex, onBrowse, onSelect, onSummary, statuses, stops }: { activeIndex: number; onBrowse: () => void; onSelect: (index: number) => void; onSummary: () => void; statuses: Record<string, StopStatus>; stops: TourStop[] }) {
+  const completed = stops.filter((stop) => statuses[stop.id] !== undefined && statuses[stop.id] !== "unseen").length;
+  const progress = Math.round((completed / stops.length) * 100);
+  return <aside className="tour-rail"><div className="tour-rail__heading"><span>Review route</span><span>{stops.reduce((total, stop) => total + stop.minutes, 0)} min</span></div><nav aria-label="Review route" className="route-list"><button className="route-item route-item--brief" onClick={onSummary} type="button"><span className="route-item__marker"><Icon name="layers" size={14} /></span><span><strong>Summary</strong><small>Findings and intent</small></span></button><div className="route-list__line" />{stops.map((stop, index) => { const status = statuses[stop.id] ?? "unseen"; return <button className={`route-item ${activeIndex === index ? "is-active" : ""} is-${status}`} key={stop.id} onClick={() => onSelect(index)} type="button"><span className="route-item__marker">{status === "understood" ? <Icon name="check" size={13} /> : status === "flagged" ? <Icon name="flag" size={12} /> : index + 1}</span><span><strong>{stop.eyebrow}</strong><small>{shortTitle(stop.title)}</small></span>{stop.finding && <i className={`severity-dot severity-dot--${stop.finding.severity}`} />}</button>; })}<div className="route-list__line route-list__line--last" /><button className="route-item" onClick={onBrowse} type="button"><span className="route-item__marker"><Icon name="code" size={14} /></span><span><strong>Changed files</strong><small>Browse full diff</small></span></button></nav><div className="rail-progress"><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><span>{progress}%</span></div><div><strong>{completed} of {stops.length}</strong><span>stops reviewed</span></div></div></aside>;
+}
+
+function AcquiredTourView({ activeEvidence, activeEvidenceId, activeIndex, comments, headSha, onComment, onEvidence, onFindingComment, onFlag, onNavigate, onSelectLine, onUnderstood, selection, status, stop, totalStops }: { activeEvidence: EvidenceBlock; activeEvidenceId: string | null; activeIndex: number; comments: number; headSha: string; onComment: () => void; onEvidence: (id: string) => void; onFindingComment: () => void; onFlag: () => void; onNavigate: (delta: number) => void; onSelectLine: (evidenceId: string, line: number, extend: boolean) => void; onUnderstood: () => void; selection: Selection | null; status: StopStatus; stop: TourStop; totalStops: number }) {
+  return <div className="page page--tour" key={stop.id}><header className="stop-header"><div className="stop-header__topline"><div className="eyebrow">{activeIndex + 1}/{totalStops} · {stop.eyebrow}</div></div><h1>{stop.title}</h1><p>{stop.summary}</p><div className="stop-actions"><button className={`button button--quiet ${status === "flagged" ? "is-flagged" : ""}`} onClick={onFlag} type="button"><Icon name="flag" size={15} />{status === "flagged" ? "Flagged" : "Flag"}</button><button className="button button--secondary" onClick={onComment} type="button"><Icon name="comment" size={15} />Comment</button>{comments > 0 && <span className="draft-count">{comments} draft</span>}</div></header><div className="tour-grid"><section className="evidence-column"><div className="section-label"><span>Code change</span><button type="button"><Icon name="code" size={13} /> {headSha.slice(0, 7)}</button></div>{stop.evidence.length > 1 && <div className="evidence-tabs">{stop.evidence.map((item) => <button className={item.id === activeEvidenceId ? "is-active" : ""} key={item.id} onClick={() => onEvidence(item.id)} type="button">{item.label}<span>{fileName(item.path)}</span></button>)}</div>}<CodeDiff evidence={activeEvidence} onComment={onComment} onSelectLine={onSelectLine} selection={selection} /></section><aside className="insight-column"><section className="insight-section finding-section"><div className="section-label"><span>Review finding</span></div>{stop.finding ? <article className={`finding-card finding-card--${stop.finding.severity}`}><header><span className={`risk-level risk-level--${stop.finding.severity}`}>{stop.finding.severity}</span><span>{stop.finding.category}</span></header><h3>{stop.finding.title}</h3><p>{stop.finding.body}</p><button className="button button--finding" onClick={onFindingComment} type="button"><Icon name="comment" size={14} /> Draft from finding</button></article> : <article className="finding-clear"><span><Icon name="check" size={17} /></span><div><h3>No blocking finding here</h3><p>Nothing in this stop currently argues against approval.</p></div></article>}</section><section className="insight-section"><div className="section-label"><span>Observations</span></div><div className="observation-list">{stop.claims.map((claim) => <article className={`observation observation--${claim.kind}`} key={claim.id}><header><span>{claimKindLabel(claim.kind)}</span><small>{claim.confidence} confidence</small></header><p>{claim.text}</p><button type="button"><Icon name="code" size={13} /> {claim.evidenceIds.length} code anchor{claim.evidenceIds.length === 1 ? "" : "s"}</button></article>)}</div></section>{stop.prompts.length > 0 && <section className="insight-section review-prompts"><div className="section-label"><span>Questions to verify</span></div>{stop.prompts.map((prompt, index) => <div className="acquired-prompt" key={prompt}><span>{String(index + 1).padStart(2, "0")}</span>{prompt}</div>)}</section>}</aside></div><footer className="stop-footer"><button aria-label="Previous stop" className="button button--quiet" disabled={activeIndex === 0} onClick={() => onNavigate(-1)} type="button"><Icon name="arrow-left" size={16} /> Previous</button><span>{status === "understood" ? "Marked understood" : status === "flagged" ? "Flagged for review" : "Ready for your judgment"}</span><button className="button button--complete" onClick={onUnderstood} type="button"><Icon name="check" size={16} />{activeIndex === totalStops - 1 ? "Mark understood & finish" : "Mark understood"}<Icon name="arrow-right" size={16} /></button></footer></div>;
 }
 
 function AcquiredBrowse({ blocks, onSummary, session }: { blocks: EvidenceBlock[]; onSummary: () => void; session: AcquiredReviewSession }) {
@@ -709,7 +837,7 @@ function ModelPicker({ onClose, onSelection, providers, selection }: { onClose: 
   </section></div>;
 }
 
-function CommentComposer({ composer, onCancel, onChange, onSeverity, onStage }: { composer: ComposerState; onCancel: () => void; onChange: (value: string) => void; onSeverity: (value: RiskLevel) => void; onStage: () => void }) {
+function CommentComposer({ composer, headSha = pullRequest.headSha, onCancel, onChange, onSeverity, onStage }: { composer: ComposerState; headSha?: string; onCancel: () => void; onChange: (value: string) => void; onSeverity: (value: RiskLevel) => void; onStage: () => void }) {
   const commentSelection: Selection = {
     evidenceId: composer.evidence.id,
     start: composer.startLine,
@@ -720,7 +848,7 @@ function CommentComposer({ composer, onCancel, onChange, onSeverity, onStage }: 
     <header><div><div className="eyebrow">Draft review comment</div><h2>{fileName(composer.evidence.path)}:{composer.startLine}{composer.endLine !== composer.startLine ? `–${composer.endLine}` : ""}</h2></div><button aria-label="Close comment composer" className="icon-button" onClick={onCancel} type="button"><Icon name="x" size={17} /></button></header>
     <div className="comment-workbench">
       <section className="comment-code"><div className="section-label"><span>Code context</span><small>Selected lines stay highlighted</small></div><CodeDiff evidence={composer.evidence} minimal selection={commentSelection} /></section>
-      <section className="comment-editor"><div className="comment-anchor"><Icon name="code" size={14} /><span>{composer.evidence.path}</span><code>{pullRequest.headSha}</code></div><label htmlFor="review-comment">Comment</label><textarea autoFocus id="review-comment" onChange={(event) => onChange(event.target.value)} placeholder="What should the author know?" rows={9} value={composer.body} /><div className="comment-severity"><span>Severity</span>{(["low", "medium", "high"] as RiskLevel[]).map((level) => <button className={composer.severity === level ? "is-active" : ""} key={level} onClick={() => onSeverity(level)} type="button"><i className={`severity-dot severity-dot--${level}`} />{level}</button>)}</div><footer><button className="button button--quiet" onClick={onCancel} type="button">Cancel</button><button className="button button--primary" disabled={!composer.body.trim()} onClick={onStage} type="button">Add to review <Icon name="arrow-right" size={15} /></button></footer></section>
+      <section className="comment-editor"><div className="comment-anchor"><Icon name="code" size={14} /><span>{composer.evidence.path}</span><code>{headSha}</code></div><label htmlFor="review-comment">Comment</label><textarea autoFocus id="review-comment" onChange={(event) => onChange(event.target.value)} placeholder="What should the author know?" rows={9} value={composer.body} /><div className="comment-severity"><span>Severity</span>{(["low", "medium", "high"] as RiskLevel[]).map((level) => <button className={composer.severity === level ? "is-active" : ""} key={level} onClick={() => onSeverity(level)} type="button"><i className={`severity-dot severity-dot--${level}`} />{level}</button>)}</div><footer><button className="button button--quiet" onClick={onCancel} type="button">Cancel</button><button className="button button--primary" disabled={!composer.body.trim()} onClick={onStage} type="button">Add to review <Icon name="arrow-right" size={15} /></button></footer></section>
     </div>
   </section></div>;
 }
@@ -731,6 +859,14 @@ function updateNotebookEntry(
   patch: Partial<NotebookEntry>,
 ) {
   setEntries((current) => current.map((entry) => entry.id === id ? { ...entry, ...patch } : entry));
+}
+
+function preferredAvailableSelection(providers: ProviderDefinition[], current: ModelSelection): ModelSelection {
+  const currentProvider = providers.find((provider) => provider.id === current.provider);
+  if (currentProvider?.configured && currentProvider.models.some((model) => model.id === current.model)) return current;
+  const provider = providers.find((candidate) => candidate.configured);
+  const model = provider?.models[0];
+  return provider && model ? { provider: provider.id, model: model.id, reasoningEffort: model.defaultEffort } : current;
 }
 
 function checkoutMessage(preparation: TargetPreparation): string {
