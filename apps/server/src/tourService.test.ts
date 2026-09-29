@@ -71,6 +71,43 @@ describe("session tour generation", () => {
     expect(store.getTour(session.id)).toBeUndefined();
     store.close();
   });
+
+  it("generates an independent tour from reviewed-head update evidence", async () => {
+    const store = new SessionStore(":memory:");
+    const baselineMetadata = { ...metadata, head: { ref: "feature", sha: "c".repeat(40) } };
+    const baseline = store.upsertReadySession(target, baselineMetadata, { ...evidence, headSha: baselineMetadata.head.sha });
+    const current = store.upsertReadySession(target, metadata, evidence);
+    store.saveReviewUpdate(current.id, baseline.id, {
+      ...evidence,
+      baseSha: baselineMetadata.head.sha,
+      headSha: current.metadata.head.sha,
+    });
+    let suppliedBaseSha = "";
+    const provider: TextProvider = {
+      id: "codex",
+      async generateTour(_selection, input) {
+        suppliedBaseSha = input.pullRequest.baseSha;
+        return {
+          summary: "Only the counter changed since review.",
+          stops: [{
+            id: "counter-update", title: "Counter follow-up", summary: "The follow-up adjusts the counter.", purpose: "Recheck the changed area.",
+            anchorIds: [input.fileAnchorIds[0]!, "line_new-counter"],
+            claims: [{ text: "The counter line changed.", kind: "fact", confidence: "high", anchorIds: ["line_new-counter"] }],
+            prompts: [], finding: null,
+          }],
+        };
+      },
+      async *streamInvestigation() { yield ""; },
+    };
+
+    const generated = await generateSessionTour(current, selection, provider, store, "update");
+
+    expect(suppliedBaseSha).toBe(baselineMetadata.head.sha);
+    expect(generated).toMatchObject({ scope: "update", baseSha: baselineMetadata.head.sha, headSha: metadata.head.sha });
+    expect(getSessionTour(current, store, "update")).toEqual(generated);
+    expect(store.getTour(current.id, "full")).toBeUndefined();
+    store.close();
+  });
 });
 
 const target = parsePullRequestTarget("https://github.com/openai/codex/pull/42");

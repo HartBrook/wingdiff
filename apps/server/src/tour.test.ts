@@ -33,6 +33,14 @@ describe("generated tour contract", () => {
     expect(prompt).toContain("line_new-counter\tnew:2\t+return redis.incr(key)");
   });
 
+  it("uses the evidence revision pair for an update-scoped prompt", () => {
+    const updateEvidence = { ...evidence, baseSha: "c".repeat(40) };
+    const input = buildTourGenerationInput(metadata, updateEvidence);
+
+    expect(input.pullRequest.baseSha).toBe("c".repeat(40));
+    expect(input.pullRequest.headSha).toBe(metadata.head.sha);
+  });
+
   it("accepts concise, fully grounded stops", () => {
     const input = buildTourGenerationInput(metadata, evidence);
     const tour = validateGeneratedTour(validTour(input.fileAnchorIds), input);

@@ -65,7 +65,9 @@ describe("local review sessions", () => {
     const session = store.upsertReadySession(target, metadata(), evidence());
     const stored = store.saveTour(
       session.id,
+      "full",
       { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
+      session.metadata.base.sha,
       session.metadata.head.sha,
       {
         summary: "The counter change is small and focused.",
@@ -83,11 +85,13 @@ describe("local review sessions", () => {
 
     expect(stored).toMatchObject({
       sessionId: session.id,
+      scope: "full",
+      baseSha: "a".repeat(40),
       headSha: "b".repeat(40),
       selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
       tour: { summary: "The counter change is small and focused." },
     });
-    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(3);
+    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(4);
     store.close();
   });
 

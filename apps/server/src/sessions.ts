@@ -10,6 +10,7 @@ import type { GeneratedTour } from "./tour.js";
 import { parsePullRequestTarget, type PullRequestTarget } from "./targets.js";
 
 export type SessionStatus = "acquiring" | "ready" | "failed";
+export type TourScope = "full" | "update";
 
 export interface ReviewSession {
   id: string;
@@ -55,7 +56,9 @@ export interface SessionSummary {
 
 export interface StoredTour {
   sessionId: string;
+  scope: TourScope;
   selection: ModelSelection;
+  baseSha: string;
   headSha: string;
   tour: GeneratedTour;
   createdAt: string;
@@ -228,43 +231,55 @@ export class SessionStore {
     };
   }
 
-  saveTour(sessionId: string, selection: ModelSelection, headSha: string, tour: GeneratedTour): StoredTour {
+  saveTour(
+    sessionId: string,
+    scope: TourScope,
+    selection: ModelSelection,
+    baseSha: string,
+    headSha: string,
+    tour: GeneratedTour,
+  ): StoredTour {
     this.requireSession(sessionId);
     const timestamp = this.now().toISOString();
     this.database.prepare(`
       INSERT INTO generated_tours (
-        session_id, provider, model, reasoning_effort, head_sha, tour_json, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(session_id) DO UPDATE SET
+        session_id, scope, provider, model, reasoning_effort, base_sha, head_sha, tour_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(session_id, scope) DO UPDATE SET
         provider = excluded.provider,
         model = excluded.model,
         reasoning_effort = excluded.reasoning_effort,
+        base_sha = excluded.base_sha,
         head_sha = excluded.head_sha,
         tour_json = excluded.tour_json,
         updated_at = excluded.updated_at
     `).run(
       sessionId,
+      scope,
       selection.provider,
       selection.model,
       selection.reasoningEffort,
+      baseSha,
       headSha,
       JSON.stringify(tour),
       timestamp,
       timestamp,
     );
-    return this.getTour(sessionId)!;
+    return this.getTour(sessionId, scope)!;
   }
 
-  getTour(sessionId: string): StoredTour | undefined {
-    const row = this.database.prepare("SELECT * FROM generated_tours WHERE session_id = ?").get(sessionId);
+  getTour(sessionId: string, scope: TourScope = "full"): StoredTour | undefined {
+    const row = this.database.prepare("SELECT * FROM generated_tours WHERE session_id = ? AND scope = ?").get(sessionId, scope);
     if (!row) return undefined;
     return {
       sessionId: String(row.session_id),
+      scope: String(row.scope) as TourScope,
       selection: {
         provider: String(row.provider) as ModelSelection["provider"],
         model: String(row.model),
         reasoningEffort: String(row.reasoning_effort) as ModelSelection["reasoningEffort"],
       },
+      baseSha: String(row.base_sha),
       headSha: String(row.head_sha),
       tour: JSON.parse(String(row.tour_json)) as GeneratedTour,
       createdAt: String(row.created_at),
@@ -293,7 +308,7 @@ export function defaultDatabasePath(environment: NodeJS.ProcessEnv = process.env
 
 function migrate(database: DatabaseSync) {
   let version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
-  if (version > 3) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
+  if (version > 4) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
 
   if (version === 0) database.exec(`
     BEGIN;
@@ -377,6 +392,34 @@ function migrate(database: DatabaseSync) {
       created_at TEXT NOT NULL
     );
     PRAGMA user_version = 3;
+    COMMIT;
+  `);
+
+  version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+  if (version === 3) database.exec(`
+    BEGIN;
+    ALTER TABLE generated_tours RENAME TO generated_tours_v3;
+    CREATE TABLE generated_tours (
+      session_id TEXT NOT NULL REFERENCES review_sessions(id) ON DELETE CASCADE,
+      scope TEXT NOT NULL CHECK (scope IN ('full', 'update')),
+      provider TEXT NOT NULL CHECK (provider IN ('codex', 'openai', 'anthropic')),
+      model TEXT NOT NULL,
+      reasoning_effort TEXT NOT NULL,
+      base_sha TEXT NOT NULL,
+      head_sha TEXT NOT NULL,
+      tour_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(session_id, scope)
+    );
+    INSERT INTO generated_tours (
+      session_id, scope, provider, model, reasoning_effort, base_sha, head_sha, tour_json, created_at, updated_at
+    )
+    SELECT t.session_id, 'full', t.provider, t.model, t.reasoning_effort, s.base_sha, t.head_sha,
+           t.tour_json, t.created_at, t.updated_at
+    FROM generated_tours_v3 t JOIN review_sessions s ON s.id = t.session_id;
+    DROP TABLE generated_tours_v3;
+    PRAGMA user_version = 4;
     COMMIT;
   `);
 }

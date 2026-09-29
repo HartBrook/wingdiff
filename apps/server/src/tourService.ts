@@ -1,5 +1,5 @@
 import type { ModelSelection, TextProvider } from "./providers/types.js";
-import type { ReviewSession, SessionStore, StoredTour } from "./sessions.js";
+import type { ReviewSession, SessionStore, StoredTour, TourScope } from "./sessions.js";
 import {
   buildTourGenerationInput,
   validateGeneratedTour,
@@ -15,19 +15,29 @@ export async function generateSessionTour(
   selection: ModelSelection,
   provider: TextProvider,
   store: SessionStore,
+  scope: TourScope = "full",
   signal?: AbortSignal,
 ): Promise<SessionTour> {
   if (provider.id !== selection.provider) throw new Error("The selected model does not match the configured provider.");
-  const input = buildTourGenerationInput(session.metadata, session.evidence);
+  const evidence = evidenceForScope(session, store, scope);
+  const input = buildTourGenerationInput(session.metadata, evidence);
   const raw = await provider.generateTour(selection, input, signal);
   const tour = validateGeneratedTour(raw, input);
-  const stored = store.saveTour(session.id, selection, session.metadata.head.sha, tour);
+  const stored = store.saveTour(session.id, scope, selection, evidence.baseSha, evidence.headSha, tour);
   return { ...stored, anchors: input.anchors };
 }
 
-export function getSessionTour(session: ReviewSession, store: SessionStore): SessionTour | undefined {
-  const stored = store.getTour(session.id);
-  if (!stored || stored.headSha !== session.metadata.head.sha) return undefined;
-  const input = buildTourGenerationInput(session.metadata, session.evidence);
+export function getSessionTour(session: ReviewSession, store: SessionStore, scope: TourScope = "full"): SessionTour | undefined {
+  const evidence = evidenceForScope(session, store, scope);
+  const stored = store.getTour(session.id, scope);
+  if (!stored || stored.baseSha !== evidence.baseSha || stored.headSha !== evidence.headSha) return undefined;
+  const input = buildTourGenerationInput(session.metadata, evidence);
   return { ...stored, anchors: input.anchors };
+}
+
+function evidenceForScope(session: ReviewSession, store: SessionStore, scope: TourScope) {
+  if (scope === "full") return session.evidence;
+  const update = store.getReviewUpdate(session.id);
+  if (!update) throw new Error("This session does not have evidence for an update review.");
+  return update.evidence;
 }

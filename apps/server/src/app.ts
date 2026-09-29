@@ -4,6 +4,7 @@ import { inspectLocalTarget } from "./preflight.js";
 import { createProviders, publicProviders, validateSelection } from "./providers/index.js";
 import type { ProviderId, TextProvider } from "./providers/types.js";
 import { SessionStore } from "./sessions.js";
+import type { TourScope } from "./sessions.js";
 import { parsePullRequestTarget } from "./targets.js";
 import { generateSessionTour, getSessionTour } from "./tourService.js";
 import { validateInvestigationContext } from "./validation.js";
@@ -141,7 +142,20 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
       response.status(404).json({ error: "Review session not found." });
       return;
     }
-    const generated = getSessionTour(session, sessionStore);
+    let scope: TourScope;
+    try {
+      scope = tourScope(request.query.scope);
+    } catch (error) {
+      response.status(400).json({ error: error instanceof Error ? error.message : "Invalid tour scope." });
+      return;
+    }
+    let generated;
+    try {
+      generated = getSessionTour(session, sessionStore, scope);
+    } catch (error) {
+      response.status(404).json({ error: error instanceof Error ? error.message : "Tour evidence not found." });
+      return;
+    }
     if (!generated) {
       response.status(404).json({ error: "This revision does not have a generated tour yet." });
       return;
@@ -157,6 +171,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
         return;
       }
       const selection = validateSelection(request.body?.selection);
+      const scope = tourScope(request.body?.scope);
       const provider = providers.get(selection.provider);
       if (!provider) {
         const setup = selection.provider === "codex"
@@ -175,6 +190,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
         selection,
         provider,
         sessionStore,
+        scope,
         abortController.signal,
       );
       response.status(201).json({ generated });
@@ -244,4 +260,10 @@ function reviewCoverage(input: unknown): Record<string, string> {
   }
   if (Object.keys(coverage).length === 0) throw new Error("Review coverage cannot be empty.");
   return coverage;
+}
+
+function tourScope(input: unknown): TourScope {
+  if (input === undefined || input === null || input === "" || input === "full") return "full";
+  if (input === "update") return "update";
+  throw new Error(`Invalid tour scope: ${String(input)}`);
 }
