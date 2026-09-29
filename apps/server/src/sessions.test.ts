@@ -59,6 +59,38 @@ describe("local review sessions", () => {
     store.close();
   });
 
+  it("stores one generated tour for the pinned session revision", () => {
+    const times = [new Date("2026-09-29T12:00:00Z"), new Date("2026-09-29T12:02:00Z")];
+    const store = new SessionStore(":memory:", () => times.shift()!);
+    const session = store.upsertReadySession(target, metadata(), evidence());
+    const stored = store.saveTour(
+      session.id,
+      { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
+      session.metadata.head.sha,
+      {
+        summary: "The counter change is small and focused.",
+        stops: [{
+          id: "counter",
+          title: "Counter update",
+          summary: "The counter changes.",
+          purpose: "Check behavior.",
+          anchorIds: ["file_001"],
+          claims: [{ text: "One file changes.", kind: "fact", confidence: "high", anchorIds: ["file_001"] }],
+          prompts: [],
+        }],
+      },
+    );
+
+    expect(stored).toMatchObject({
+      sessionId: session.id,
+      headSha: "b".repeat(40),
+      selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
+      tour: { summary: "The counter change is small and focused." },
+    });
+    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(2);
+    store.close();
+  });
+
   it("uses a portable configurable data location", () => {
     expect(defaultDatabasePath({ WINGDIFF_DATA_DIR: "/secure/wingdiff" }, "linux")).toBe("/secure/wingdiff/wingdiff.sqlite3");
     expect(defaultDatabasePath({ XDG_DATA_HOME: "/data" }, "linux")).toBe("/data/wingdiff/wingdiff.sqlite3");

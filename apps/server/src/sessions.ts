@@ -5,6 +5,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { PullRequestEvidence } from "./diff.js";
 import type { PullRequestMetadata } from "./github.js";
+import type { ModelSelection } from "./providers/types.js";
+import type { GeneratedTour } from "./tour.js";
 import { parsePullRequestTarget, type PullRequestTarget } from "./targets.js";
 
 export type SessionStatus = "acquiring" | "ready" | "failed";
@@ -33,6 +35,15 @@ export interface SessionSummary {
   title: string;
   headSha: string;
   status: SessionStatus;
+  updatedAt: string;
+}
+
+export interface StoredTour {
+  sessionId: string;
+  selection: ModelSelection;
+  headSha: string;
+  tour: GeneratedTour;
+  createdAt: string;
   updatedAt: string;
 }
 
@@ -140,6 +151,50 @@ export class SessionStore {
     };
   }
 
+  saveTour(sessionId: string, selection: ModelSelection, headSha: string, tour: GeneratedTour): StoredTour {
+    this.requireSession(sessionId);
+    const timestamp = this.now().toISOString();
+    this.database.prepare(`
+      INSERT INTO generated_tours (
+        session_id, provider, model, reasoning_effort, head_sha, tour_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        provider = excluded.provider,
+        model = excluded.model,
+        reasoning_effort = excluded.reasoning_effort,
+        head_sha = excluded.head_sha,
+        tour_json = excluded.tour_json,
+        updated_at = excluded.updated_at
+    `).run(
+      sessionId,
+      selection.provider,
+      selection.model,
+      selection.reasoningEffort,
+      headSha,
+      JSON.stringify(tour),
+      timestamp,
+      timestamp,
+    );
+    return this.getTour(sessionId)!;
+  }
+
+  getTour(sessionId: string): StoredTour | undefined {
+    const row = this.database.prepare("SELECT * FROM generated_tours WHERE session_id = ?").get(sessionId);
+    if (!row) return undefined;
+    return {
+      sessionId: String(row.session_id),
+      selection: {
+        provider: String(row.provider) as ModelSelection["provider"],
+        model: String(row.model),
+        reasoningEffort: String(row.reasoning_effort) as ModelSelection["reasoningEffort"],
+      },
+      headSha: String(row.head_sha),
+      tour: JSON.parse(String(row.tour_json)) as GeneratedTour,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
   close() {
     this.database.close();
   }
@@ -160,11 +215,10 @@ export function defaultDatabasePath(environment: NodeJS.ProcessEnv = process.env
 }
 
 function migrate(database: DatabaseSync) {
-  const version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
-  if (version > 1) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
-  if (version === 1) return;
+  let version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+  if (version > 2) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
 
-  database.exec(`
+  if (version === 0) database.exec(`
     BEGIN;
     CREATE TABLE review_sessions (
       id TEXT PRIMARY KEY,
@@ -214,6 +268,23 @@ function migrate(database: DatabaseSync) {
     );
 
     PRAGMA user_version = 1;
+    COMMIT;
+  `);
+
+  version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+  if (version === 1) database.exec(`
+    BEGIN;
+    CREATE TABLE generated_tours (
+      session_id TEXT PRIMARY KEY REFERENCES review_sessions(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL CHECK (provider IN ('codex', 'openai', 'anthropic')),
+      model TEXT NOT NULL,
+      reasoning_effort TEXT NOT NULL,
+      head_sha TEXT NOT NULL,
+      tour_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    PRAGMA user_version = 2;
     COMMIT;
   `);
 }

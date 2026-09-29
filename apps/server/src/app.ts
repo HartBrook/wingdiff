@@ -2,18 +2,21 @@ import express from "express";
 import { acquireReviewSession } from "./acquisition.js";
 import { inspectLocalTarget } from "./preflight.js";
 import { createProviders, publicProviders, validateSelection } from "./providers/index.js";
+import type { ProviderId, TextProvider } from "./providers/types.js";
 import { SessionStore } from "./sessions.js";
 import { parsePullRequestTarget } from "./targets.js";
+import { generateSessionTour, getSessionTour } from "./tourService.js";
 import { validateInvestigationContext } from "./validation.js";
 
 export interface AppOptions {
   cwd?: string;
   sessionStore?: SessionStore;
+  providers?: Map<ProviderId, TextProvider>;
 }
 
 export function createApp(environment: NodeJS.ProcessEnv = process.env, options: AppOptions = {}) {
   const app = express();
-  const providers = createProviders(environment);
+  const providers = options.providers ?? createProviders(environment);
   const cwd = options.cwd ?? process.cwd();
   const sessionStore = options.sessionStore ?? new SessionStore();
 
@@ -65,6 +68,55 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
       response.status(201).json({ session });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Wingdiff could not acquire this pull request.";
+      response.status(400).json({ error: message });
+    }
+  });
+
+  app.get("/api/sessions/:id/tour", (request, response) => {
+    const session = sessionStore.getSession(request.params.id);
+    if (!session) {
+      response.status(404).json({ error: "Review session not found." });
+      return;
+    }
+    const generated = getSessionTour(session, sessionStore);
+    if (!generated) {
+      response.status(404).json({ error: "This revision does not have a generated tour yet." });
+      return;
+    }
+    response.json({ generated });
+  });
+
+  app.post("/api/sessions/:id/tour", async (request, response) => {
+    try {
+      const session = sessionStore.getSession(request.params.id);
+      if (!session) {
+        response.status(404).json({ error: "Review session not found." });
+        return;
+      }
+      const selection = validateSelection(request.body?.selection);
+      const provider = providers.get(selection.provider);
+      if (!provider) {
+        const setup = selection.provider === "codex"
+          ? "Install Codex CLI and run codex login"
+          : `set ${selection.provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY"}`;
+        response.status(503).json({
+          error: `${selection.provider} is not configured. ${setup} before starting Wingdiff.`,
+        });
+        return;
+      }
+
+      const abortController = new AbortController();
+      response.on("close", () => abortController.abort());
+      const generated = await generateSessionTour(
+        session,
+        selection,
+        provider,
+        sessionStore,
+        abortController.signal,
+      );
+      response.status(201).json({ generated });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Wingdiff could not generate this tour.";
       response.status(400).json({ error: message });
     }
   });
