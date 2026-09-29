@@ -1,9 +1,9 @@
 import type { ModelSelection, TextProvider } from "./providers/types.js";
 import type { ReviewSession, SessionStore, StoredTour, TourScope } from "./sessions.js";
+import { buildSessionGenerationContext, filteredEvidenceForSession, priorFindingsForSession } from "./context.js";
 import {
   buildTourGenerationInput,
   validateGeneratedTour,
-  type PriorTourFinding,
   type TourEvidenceAnchor,
 } from "./tour.js";
 
@@ -18,10 +18,11 @@ export async function generateSessionTour(
   store: SessionStore,
   scope: TourScope = "full",
   signal?: AbortSignal,
+  repositoryRoot = process.cwd(),
 ): Promise<SessionTour> {
   if (provider.id !== selection.provider) throw new Error("The selected model does not match the configured provider.");
-  const evidence = evidenceForScope(session, store, scope);
-  const input = buildTourGenerationInput(session.metadata, evidence, priorFindingsForScope(session, store, scope));
+  const { evidence, input } = await buildSessionGenerationContext(session, store, scope, repositoryRoot);
+  if (!evidence.files.length) throw new Error("Every changed file is excluded from model context. Keep at least one file to generate a tour.");
   const raw = await provider.generateTour(selection, input, signal);
   const tour = validateGeneratedTour(raw, input);
   const stored = store.saveTour(session.id, scope, selection, evidence.baseSha, evidence.headSha, tour);
@@ -29,8 +30,8 @@ export async function generateSessionTour(
 }
 
 export function getSessionTour(session: ReviewSession, store: SessionStore, scope: TourScope = "full"): SessionTour | undefined {
-  const evidence = evidenceForScope(session, store, scope);
-  const priorFindings = priorFindingsForScope(session, store, scope);
+  const evidence = filteredEvidenceForSession(session, store, scope);
+  const priorFindings = priorFindingsForSession(session, store, scope);
   const stored = store.getTour(session.id, scope);
   if (!stored || stored.baseSha !== evidence.baseSha || stored.headSha !== evidence.headSha) return undefined;
   if (scope === "update") {
@@ -39,28 +40,4 @@ export function getSessionTour(session: ReviewSession, store: SessionStore, scop
   }
   const input = buildTourGenerationInput(session.metadata, evidence, priorFindings);
   return { ...stored, anchors: input.anchors };
-}
-
-function evidenceForScope(session: ReviewSession, store: SessionStore, scope: TourScope) {
-  if (scope === "full") return session.evidence;
-  const update = store.getReviewUpdate(session.id);
-  if (!update) throw new Error("This session does not have evidence for an update review.");
-  return update.evidence;
-}
-
-function priorFindingsForScope(session: ReviewSession, store: SessionStore, scope: TourScope): PriorTourFinding[] {
-  if (scope !== "update") return [];
-  const update = store.getReviewUpdate(session.id);
-  if (!update) return [];
-  const checkpoint = store.latestCheckpoint(update.baselineSessionId);
-  if (!checkpoint) throw new Error("The update baseline does not have a completed review checkpoint.");
-  return checkpoint.findingRevisions
-    .filter((finding) => finding.state !== "resolved" && finding.state !== "superseded")
-    .map((finding) => ({
-      id: finding.findingId,
-      title: finding.title,
-      severity: finding.severity,
-      summary: finding.summary,
-      pathHints: finding.pathHints ?? [],
-    }));
 }

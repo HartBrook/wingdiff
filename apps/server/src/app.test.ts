@@ -202,6 +202,27 @@ describe("generated tour API", () => {
       scopes: { full: {}, update: { "atomic-counter": "understood" } },
     } });
   });
+
+  it("previews and persists the exact model-context boundary", async () => {
+    store = new SessionStore(":memory:");
+    const session = store.upsertReadySession(target, metadata, evidence);
+    const app = createApp({}, { sessionStore: store, providers: new Map(), cwd: process.cwd() });
+    server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => server!.once("listening", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const url = `http://127.0.0.1:${port}/api/sessions/${session.id}/context`;
+
+    const preview = await (await fetch(`${url}?scope=full`)).json() as { manifest: { includedFiles: number; promptPreview: string } };
+    expect(preview.manifest.includedFiles).toBe(1);
+    expect(preview.manifest.promptPreview).toContain("return redis.incr(key)");
+
+    const saved = await fetch(url, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: "full", excludedPatterns: ["src/**"] }),
+    });
+    expect(saved.status).toBe(200);
+    expect(await saved.json()).toMatchObject({ manifest: { includedFiles: 0, excludedFiles: 1 } });
+  });
 });
 
 const target = parsePullRequestTarget("https://github.com/openai/codex/pull/42");

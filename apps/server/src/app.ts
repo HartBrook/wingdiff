@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import express from "express";
 import { acquireReviewSession, refreshReviewSession, type AcquisitionDependencies } from "./acquisition.js";
 import { validateDraftComment } from "./comments.js";
+import { buildSessionGenerationContext } from "./context.js";
 import { inspectLocalTarget } from "./preflight.js";
 import { createProviders, publicProviders, validateSelection } from "./providers/index.js";
 import type { ProviderId, TextProvider } from "./providers/types.js";
@@ -355,6 +356,40 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
     response.json({ generated });
   });
 
+  app.get("/api/sessions/:id/context", async (request, response) => {
+    try {
+      const session = sessionStore.getSession(request.params.id);
+      if (!session) {
+        response.status(404).json({ error: "Review session not found." });
+        return;
+      }
+      const scope = tourScope(request.query.scope);
+      const context = await buildSessionGenerationContext(session, sessionStore, scope, cwd);
+      response.json({ manifest: context.manifest });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Wingdiff could not prepare the model context.";
+      response.status(400).json({ error: message });
+    }
+  });
+
+  app.put("/api/sessions/:id/context", async (request, response) => {
+    try {
+      const session = sessionStore.getSession(request.params.id);
+      if (!session) {
+        response.status(404).json({ error: "Review session not found." });
+        return;
+      }
+      const scope = tourScope(request.body?.scope);
+      const patterns = contextExclusions(request.body?.excludedPatterns);
+      sessionStore.saveContextExclusions(session.id, patterns);
+      const context = await buildSessionGenerationContext(session, sessionStore, scope, cwd);
+      response.json({ manifest: context.manifest });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Wingdiff could not save model-context settings.";
+      response.status(400).json({ error: message });
+    }
+  });
+
   app.post("/api/sessions/:id/tour", async (request, response) => {
     try {
       const session = sessionStore.getSession(request.params.id);
@@ -384,6 +419,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
         sessionStore,
         scope,
         abortController.signal,
+        cwd,
       );
       response.status(201).json({ generated });
     } catch (error) {
@@ -595,6 +631,13 @@ function investigationEntryUpdate(input: unknown): Pick<InvestigationEntry, "ans
   }
   if (value.status !== "complete" && value.status !== "error") throw new Error("Investigation status is invalid.");
   return { answer: value.answer, status: value.status };
+}
+
+function contextExclusions(input: unknown): string[] {
+  if (!Array.isArray(input) || input.length > 50) throw new Error("Context exclusions must contain at most 50 patterns.");
+  const patterns = input.map((pattern, index) => requiredText(pattern, `Context exclusion ${index + 1}`, 200));
+  if (patterns.some((pattern) => pattern.includes("\0"))) throw new Error("Context exclusions cannot contain null bytes.");
+  return [...new Set(patterns)];
 }
 
 function requiredText(input: unknown, label: string, maximum: number): string {

@@ -31,6 +31,7 @@ export interface TourGenerationInput {
   anchors: TourEvidenceAnchor[];
   fileAnchorIds: string[];
   priorFindings: PriorTourFinding[];
+  repositoryInstructions?: Array<{ path: string; content: string }>;
 }
 
 export interface PriorTourFinding {
@@ -85,6 +86,7 @@ export function buildTourGenerationInput(
   metadata: PullRequestMetadata,
   evidence: PullRequestEvidence,
   priorFindings: PriorTourFinding[] = [],
+  repositoryInstructions: Array<{ path: string; content: string }> = [],
 ): TourGenerationInput {
   const anchors: TourEvidenceAnchor[] = [];
   const fileAnchorIds: string[] = [];
@@ -122,6 +124,7 @@ export function buildTourGenerationInput(
     anchors,
     fileAnchorIds,
     priorFindings,
+    repositoryInstructions,
   };
 }
 
@@ -207,6 +210,10 @@ export function buildTourPrompt(input: TourGenerationInput): string {
     ].join("\n")).join("\n\n")
     : "(none)";
 
+  const repositoryInstructions = input.repositoryInstructions?.length
+    ? input.repositoryInstructions.map((instruction) => `FILE ${instruction.path}\n${instruction.content}`).join("\n\n")
+    : "(none)";
+
   return `<pull_request>
 REPOSITORY: ${input.pullRequest.repository}
 NUMBER: ${input.pullRequest.number}
@@ -221,6 +228,10 @@ ${input.pullRequest.body || "(none)"}
 <prior_findings>
 ${priorFindings}
 </prior_findings>
+
+<repository_instructions>
+${repositoryInstructions}
+</repository_instructions>
 
 <validated_evidence>
 ${evidence}

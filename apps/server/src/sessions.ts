@@ -251,6 +251,26 @@ export class SessionStore {
     return this.getReviewProgress(sessionId);
   }
 
+  getContextExclusions(sessionId: string, defaults: string[] = []): string[] {
+    this.requireSession(sessionId);
+    const row = this.database.prepare("SELECT excluded_patterns_json FROM context_settings WHERE session_id = ?").get(sessionId);
+    return row ? JSON.parse(String(row.excluded_patterns_json)) as string[] : [...defaults];
+  }
+
+  saveContextExclusions(sessionId: string, patterns: string[]): string[] {
+    this.requireSession(sessionId);
+    const timestamp = this.now().toISOString();
+    this.database.prepare(`
+      INSERT INTO context_settings (session_id, excluded_patterns_json, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        excluded_patterns_json = excluded.excluded_patterns_json,
+        updated_at = excluded.updated_at
+    `).run(sessionId, JSON.stringify(patterns), timestamp);
+    this.database.prepare("DELETE FROM generated_tours WHERE session_id = ?").run(sessionId);
+    return this.getContextExclusions(sessionId);
+  }
+
   saveCheckpoint(sessionId: string, checkpoint: ReviewCheckpoint) {
     this.requireSession(sessionId);
     this.database.prepare(`
@@ -565,7 +585,7 @@ export function defaultDatabasePath(environment: NodeJS.ProcessEnv = process.env
 
 function migrate(database: DatabaseSync) {
   let version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
-  if (version > 11) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
+  if (version > 12) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
 
   if (version === 0) database.exec(`
     BEGIN;
@@ -797,6 +817,19 @@ function migrate(database: DatabaseSync) {
       FROM review_checkpoints_v10;
     DROP TABLE review_checkpoints_v10;
     PRAGMA user_version = 11;
+    COMMIT;
+  `);
+
+  version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+  if (version === 11) database.exec(`
+    BEGIN;
+    DELETE FROM generated_tours;
+    CREATE TABLE context_settings (
+      session_id TEXT PRIMARY KEY REFERENCES review_sessions(id) ON DELETE CASCADE,
+      excluded_patterns_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    PRAGMA user_version = 12;
     COMMIT;
   `);
 }

@@ -41,6 +41,7 @@ import {
   fetchReviewDraft,
   fetchReviewSubmission,
   fetchSessionTour,
+  fetchSessionContext,
   fetchSessionUpdate,
   generatedTourStops,
   generateSessionTour,
@@ -49,12 +50,14 @@ import {
   revisionStopIndex,
   saveReviewDraft,
   saveReviewProgress,
+  saveSessionContext,
   updateInvestigationEntry,
   type AcquiredReviewSession,
   type FindingCheckpoint,
   type GeneratedSessionTour,
   type ReviewCheckpoint,
   type ReviewProgressSnapshot,
+  type SessionContextManifest,
   type StoredReviewSubmission,
   type StoredReviewUpdate,
 } from "./session";
@@ -234,6 +237,11 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   const [providers, setProviders] = useState<ProviderDefinition[]>(FALLBACK_PROVIDERS);
   const [modelSelection, setModelSelection] = usePersistentState<ModelSelection>("wingdiff:model", DEFAULT_SELECTION);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [contextManifest, setContextManifest] = useState<SessionContextManifest | null>(null);
+  const [contextPreviewOpen, setContextPreviewOpen] = useState(false);
+  const [contextLoading, setContextLoading] = useState(false);
+  const [contextSaving, setContextSaving] = useState(false);
+  const [exclusionText, setExclusionText] = useState("");
   const [mobileRouteOpen, setMobileRouteOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [activeEvidenceId, setActiveEvidenceId] = useState<string | null>(null);
@@ -349,6 +357,49 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       setError(caught instanceof Error ? caught.message : "Wingdiff could not generate this guided tour.");
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function previewGenerationContext() {
+    if (!activeProvider?.configured) {
+      setModelPickerOpen(true);
+      return;
+    }
+    setContextLoading(true);
+    setError(null);
+    try {
+      const manifest = await fetchSessionContext(session.id, reviewScope);
+      setContextManifest(manifest);
+      setExclusionText(manifest.excludedPatterns.join("\n"));
+      setContextPreviewOpen(true);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Wingdiff could not prepare the model context.");
+    } finally {
+      setContextLoading(false);
+    }
+  }
+
+  async function confirmGenerationContext() {
+    if (!contextManifest || contextSaving) return;
+    setContextSaving(true);
+    setError(null);
+    try {
+      const excludedPatterns = [...new Set(exclusionText.split(/\r?\n/).map((value) => value.trim()).filter(Boolean))];
+      const changed = JSON.stringify(excludedPatterns) !== JSON.stringify(contextManifest.excludedPatterns);
+      let effectiveManifest = contextManifest;
+      if (changed) {
+        const manifest = await saveSessionContext(session.id, reviewScope, excludedPatterns);
+        setContextManifest(manifest);
+        effectiveManifest = manifest;
+        setTours({ full: null, update: null });
+      }
+      if (!effectiveManifest.includedFiles) throw new Error("Keep at least one changed file in model context.");
+      setContextPreviewOpen(false);
+      await generateTour();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Wingdiff could not save the model context.");
+    } finally {
+      setContextSaving(false);
     }
   }
 
@@ -631,6 +682,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
         setComposer(null);
         setMobileRouteOpen(false);
         setModelPickerOpen(false);
+        setContextPreviewOpen(false);
       }
     }
     window.addEventListener("keydown", handleKeyDown);
@@ -654,9 +706,10 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       <AcquiredTourRail activeIndex={activeIndex} inheritedStopIds={inheritedStopIds} onBrowse={() => { setView("browse"); setMobileRouteOpen(false); }} onReview={() => { setView("review"); setMobileRouteOpen(false); }} onSelect={(index) => { selectStop(index); setMobileRouteOpen(false); }} onSummary={() => { setView("summary"); setMobileRouteOpen(false); }} statuses={statuses} stops={stops} />
       <main className="main-canvas"><AcquiredTourView activeEvidence={activeEvidence} activeEvidenceId={activeEvidenceId} activeFindingRevisions={activeFindingRevisions} activeIndex={activeIndex} comments={comments.filter((comment) => comment.stopId === activeStop.id).length} headSha={metadata.head.sha} onAsk={(prompt) => { setDrawerOpen(true); if (prompt) void askQuestion(prompt); }} onComment={() => openComment(false)} onEvidence={setActiveEvidenceId} onFindingComment={() => openComment(true)} onFlag={toggleFlag} onNavigate={navigateStop} onSelectLine={selectLine} onUnderstood={markUnderstood} selection={selection} status={statuses[activeStop.id] ?? "unseen"} stop={activeStop} totalStops={stops.length} /></main>
     </div> : <main className="main-canvas acquired-canvas">
-      {view === "summary" ? <AcquiredSummary activeModel={activeModelLabel} baselineCheckpoint={baselineCheckpoint} checkpoint={checkpoint} completing={completing} error={error} generated={generated} generating={generating} modelReady={Boolean(activeProvider?.configured)} notice={notice} onBegin={() => { selectStop(activeIndex); setView("tour"); }} onBrowse={() => setView("browse")} onCheckUpdates={() => void checkForUpdates()} onComplete={() => void completeReview()} onGenerate={() => void generateTour()} onScope={selectScope} onSelectStop={(index) => { selectStop(index); setView("tour"); }} refreshing={refreshing} reviewScope={reviewScope} scopedEvidence={scopedEvidence} session={session} statuses={statuses} stops={stops} tourLoading={tourLoading} update={update} /> : view === "browse" ? <AcquiredBrowse blocks={blocks} onSummary={() => setView("summary")} scope={reviewScope} session={session} /> : <AcquiredReviewDesk comments={comments} disposition={disposition} error={error} headSha={metadata.head.sha} onBack={() => setView(generated ? "tour" : "summary")} onDisposition={(event) => { setDisposition(event); void persistReviewDraft(reviewSummary, event); }} onPublish={() => void publishReviewToGitHub()} onRemoveComment={(id) => void removeComment(id)} onSave={() => void persistReviewDraft()} onSummary={setReviewSummary} publishing={publishingReview} saving={savingReview} statuses={statuses} stops={stops} submission={submission} summary={reviewSummary} />}
+      {view === "summary" ? <AcquiredSummary activeModel={activeModelLabel} baselineCheckpoint={baselineCheckpoint} checkpoint={checkpoint} completing={completing} error={error} generated={generated} generating={generating || contextLoading} modelReady={Boolean(activeProvider?.configured)} notice={notice} onBegin={() => { selectStop(activeIndex); setView("tour"); }} onBrowse={() => setView("browse")} onCheckUpdates={() => void checkForUpdates()} onComplete={() => void completeReview()} onGenerate={() => void previewGenerationContext()} onScope={selectScope} onSelectStop={(index) => { selectStop(index); setView("tour"); }} refreshing={refreshing} reviewScope={reviewScope} scopedEvidence={scopedEvidence} session={session} statuses={statuses} stops={stops} tourLoading={tourLoading} update={update} /> : view === "browse" ? <AcquiredBrowse blocks={blocks} onSummary={() => setView("summary")} scope={reviewScope} session={session} /> : <AcquiredReviewDesk comments={comments} disposition={disposition} error={error} headSha={metadata.head.sha} onBack={() => setView(generated ? "tour" : "summary")} onDisposition={(event) => { setDisposition(event); void persistReviewDraft(reviewSummary, event); }} onPublish={() => void publishReviewToGitHub()} onRemoveComment={(id) => void removeComment(id)} onSave={() => void persistReviewDraft()} onSummary={setReviewSummary} publishing={publishingReview} saving={savingReview} statuses={statuses} stops={stops} submission={submission} summary={reviewSummary} />}
     </main>}
     {modelPickerOpen && <ModelPicker onClose={() => setModelPickerOpen(false)} onSelection={setModelSelection} providers={providers} selection={modelSelection} />}
+    {contextPreviewOpen && contextManifest && activeProvider && <ContextPreview error={error} exclusions={exclusionText} manifest={contextManifest} modelName={activeModel.name} onCancel={() => setContextPreviewOpen(false)} onConfirm={() => void confirmGenerationContext()} onExclusions={setExclusionText} provider={activeProvider} saving={contextSaving} />}
     {drawerOpen && activeStop && activeEvidence && <InvestigationDrawer answering={answering} entries={stopNotebook} evidence={activeEvidence} headSha={metadata.head.sha} modelName={activeModelLabel} onAsk={askQuestion} onClose={closeInvestigation} onQuestion={setQuestion} onUseAnswer={useInvestigationAsComment} providerConfigured={Boolean(activeProvider?.configured)} question={question} stop={activeStop} />}
     {composer && <CommentComposer composer={composer} headSha={metadata.head.sha} onCancel={() => setComposer(null)} onChange={(body) => setComposer((current) => current ? { ...current, body } : null)} onSeverity={(severity) => setComposer((current) => current ? { ...current, severity } : null)} onStage={stageComment} />}
   </div>;
@@ -1274,6 +1327,31 @@ function InvestigationDrawer({ answering, entries, evidence, headSha, modelName,
       <form className="drawer-input" onSubmit={(event) => { event.preventDefault(); onAsk(); }}><textarea aria-label="Ask about this change" onChange={(event) => onQuestion(event.target.value)} placeholder="Ask about behavior, failure modes, or context…" rows={3} value={question} /><div><span><kbd>↵</kbd> to ask · {providerConfigured ? `using ${modelName}` : "fixture mode"}</span><button aria-label="Ask question" disabled={!question.trim() || answering} type="submit"><Icon name="arrow-right" size={17} /></button></div></form>
     </aside>
   </>;
+}
+
+function ContextPreview({ error, exclusions, manifest, modelName, onCancel, onConfirm, onExclusions, provider, saving }: {
+  error: string | null;
+  exclusions: string;
+  manifest: SessionContextManifest;
+  modelName: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+  onExclusions: (value: string) => void;
+  provider: ProviderDefinition;
+  saving: boolean;
+}) {
+  return <div className="modal-backdrop context-backdrop" role="presentation"><section aria-label="Model context preview" aria-modal="true" className="context-modal" role="dialog">
+    <header><div><div className="eyebrow">Model context</div><h2>Review what leaves this process.</h2></div><button aria-label="Close context preview" className="icon-button" onClick={onCancel} type="button"><Icon name="x" size={17} /></button></header>
+    <div className="context-transport"><span className="card-icon card-icon--spark"><Icon name={provider.transport === "cli" ? "code" : "external"} size={16} /></span><div><strong>{provider.name} · {modelName}</strong><span>{provider.transport === "cli" ? "Local CLI transport using your signed-in account" : "Direct API transport using a local environment key"}</span></div><code>{manifest.characters.toLocaleString()} chars</code></div>
+    {error && <div className="target-error acquired-generation-error" role="alert"><Icon name="flag" size={13} />{error}</div>}
+    {manifest.warnings.length > 0 && <div className="context-warnings">{manifest.warnings.map((warning) => <p key={warning}><Icon name="flag" size={13} />{warning}</p>)}</div>}
+    <div className="context-grid">
+      <section><div className="section-label"><span>Changed files</span><small>{manifest.includedFiles} sent · {manifest.excludedFiles} excluded</small></div><div className="context-files">{manifest.files.map((file) => <div className={file.included ? "" : "is-excluded"} key={file.path}><Icon name={file.included ? "check" : "x"} size={13} /><span><strong>{file.path}</strong><small>+{file.additions} −{file.deletions}{file.matchedPattern ? ` · ${file.matchedPattern}` : ""}</small></span><span className="context-tags">{file.classifications.map((classification) => <i className={`is-${classification}`} key={classification}>{classification}</i>)}</span></div>)}</div></section>
+      <section><div className="section-label"><span>Local exclusions</span><small>one glob per line</small></div><textarea aria-label="Model context exclusions" onChange={(event) => onExclusions(event.target.value)} rows={7} spellCheck={false} value={exclusions} /><div className="context-instructions"><strong>Repository instructions</strong>{manifest.instructions.length ? manifest.instructions.map((instruction) => <span key={instruction.path}><Icon name="code" size={12} />{instruction.path}{instruction.truncated ? " · truncated" : ""}</span>) : <span>None found</span>}</div></section>
+    </div>
+    <details className="context-prompt"><summary>Exact context preview <span>{manifest.fingerprint.slice(0, 12)}</span></summary><pre>{manifest.promptPreview}</pre></details>
+    <footer><span><Icon name="shield" size={13} /> Exclusions are saved locally and invalidate prior tours.</span><div><button className="button button--quiet" onClick={onCancel} type="button">Cancel</button><button className="button button--primary" disabled={saving} onClick={onConfirm} type="button">{saving ? "Preparing…" : "Generate with this context"}<Icon name="arrow-right" size={15} /></button></div></footer>
+  </section></div>;
 }
 
 function ModelPicker({ onClose, onSelection, providers, selection }: { onClose: () => void; onSelection: (selection: ModelSelection) => void; providers: ProviderDefinition[]; selection: ModelSelection }) {

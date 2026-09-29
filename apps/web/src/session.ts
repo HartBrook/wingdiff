@@ -195,6 +195,29 @@ export interface ReviewProgressSnapshot {
   scopes: Record<"full" | "update", Record<string, StopStatus>>;
 }
 
+export interface SessionContextManifest {
+  scope: "full" | "update";
+  baseSha: string;
+  headSha: string;
+  excludedPatterns: string[];
+  files: Array<{
+    path: string;
+    included: boolean;
+    matchedPattern?: string;
+    classifications: Array<"sensitive" | "generated" | "vendor">;
+    additions: number;
+    deletions: number;
+    characters: number;
+  }>;
+  instructions: Array<{ path: string; content: string; characters: number; truncated: boolean }>;
+  includedFiles: number;
+  excludedFiles: number;
+  characters: number;
+  warnings: string[];
+  promptPreview: string;
+  fingerprint: string;
+}
+
 export interface ReviewRefreshResult {
   status: "current" | "updated";
   session: AcquiredReviewSession;
@@ -232,6 +255,32 @@ export async function generateSessionTour(
   const body = await response.json() as { generated?: GeneratedSessionTour; error?: string };
   if (!response.ok || !body.generated) throw new Error(body.error ?? "Wingdiff could not generate this guided tour.");
   return body.generated;
+}
+
+export async function fetchSessionContext(
+  id: string,
+  scope: "full" | "update",
+  signal?: AbortSignal,
+): Promise<SessionContextManifest> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/context?scope=${scope}`, { signal });
+  const body = await response.json() as { manifest?: SessionContextManifest; error?: string };
+  if (!response.ok || !body.manifest) throw new Error(body.error ?? "Wingdiff could not prepare the model context.");
+  return body.manifest;
+}
+
+export async function saveSessionContext(
+  id: string,
+  scope: "full" | "update",
+  excludedPatterns: string[],
+): Promise<SessionContextManifest> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/context`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scope, excludedPatterns }),
+  });
+  const body = await response.json() as { manifest?: SessionContextManifest; error?: string };
+  if (!response.ok || !body.manifest) throw new Error(body.error ?? "Wingdiff could not save model-context settings.");
+  return body.manifest;
 }
 
 export async function fetchReviewCheckpoint(id: string, scope: "full" | "update", signal?: AbortSignal): Promise<ReviewCheckpoint | null> {

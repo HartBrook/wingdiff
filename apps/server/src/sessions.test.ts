@@ -112,7 +112,7 @@ describe("local review sessions", () => {
       selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
       tour: { summary: "The counter change is small and focused." },
     });
-    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(11);
+    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(12);
     store.close();
   });
 
@@ -181,6 +181,22 @@ describe("local review sessions", () => {
       activeStopIds: { full: "tests", update: "counter-update" },
       scopes: { full: { counter: "understood" }, update: { "counter-update": "flagged" } },
     });
+    store.close();
+  });
+
+  it("persists model-context exclusions and invalidates generated tours", () => {
+    const store = new SessionStore(":memory:");
+    const session = store.upsertReadySession(target, metadata(), evidence());
+    store.saveTour(session.id, "full", { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
+      session.metadata.base.sha, session.metadata.head.sha, {
+        summary: "Summary", findingRevisions: [], stops: [{
+          id: "counter", title: "Counter", summary: "Counter changes.", purpose: "Review it.",
+          anchorIds: ["file"], claims: [{ text: "Changed.", kind: "fact", confidence: "high", anchorIds: ["file"] }], prompts: [],
+        }],
+      });
+
+    expect(store.saveContextExclusions(session.id, ["vendor/**", "**/*.pem"])).toEqual(["vendor/**", "**/*.pem"]);
+    expect(store.getTour(session.id, "full")).toBeUndefined();
     store.close();
   });
 
