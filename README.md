@@ -13,7 +13,7 @@ This repository contains the local-first review foundation described in the [pro
 - Review desk with coverage, summary, inline comments, and disposition
 - Dark/light themes, keyboard navigation, responsive layout, and local persistence
 
-Real pull requests can be acquired, turned into grounded guided tours, and reviewed through GitHub. Review comments, the summary, disposition, and submitted-review receipt are persisted locally. The fixture demo still simulates submission. Contextual investigation defaults to the locally installed Codex CLI using its existing ChatGPT sign-in. Direct OpenAI and Anthropic APIs remain optional; the demo uses clearly labeled fixture answers when no provider is available.
+Real pull requests can be acquired, turned into grounded guided tours, and reviewed through GitHub. Review progress, investigation notebooks, comments, the summary, disposition, and submitted-review receipt are persisted locally. The fixture demo still simulates submission. Contextual investigation defaults to the locally installed Codex CLI using its existing ChatGPT sign-in. Direct OpenAI and Anthropic APIs remain optional; the demo uses clearly labeled fixture answers when no provider is available.
 
 ## Run locally
 
@@ -24,7 +24,7 @@ npm install
 npm run wingdiff
 ```
 
-The launcher starts Wingdiff at `http://127.0.0.1:4173` and opens the local landing screen. Paste a GitHub pull request URL, or open the fixture directly:
+The launcher starts Wingdiff on a loopback address and opens an authenticated local URL. Paste a GitHub pull request URL, or open the fixture directly:
 
 ```bash
 npm run wingdiff -- --demo
@@ -47,6 +47,8 @@ Wingdiff reads metadata through `gh`, fetches missing objects into private `refs
 
 From the real-PR Summary, choose a configured model and select **Generate guided review**. The model organizes the validated diff into semantic stops, ranks concrete findings by severity, and references opaque evidence anchors. Wingdiff rejects the result unless every changed file is covered and every claim or finding resolves to an exact known anchor. Generated tours are pinned to the acquired head SHA and can be resumed locally.
 
+Before generation, Wingdiff shows the exact model context, provider transport, changed files, repository instructions, exclusions, size, and content fingerprint. Potentially sensitive, generated, and vendor files are marked; common key and environment-file patterns are excluded by default. Exclusions are editable local globs. `AGENTS.md`, `CONTRIBUTING.md`, and `.github/CONTRIBUTING.md` are included when present, capped at 20,000 characters each. Context over 750,000 characters is blocked until reduced.
+
 Comments drafted from a real tour are also pinned to the acquired diff. Wingdiff records the GitHub side and exact line range, verifies the terminal line fingerprint against the canonical pull-request diff, and stores accepted drafts in the local SQLite session. A stale, cross-hunk, wrong-side, or non-diff anchor is rejected before it can enter the review queue.
 
 The real-PR **Review desk** presents the exact summary, disposition, and inline-comment batch before an explicit publish action. Immediately before publishing, Wingdiff rereads the pull request through the authenticated GitHub CLI, blocks a moved or closed head, and revalidates every stored anchor. It then sends one batch review using `commit_id`, `line`, `side`, and optional multi-line coordinates. A successful GitHub receipt is saved locally, and duplicate publication for the same pinned head is blocked. The authenticated GitHub identity needs pull-request write permission to publish.
@@ -55,7 +57,7 @@ The real-PR **Review desk** presents the exact summary, disposition, and inline-
 
 After visiting every stop, select **Complete review** to create an explicit checkpoint at the current head SHA. **Check for updates** then reacquires the pull request without checking it out or running its code. If the author pushed a new head, Wingdiff opens a new local session in **Since your review** mode using the exact reviewed-head → current-head diff.
 
-The **Entire PR** scope remains available as an independent backstop. Update and full-PR tours are generated and persisted separately, and every acquired revision is retained under a private `refs/wingdiff/pull/.../revisions/...` reference so a later force-push does not erase the comparison baseline.
+The **Entire PR** scope remains available as an independent backstop. Update and full-PR tours, progress, positions, and completion checkpoints are persisted separately. Previously reviewed areas that do not intersect the update are labeled as reviewed and unchanged. Every acquired revision is retained under a private `refs/wingdiff/pull/.../revisions/...` reference so a later force-push does not erase the comparison baseline.
 
 ## Portable, local-first AI
 
@@ -86,15 +88,21 @@ Claude Sonnet 4.6 and Opus 4.6 remain available through the same provider interf
 
 API keys are read only by the loopback Node server and are never returned to browser JavaScript. OpenAI API requests use the Responses API with `store: false`; tour generation uses strict structured output and investigations stream. Wingdiff never reads or copies Codex CLI credentials.
 
+The local server generates a fresh launch token, exchanges it for an HTTP-only, same-site cookie, rejects cross-origin mutations, and refuses non-loopback binding unless `WINGDIFF_UNSAFE_ALLOW_REMOTE=1` is explicitly set. Server discovery files are private to the current OS user and are reused only for the same working directory.
+
 ## Verify
 
 ```bash
 npm test
 npm run typecheck
 npm run build
+npx playwright install chromium # once per machine
+npm run test:e2e
 ```
 
-The tests enforce the product's grounding contract: claims must resolve to real evidence, generated tours must cover every changed file, diff ranges must be internally consistent, revision coverage must partition the full fixture tour, findings must remain attached to known stops, and staged comments must match the pinned GitHub diff side and line fingerprint.
+The tests enforce the product's grounding contract: claims must resolve to real evidence, generated tours must cover every included changed file, diff ranges must be internally consistent, revision coverage must partition the full fixture tour, findings must remain attached to known stops, and staged comments must match the pinned GitHub diff side and line fingerprint. The browser suite drives a mocked real-PR session through context approval, generation, investigation, visible-code comment drafting, persistence, and navigation home.
+
+See [PILOT.md](./PILOT.md) for the first-user runbook and feedback checklist.
 
 ## Keyboard shortcuts
 
