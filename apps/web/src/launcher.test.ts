@@ -17,6 +17,7 @@ describe("launcher state", () => {
       demo: false,
       target: target.canonicalUrl,
     });
+    expect(parseLaunchRoute("?session=local-123")).toEqual({ demo: false, session: "local-123" });
   });
 
   it("deduplicates and limits recent targets", () => {

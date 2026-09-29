@@ -1,12 +1,21 @@
 import express from "express";
+import { acquireReviewSession } from "./acquisition.js";
 import { inspectLocalTarget } from "./preflight.js";
 import { createProviders, publicProviders, validateSelection } from "./providers/index.js";
+import { SessionStore } from "./sessions.js";
 import { parsePullRequestTarget } from "./targets.js";
 import { validateInvestigationContext } from "./validation.js";
 
-export function createApp(environment: NodeJS.ProcessEnv = process.env) {
+export interface AppOptions {
+  cwd?: string;
+  sessionStore?: SessionStore;
+}
+
+export function createApp(environment: NodeJS.ProcessEnv = process.env, options: AppOptions = {}) {
   const app = express();
   const providers = createProviders(environment);
+  const cwd = options.cwd ?? process.cwd();
+  const sessionStore = options.sessionStore ?? new SessionStore();
 
   app.disable("x-powered-by");
   app.use(express.json({ limit: "256kb" }));
@@ -28,10 +37,34 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env) {
   app.post("/api/targets/prepare", async (request, response) => {
     try {
       const target = parsePullRequestTarget(request.body?.input, request.body?.checkoutRepository);
-      const environment = await inspectLocalTarget(target, process.cwd());
+      const environment = await inspectLocalTarget(target, cwd);
       response.json({ target, environment });
     } catch (error) {
       const message = error instanceof Error ? error.message : "The pull request target could not be prepared.";
+      response.status(400).json({ error: message });
+    }
+  });
+
+  app.get("/api/sessions", (_request, response) => {
+    response.json({ sessions: sessionStore.listSessions() });
+  });
+
+  app.get("/api/sessions/:id", (request, response) => {
+    const session = sessionStore.getSession(request.params.id);
+    if (!session) {
+      response.status(404).json({ error: "Review session not found." });
+      return;
+    }
+    response.json({ session });
+  });
+
+  app.post("/api/sessions", async (request, response) => {
+    try {
+      const target = parsePullRequestTarget(request.body?.input, request.body?.checkoutRepository);
+      const session = await acquireReviewSession(target, cwd, sessionStore);
+      response.status(201).json({ session });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Wingdiff could not acquire this pull request.";
       response.status(400).json({ error: message });
     }
   });

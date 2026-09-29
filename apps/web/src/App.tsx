@@ -25,6 +25,7 @@ import { CodeDiff } from "./components/CodeDiff";
 import { Icon } from "./components/Icon";
 import { addRecentTarget, parseLaunchRoute, preparePullRequestTarget, type LaunchRoute, type PullRequestTarget, type TargetPreparation } from "./launcher";
 import { claimKindLabel, compareSeverity } from "./reviewPresentation";
+import { createReviewSession, evidenceBlocks, fetchReviewSession, type AcquiredReviewSession } from "./session";
 
 interface Selection {
   evidenceId: string;
@@ -63,17 +64,21 @@ export default function App() {
     setRoute(parseLaunchRoute(search));
   }
 
+  if (route.session) return <SessionLoader id={route.session} onHome={() => navigate("")} />;
   if (route.demo) return <ReviewApp onHome={() => navigate("")} />;
-  return <Launcher initialTarget={route.target} onDemo={() => {
-    navigate("?demo=1");
-  }} />;
+  return <Launcher
+    initialTarget={route.target}
+    onDemo={() => navigate("?demo=1")}
+    onSession={(id) => navigate(`?session=${encodeURIComponent(id)}`)}
+  />;
 }
 
-function Launcher({ initialTarget, onDemo }: { initialTarget?: string; onDemo: () => void }) {
+function Launcher({ initialTarget, onDemo, onSession }: { initialTarget?: string; onDemo: () => void; onSession: (id: string) => void }) {
   const [input, setInput] = useState(initialTarget ?? "");
   const [preparation, setPreparation] = useState<TargetPreparation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [acquiring, setAcquiring] = useState(false);
   const [recent, setRecent] = usePersistentState<PullRequestTarget[]>("wingdiff:recent-targets", []);
   const [theme, setTheme] = usePersistentState<"dark" | "light">("wingdiff:theme", "dark");
 
@@ -108,6 +113,22 @@ function Launcher({ initialTarget, onDemo }: { initialTarget?: string; onDemo: (
     }
   }
 
+  async function openPullRequest() {
+    if (!preparation || acquiring) return;
+    setAcquiring(true);
+    setError(null);
+    try {
+      const session = await createReviewSession(preparation.target.canonicalUrl);
+      onSession(session.id);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Wingdiff could not open this pull request.");
+    } finally {
+      setAcquiring(false);
+    }
+  }
+
+  const canAcquire = preparation?.environment.checkout.status === "matched" && preparation.environment.githubCli.installed;
+
   return <div className="launcher-shell">
     <header className="launcher-topbar">
       <div className="brand"><span className="brand__mark"><Icon name="route" size={19} /></span><span>wingdiff</span></div>
@@ -131,7 +152,7 @@ function Launcher({ initialTarget, onDemo }: { initialTarget?: string; onDemo: (
       {preparation ? <section className="target-ready">
         <span className="target-ready__icon"><Icon name="check" size={19} /></span>
         <div><div className="eyebrow">Target ready</div><h2>{preparation.target.label}</h2><p>{checkoutMessage(preparation)} · {preparation.environment.githubCli.installed ? "GitHub CLI installed" : "GitHub CLI not found"}. No GitHub request was made.</p></div>
-        <button className="button button--primary" onClick={onDemo} type="button">Preview with demo data <Icon name="arrow-right" size={15} /></button>
+        <div className="target-ready__actions"><button className="button button--primary" disabled={!canAcquire || acquiring} onClick={() => void openPullRequest()} type="button">{acquiring ? "Preparing locally…" : "Open pull request"}<Icon name="arrow-right" size={15} /></button><button className="button button--quiet" onClick={onDemo} type="button">Open demo</button></div>
       </section> : recent.length > 0 ? <section className="recent-targets">
         <header><span>Recent pull requests</span><small>Stored on this device</small></header>
         {recent.map((item) => <button key={item.canonicalUrl} onClick={() => void submitTarget(item.canonicalUrl)} type="button"><span><strong>{item.label}</strong><small>{item.canonicalUrl}</small></span><Icon name="chevron-right" size={15} /></button>)}
@@ -139,6 +160,69 @@ function Launcher({ initialTarget, onDemo }: { initialTarget?: string; onDemo: (
     </main>
     <footer className="launcher-footer"><span><Icon name="shield" size={13} /> Local server · no Wingdiff account</span><code>127.0.0.1</code></footer>
   </div>;
+}
+
+function SessionLoader({ id, onHome }: { id: string; onHome: () => void }) {
+  const [session, setSession] = useState<AcquiredReviewSession | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchReviewSession(id, controller.signal).then(setSession).catch((caught) => {
+      if (caught instanceof DOMException && caught.name === "AbortError") return;
+      setError(caught instanceof Error ? caught.message : "Wingdiff could not resume this review session.");
+    });
+    return () => controller.abort();
+  }, [id]);
+
+  if (error) return <div className="session-state"><span className="card-icon"><Icon name="flag" /></span><h1>Couldn’t open this review.</h1><p>{error}</p><button className="button button--primary" onClick={onHome} type="button">New review</button></div>;
+  if (!session) return <div className="session-state"><span className="card-icon card-icon--spark"><Icon name="spark" /></span><h1>Opening local evidence…</h1><p>Reading the pinned review session from this device.</p></div>;
+  return <AcquiredReviewApp onHome={onHome} session={session} />;
+}
+
+function AcquiredReviewApp({ onHome, session }: { onHome: () => void; session: AcquiredReviewSession }) {
+  const [view, setView] = useState<"summary" | "browse">("summary");
+  const [theme, setTheme] = usePersistentState<"dark" | "light">("wingdiff:theme", "dark");
+  const blocks = useMemo(() => evidenceBlocks(session), [session]);
+  const metadata = session.metadata;
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+
+  return <div className="app-shell acquired-shell">
+    <header className="topbar">
+      <div className="brand"><span className="brand__mark"><Icon name="route" size={19} /></span><span>wingdiff</span></div>
+      <div className="topbar__divider" />
+      <button className="home-button" onClick={onHome} type="button"><Icon name="arrow-left" size={14} /><span>New review</span></button>
+      <div className="pr-identity"><span>{metadata.repository}</span><strong>#{metadata.number}</strong><span className="pr-identity__title">{metadata.title}</span></div>
+      <div className="topbar__spacer" />
+      <a className="button button--quiet acquired-github-link" href={metadata.url} rel="noreferrer" target="_blank">GitHub <Icon name="external" size={14} /></a>
+      <button aria-label={`Use ${theme === "dark" ? "light" : "dark"} theme`} className="icon-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} type="button"><Icon name={theme === "dark" ? "sun" : "moon"} size={17} /></button>
+    </header>
+    <main className="main-canvas acquired-canvas">
+      {view === "summary" ? <AcquiredSummary onBrowse={() => setView("browse")} session={session} /> : <AcquiredBrowse blocks={blocks} onSummary={() => setView("summary")} session={session} />}
+    </main>
+  </div>;
+}
+
+function AcquiredSummary({ onBrowse, session }: { onBrowse: () => void; session: AcquiredReviewSession }) {
+  const metadata = session.metadata;
+  const initials = metadata.author.login.slice(0, 2).toUpperCase();
+  return <div className="page page--brief">
+    <div className="brief-hero">
+      <div className="brief-hero__meta"><span className="avatar">{initials}</span><span><strong>{metadata.author.login}</strong> wants to merge</span><code>{metadata.head.ref}</code><Icon name="arrow-right" size={13} /><code>{metadata.base.ref}</code></div>
+      <div className="brief-hero__title-row"><div><div className="eyebrow">Pull request #{metadata.number} · local evidence</div><h1>{metadata.title}</h1></div><div className={`check-badge ${metadata.checks.failed ? "is-failed" : ""}`}><Icon name={metadata.checks.failed ? "flag" : "check"} size={15} /><span>{metadata.checks.total ? <><strong>{metadata.checks.passed}/{metadata.checks.total}</strong> checks passed</> : <><strong>None</strong> reported</>}</span></div></div>
+      <div className="brief-stats"><span><strong>{session.evidence.files.length}</strong> files</span><span><strong className="addition">+{session.evidence.additions}</strong><strong className="deletion">−{session.evidence.deletions}</strong> lines</span><span><strong>{metadata.commits.length}</strong> commits</span><span><code>{metadata.base.sha.slice(0, 7)}</code> → <code>{metadata.head.sha.slice(0, 7)}</code></span></div>
+    </div>
+    <section className="summary-findings acquired-evidence-ready"><header><div><div className="eyebrow">Evidence ready</div><h2>The pull request is pinned and available locally</h2></div><span className="summary-verdict"><Icon name="code" size={14} />Not yet analyzed</span></header><div className="summary-clear"><Icon name="check" size={18} /><div><strong>{session.evidence.files.length} changed file{session.evidence.files.length === 1 ? "" : "s"} passed anchor validation.</strong><span>Browse the source evidence now. Semantic tour generation is the next layer.</span></div></div></section>
+    {metadata.body && <section className="summary-context acquired-description"><div><span>Author description</span><p>{metadata.body}</p></div></section>}
+    <section className="begin-card"><div><strong>Read-only evidence</strong><span>Exact diff between pinned base and head revisions</span></div><button className="button button--hero" onClick={onBrowse} type="button">Browse changed files <Icon name="arrow-right" /></button></section>
+  </div>;
+}
+
+function AcquiredBrowse({ blocks, onSummary, session }: { blocks: EvidenceBlock[]; onSummary: () => void; session: AcquiredReviewSession }) {
+  return <div className="page page--browse"><header className="browse-header"><div><div className="eyebrow">Pinned evidence · {session.metadata.head.sha.slice(0, 7)}</div><h1>Changed files</h1><p>Read directly from the local Git objects acquired for this pull request.</p></div><button className="button button--secondary" onClick={onSummary} type="button"><Icon name="arrow-left" size={16} /> Back to summary</button></header><div className="browse-layout"><aside className="file-index"><div className="section-label"><span>Changed files</span><b>{blocks.length}</b></div>{blocks.map((block) => <a href={`#${block.id}`} key={block.id}><Icon name="code" size={14} /><span>{fileName(block.path)}<small>{directoryName(block.path)}</small></span><Icon name="chevron-right" size={13} /></a>)}</aside><div className="browse-diffs">{blocks.map((block) => <div className="browse-file" id={block.id} key={block.id}><CodeDiff evidence={block} minimal /></div>)}</div></div></div>;
 }
 
 function ReviewApp({ onHome }: { onHome: () => void }) {

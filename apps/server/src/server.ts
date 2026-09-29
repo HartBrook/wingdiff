@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { createApp } from "./app.js";
+import { SessionStore, defaultDatabasePath } from "./sessions.js";
 
 export interface WingdiffServerOptions {
   environment?: NodeJS.ProcessEnv;
@@ -22,26 +23,33 @@ export async function startWingdiffServer(options: WingdiffServerOptions = {}): 
   const host = options.host ?? environment.WINGDIFF_HOST ?? "127.0.0.1";
   const port = options.port ?? parsePort(environment.WINGDIFF_PORT);
   const development = options.development ?? environment.NODE_ENV === "development";
-  const app = createApp(environment);
+  const sessionStore = new SessionStore(defaultDatabasePath(environment));
+  const app = createApp(environment, { sessionStore });
 
-  if (development) {
-    const { createServer } = await import("vite");
-    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web");
-    const vite = await createServer({ root, server: { middlewareMode: true }, appType: "spa" });
-    app.use(vite.middlewares);
-  } else {
-    const webDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
-    app.use(express.static(webDist));
-    app.get("/{*path}", (_request, response) => response.sendFile(path.join(webDist, "index.html")));
+  try {
+    if (development) {
+      const { createServer } = await import("vite");
+      const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web");
+      const vite = await createServer({ root, server: { middlewareMode: true }, appType: "spa" });
+      app.use(vite.middlewares);
+    } else {
+      const webDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
+      app.use(express.static(webDist));
+      app.get("/{*path}", (_request, response) => response.sendFile(path.join(webDist, "index.html")));
+    }
+
+    const server = await new Promise<Server>((resolve, reject) => {
+      const candidate = app.listen(port, host);
+      candidate.once("listening", () => resolve(candidate));
+      candidate.once("error", reject);
+    });
+    server.once("close", () => sessionStore.close());
+    const address = server.address() as AddressInfo;
+    return { server, url: `http://${formatHost(host)}:${address.port}` };
+  } catch (error) {
+    sessionStore.close();
+    throw error;
   }
-
-  const server = await new Promise<Server>((resolve, reject) => {
-    const candidate = app.listen(port, host);
-    candidate.once("listening", () => resolve(candidate));
-    candidate.once("error", reject);
-  });
-  const address = server.address() as AddressInfo;
-  return { server, url: `http://${formatHost(host)}:${address.port}` };
 }
 
 function parsePort(value: string | undefined): number {

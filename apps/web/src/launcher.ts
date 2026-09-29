@@ -10,6 +10,7 @@ export interface PullRequestTarget {
 export interface LaunchRoute {
   demo: boolean;
   target?: string;
+  session?: string;
 }
 
 export interface TargetPreparation {
@@ -28,9 +29,11 @@ export interface TargetPreparation {
 export function parseLaunchRoute(search: string): LaunchRoute {
   const parameters = new URLSearchParams(search);
   const target = parameters.get("target")?.trim();
+  const session = parameters.get("session")?.trim();
   return {
     demo: parameters.get("demo") === "1",
     ...(target ? { target } : {}),
+    ...(session ? { session } : {}),
   };
 }
 

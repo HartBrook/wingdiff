@@ -34,6 +34,19 @@ npm run wingdiff -- 123 # resolves the repository from the current checkout
 
 The built server package also exposes the eventual `wingdiff` binary. Use `npm run dev` when working on the UI without automatic browser launch.
 
+### Read-only PR acquisition
+
+For a real pull request, launch Wingdiff from a matching local checkout with an authenticated GitHub CLI:
+
+```bash
+gh auth status
+npm run wingdiff -- https://github.com/owner/repository/pull/123
+```
+
+Wingdiff reads metadata through `gh`, fetches missing objects into private `refs/wingdiff/pull/...` references, and builds the diff from exact pinned base/head SHAs. It does not checkout the PR, modify the worktree or index, or execute pull-request code. Acquired metadata, evidence, and review checkpoints are stored in a local SQLite database. Set `WINGDIFF_DATA_DIR` to choose its location.
+
+The real-PR view currently provides the authentic Summary and Browse evidence surfaces. Semantic tour generation and GitHub review submission remain intentionally disconnected.
+
 ## Portable, local-first AI
 
 Wingdiff has no hosted service dependency. By default, its loopback server delegates model work to Codex CLI, which keeps authentication in the supported CLI credential store instead of asking Wingdiff to handle a key.
