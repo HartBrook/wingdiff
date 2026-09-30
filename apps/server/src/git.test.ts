@@ -30,6 +30,38 @@ describe("pinned Git revisions", () => {
     });
     expect((await git(repository.path, ["rev-parse", pinned.base.ref])).trim()).toBe(repository.baseSha);
     expect((await git(repository.path, ["rev-parse", pinned.head.ref])).trim()).toBe(repository.headSha);
+    expect(pinned.comparisonBase).toEqual({
+      sha: repository.baseSha,
+      ref: `refs/wingdiff/pull/42/revisions/${repository.baseSha}`,
+    });
+  });
+
+  it("pins the merge base when the target branch has advanced independently", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "wingdiff-git-test-"));
+    temporaryDirectories.push(directory);
+    await git(directory, ["init", "--quiet"]);
+    await git(directory, ["config", "user.email", "wingdiff@example.com"]);
+    await git(directory, ["config", "user.name", "Wingdiff Test"]);
+    await writeFile(path.join(directory, "shared.ts"), "export const shared = 1;\n");
+    await git(directory, ["add", "shared.ts"]);
+    await git(directory, ["commit", "--quiet", "-m", "common"]);
+    const mergeBaseSha = (await git(directory, ["rev-parse", "HEAD"])).trim();
+    await git(directory, ["branch", "feature"]);
+    await writeFile(path.join(directory, "base-only.ts"), "export const baseOnly = true;\n");
+    await git(directory, ["add", "base-only.ts"]);
+    await git(directory, ["commit", "--quiet", "-m", "base advances"]);
+    const baseSha = (await git(directory, ["rev-parse", "HEAD"])).trim();
+    await git(directory, ["checkout", "--quiet", "feature"]);
+    await writeFile(path.join(directory, "feature-only.ts"), "export const featureOnly = true;\n");
+    await git(directory, ["add", "feature-only.ts"]);
+    await git(directory, ["commit", "--quiet", "-m", "feature changes"]);
+    const headSha = (await git(directory, ["rev-parse", "HEAD"])).trim();
+    const target = parsePullRequestTarget("https://github.com/openai/codex/pull/42");
+
+    const pinned = await acquirePinnedRevisions(target, metadataFor(target.canonicalUrl, baseSha, headSha), directory);
+
+    expect(pinned.comparisonBase?.sha).toBe(mergeBaseSha);
+    expect((await git(directory, ["rev-parse", pinned.comparisonBase!.ref])).trim()).toBe(mergeBaseSha);
   });
 
   it("fetches missing objects into private refs", async () => {
@@ -48,6 +80,7 @@ describe("pinned Git revisions", () => {
       }
       if (arguments_[0] === "fetch" && arguments_.at(-1)?.includes("refs/heads")) { baseExists = true; return ""; }
       if (arguments_[0] === "fetch" && arguments_.at(-1)?.includes("refs/pull")) { headExists = true; return ""; }
+      if (arguments_[0] === "merge-base") return `${metadata.base.sha}\n`;
       if (arguments_[0] === "rev-parse") return `${metadata.head.sha}\n`;
       return "";
     };

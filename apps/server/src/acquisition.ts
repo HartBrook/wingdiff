@@ -91,7 +91,8 @@ async function acquireReviewArtifacts(
   const revisions = await dependencies.acquireRevisions(target, metadata, preflight.checkout.path);
   onStage("evidence");
   const evidence = await dependencies.readEvidence(revisions);
-  if (evidence.baseSha !== metadata.base.sha || evidence.headSha !== metadata.head.sha) {
+  const expectedBaseSha = revisions.comparisonBase?.sha ?? revisions.base.sha;
+  if (evidence.baseSha !== expectedBaseSha || evidence.headSha !== metadata.head.sha) {
     throw new Error("Acquired evidence does not match the pull request's pinned revisions.");
   }
 

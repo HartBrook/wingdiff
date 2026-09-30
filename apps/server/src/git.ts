@@ -9,8 +9,11 @@ export type GitCommandRunner = (arguments_: string[], cwd: string) => Promise<st
 
 export interface PinnedRevisions {
   repositoryRoot: string;
+  /** The current target branch tip reported by GitHub. */
   base: { sha: string; ref: string };
   head: { sha: string; ref: string };
+  /** The merge base GitHub uses for the full pull-request comparison. */
+  comparisonBase?: { sha: string; ref: string };
 }
 
 export async function acquirePinnedRevisions(
@@ -30,10 +33,22 @@ export async function acquirePinnedRevisions(
   await runCommand(["update-ref", baseRef, metadata.base.sha], repositoryRoot);
   await runCommand(["update-ref", headRef, metadata.head.sha], repositoryRoot);
 
+  const comparisonBaseSha = (await runCommand([
+    "merge-base",
+    metadata.base.sha,
+    metadata.head.sha,
+  ], repositoryRoot)).trim();
+  if (!/^[a-f0-9]{40}$/i.test(comparisonBaseSha)) {
+    throw new Error("Git could not determine the pull request merge base.");
+  }
+  const comparisonBaseRef = `${namespace}/revisions/${comparisonBaseSha}`;
+  await runCommand(["update-ref", comparisonBaseRef, comparisonBaseSha], repositoryRoot);
+
   return {
     repositoryRoot,
     base: { sha: metadata.base.sha, ref: baseRef },
     head: { sha: metadata.head.sha, ref: headRef },
+    comparisonBase: { sha: comparisonBaseSha, ref: comparisonBaseRef },
   };
 }
 

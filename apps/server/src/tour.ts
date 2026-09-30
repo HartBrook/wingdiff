@@ -116,7 +116,7 @@ export function buildTourGenerationInput(
       title: metadata.title,
       body: metadata.body,
       author: metadata.author.login,
-      baseRef: evidence.baseSha === metadata.base.sha ? metadata.base.ref : "reviewed-head",
+      baseRef: evidence.baseSha === metadata.base.sha ? metadata.base.ref : "comparison-base",
       headRef: metadata.head.ref,
       baseSha: evidence.baseSha,
       headSha: evidence.headSha,

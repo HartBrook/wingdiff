@@ -46,6 +46,7 @@ export async function readDiffEvidence(
   revisions: PinnedRevisions,
   runCommand: GitCommandRunner = defaultGitCommandRunner,
 ): Promise<PullRequestEvidence> {
+  const comparisonBase = revisions.comparisonBase ?? revisions.base;
   const output = await runCommand([
     "-c",
     "core.quotePath=false",
@@ -55,11 +56,11 @@ export async function readDiffEvidence(
     "--no-color",
     "--find-renames",
     "--unified=20",
-    revisions.base.sha,
+    comparisonBase.sha,
     revisions.head.sha,
     "--",
   ], revisions.repositoryRoot);
-  return parseUnifiedDiff(output, revisions.base.sha, revisions.head.sha);
+  return parseUnifiedDiff(output, comparisonBase.sha, revisions.head.sha);
 }
 
 export function parseUnifiedDiff(input: string, baseSha: string, headSha: string): PullRequestEvidence {

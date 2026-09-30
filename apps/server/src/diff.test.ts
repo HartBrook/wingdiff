@@ -66,6 +66,24 @@ describe("diff evidence", () => {
     ]);
   });
 
+  it("uses the pinned merge base for full pull-request evidence", async () => {
+    const calls: string[][] = [];
+    const runner: GitCommandRunner = async (arguments_) => { calls.push(arguments_); return fixture; };
+    const comparisonBaseSha = "c".repeat(40);
+    const revisions: PinnedRevisions = {
+      repositoryRoot: "/work/repo",
+      base: { sha: baseSha, ref: "refs/wingdiff/pull/42/base" },
+      head: { sha: headSha, ref: "refs/wingdiff/pull/42/head" },
+      comparisonBase: { sha: comparisonBaseSha, ref: "refs/wingdiff/pull/42/comparison" },
+    };
+
+    const evidence = await readDiffEvidence(revisions, runner);
+
+    expect(evidence.baseSha).toBe(comparisonBaseSha);
+    expect(calls[0]).toContain(comparisonBaseSha);
+    expect(calls[0]).not.toContain(baseSha);
+  });
+
   it("supports deleted and binary files", () => {
     const input = `diff --git a/old.txt b/old.txt
 deleted file mode 100644
