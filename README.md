@@ -46,13 +46,25 @@ npm ci
 npm run wingdiff -- --demo
 ```
 
-The launcher starts Wingdiff on a loopback address and opens an authenticated local URL. From a matching local checkout, pass a GitHub pull request URL or number:
+The launcher starts Wingdiff on a loopback address and opens an authenticated local URL. Pass the checkout that owns the pull request when reviewing another repository:
 
 ```bash
 npm run wingdiff -- --demo
-npm run wingdiff -- https://github.com/owner/repository/pull/123
-npm run wingdiff -- 123 # resolves the repository from the current checkout
+npm run wingdiff -- --checkout /path/to/repository https://github.com/owner/repository/pull/123
+npm run wingdiff -- --checkout /path/to/repository 123
 ```
+
+`--checkout` may be relative to the directory where you invoked npm. If you
+launch the source package from inside the target checkout, npm's original
+working directory is used automatically:
+
+```bash
+cd /path/to/repository
+npm --prefix /path/to/wingdiff run wingdiff -- https://github.com/owner/repository/pull/123
+```
+
+Only one checkout can be attached to a running Wingdiff server. Stop the
+existing process before launching against a different repository.
 
 Wingdiff is currently distributed from source rather than through npm. The
 server workspace builds a `wingdiff` binary for future packaged releases. Use
@@ -60,11 +72,11 @@ server workspace builds a `wingdiff` binary for future packaged releases. Use
 
 ### Read-only PR acquisition
 
-For a real pull request, launch Wingdiff from a matching local checkout with an authenticated GitHub CLI:
+For a real pull request, attach Wingdiff to a matching local checkout with an authenticated GitHub CLI:
 
 ```bash
 gh auth status
-npm run wingdiff -- https://github.com/owner/repository/pull/123
+npm run wingdiff -- --checkout /path/to/repository https://github.com/owner/repository/pull/123
 ```
 
 Wingdiff reads metadata through `gh`, fetches missing objects into private `refs/wingdiff/pull/...` references, and builds the full PR diff from the exact pinned merge-base/head pair GitHub compares. Update reviews use the exact reviewed-head/current-head pair. It does not checkout the PR, modify the worktree or index, or execute pull-request code. Acquired metadata, evidence, generated tours, and review checkpoints are stored in a local SQLite database. Set `WINGDIFF_DATA_DIR` to choose its location.

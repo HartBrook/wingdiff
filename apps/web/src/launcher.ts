@@ -49,6 +49,19 @@ export async function preparePullRequestTarget(input: string, signal?: AbortSign
   return { target: body.target, environment: body.environment };
 }
 
+export function acquisitionBlocker(preparation: TargetPreparation): string | undefined {
+  const { checkout, githubCli } = preparation.environment;
+  if (checkout.status === "different") {
+    const attached = checkout.repository ? ` The server is currently attached to ${checkout.repository}.` : "";
+    return `Restart Wingdiff with --checkout pointing to a local checkout of ${preparation.target.owner}/${preparation.target.repository}.${attached}`;
+  }
+  if (checkout.status === "not-found") {
+    return `Restart Wingdiff with --checkout pointing to a local checkout of ${preparation.target.owner}/${preparation.target.repository}.`;
+  }
+  if (!githubCli.installed) return "Install and authenticate the GitHub CLI before opening this pull request.";
+  return undefined;
+}
+
 export function addRecentTarget(recent: PullRequestTarget[], target: PullRequestTarget, limit = 5): PullRequestTarget[] {
   return [target, ...recent.filter((candidate) => candidate.canonicalUrl !== target.canonicalUrl)].slice(0, limit);
 }

@@ -13,6 +13,7 @@ export interface WingdiffServerOptions {
   port?: number;
   development?: boolean;
   authToken?: string;
+  cwd?: string;
 }
 
 export interface RunningWingdiffServer {
@@ -31,7 +32,11 @@ export async function startWingdiffServer(options: WingdiffServerOptions = {}): 
   const development = options.development ?? environment.NODE_ENV === "development";
   const authToken = options.authToken ?? randomBytes(32).toString("base64url");
   const sessionStore = new SessionStore(defaultDatabasePath(environment));
-  const app = createApp(environment, { sessionStore, authToken });
+  const app = createApp(environment, {
+    sessionStore,
+    authToken,
+    ...(options.cwd ? { cwd: options.cwd } : {}),
+  });
 
   try {
     if (development) {

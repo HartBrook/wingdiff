@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addRecentTarget, parseLaunchRoute, type PullRequestTarget } from "./launcher";
+import { acquisitionBlocker, addRecentTarget, parseLaunchRoute, type PullRequestTarget, type TargetPreparation } from "./launcher";
 
 const target: PullRequestTarget = {
   owner: "openai",
@@ -31,5 +31,21 @@ describe("launcher state", () => {
     expect(recent).toHaveLength(5);
     expect(recent[0]).toBe(target);
     expect(new Set(recent.map((candidate) => candidate.canonicalUrl)).size).toBe(5);
+  });
+
+  it("explains why an external pull request cannot open from the attached checkout", () => {
+    const preparation: TargetPreparation = {
+      target,
+      environment: {
+        checkout: { status: "different", path: "/work/wingdiff", repository: "HartBrook/wingdiff" },
+        githubCli: { installed: true },
+        networkChecked: false,
+      },
+    };
+    expect(acquisitionBlocker(preparation)).toMatch(/--checkout.*openai\/codex.*HartBrook\/wingdiff/);
+    expect(acquisitionBlocker({
+      ...preparation,
+      environment: { ...preparation.environment, checkout: { status: "matched", path: "/work/codex" } },
+    })).toBeUndefined();
   });
 });

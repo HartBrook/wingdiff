@@ -21,7 +21,7 @@
   ],
   "scripts": {
     "dev": "npm run dev --workspace @wingdiff/server",
-    "wingdiff": "npm run cli --workspace @wingdiff/server --",
+    "wingdiff": "cross-env NODE_ENV=development tsx apps/server/src/cli.ts",
     "start": "npm run start --workspace @wingdiff/server",
     "build": "npm run build --workspace @wingdiff/web && npm run build --workspace @wingdiff/server",
     "typecheck": "npm run typecheck --workspaces --if-present",
@@ -33,6 +33,7 @@
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "@vitejs/plugin-react": "^6.1.1",
+    "cross-env": "^10.1.0",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vite": "^8.3.1",

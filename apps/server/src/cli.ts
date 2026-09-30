@@ -14,6 +14,7 @@ const execFile = promisify(execFileCallback);
 
 export interface CliOptions {
   target?: string;
+  checkout?: string;
   demo: boolean;
   openBrowser: boolean;
   help: boolean;
@@ -21,21 +22,44 @@ export interface CliOptions {
 
 export function parseCliArguments(arguments_: string[]): CliOptions {
   let target: string | undefined;
+  let checkout: string | undefined;
   let demo = false;
   let openBrowser = true;
   let help = false;
 
-  for (const argument of arguments_) {
+  for (let index = 0; index < arguments_.length; index += 1) {
+    const argument = arguments_[index]!;
     if (argument === "--demo") demo = true;
     else if (argument === "--no-open") openBrowser = false;
     else if (argument === "--help" || argument === "-h") help = true;
+    else if (argument === "--checkout") {
+      const value = arguments_[index + 1];
+      if (!value || value.startsWith("-")) throw new Error("--checkout requires a path.");
+      if (checkout) throw new Error("Wingdiff accepts one checkout path at a time.");
+      checkout = value;
+      index += 1;
+    } else if (argument.startsWith("--checkout=")) {
+      const value = argument.slice("--checkout=".length);
+      if (!value) throw new Error("--checkout requires a path.");
+      if (checkout) throw new Error("Wingdiff accepts one checkout path at a time.");
+      checkout = value;
+    }
     else if (argument.startsWith("-")) throw new Error(`Unknown option: ${argument}`);
     else if (target) throw new Error("Wingdiff accepts one pull request target at a time.");
     else target = argument;
   }
 
   if (demo && target) throw new Error("Use either --demo or a pull request target, not both.");
-  return { target, demo, openBrowser, help };
+  return { target, ...(checkout ? { checkout } : {}), demo, openBrowser, help };
+}
+
+export function resolveWorkingDirectory(
+  checkout: string | undefined,
+  initialDirectory: string | undefined,
+  currentDirectory = process.cwd(),
+): string {
+  const launchDirectory = initialDirectory ?? currentDirectory;
+  return checkout ? path.resolve(launchDirectory, checkout) : path.resolve(launchDirectory);
 }
 
 export function launchUrl(baseUrl: string, options: { demo: boolean; target?: PullRequestTarget; authToken?: string }): string {
@@ -69,15 +93,16 @@ async function run() {
     return;
   }
 
+  const workingDirectory = resolveWorkingDirectory(options.checkout, process.env.INIT_CWD);
   const checkoutRepository = options.target && /^#?\d+$/.test(options.target)
-    ? await repositoryForCheckout(process.cwd())
+    ? await repositoryForCheckout(workingDirectory)
     : undefined;
   const target = options.target ? parsePullRequestTarget(options.target, checkoutRepository) : undefined;
   const discoveryPath = serverDiscoveryPath(process.env);
   const existing = await readServerDiscovery(discoveryPath);
   if (existing && await isWingdiffRunning(existing.url, existing.authToken)) {
-    if (path.resolve(existing.cwd) !== path.resolve(process.cwd())) {
-      throw new Error(`Wingdiff is already running for ${existing.cwd}. Stop it before launching from another checkout.`);
+    if (path.resolve(existing.cwd) !== workingDirectory) {
+      throw new Error(`Wingdiff is already running for ${existing.cwd}. Stop it before launching for ${workingDirectory}.`);
     }
     const destination = launchUrl(existing.url, { demo: options.demo, target, authToken: existing.authToken });
     process.stdout.write(`Reusing Wingdiff at ${destination}\n`);
@@ -85,11 +110,11 @@ async function run() {
     return;
   }
 
-  const running = await startWingdiffServer();
+  const running = await startWingdiffServer({ cwd: workingDirectory });
   await writeServerDiscovery(discoveryPath, {
     url: running.url,
     authToken: running.authToken,
-    cwd: process.cwd(),
+    cwd: workingDirectory,
     pid: process.pid,
   });
   running.server.once("close", () => void removeServerDiscovery(discoveryPath, running.authToken));
@@ -160,7 +185,7 @@ function openBrowser(url: string) {
 }
 
 function helpText(): string {
-  return `wingdiff — guided pull request review\n\nUsage:\n  wingdiff [pull-request]\n  wingdiff --demo\n\nTargets:\n  https://github.com/owner/repo/pull/123\n  owner/repo#123\n  123                         Resolve from the current checkout\n\nOptions:\n  --demo                      Open the fixture review\n  --no-open                   Start without opening a browser\n  -h, --help                  Show this help\n`;
+  return `wingdiff — guided pull request review\n\nUsage:\n  wingdiff [pull-request]\n  wingdiff --checkout <path> [pull-request]\n  wingdiff --demo\n\nTargets:\n  https://github.com/owner/repo/pull/123\n  owner/repo#123\n  123                         Resolve from the selected checkout\n\nOptions:\n  --checkout <path>           Use this local repository checkout\n  --demo                      Open the fixture review\n  --no-open                   Start without opening a browser\n  -h, --help                  Show this help\n`;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

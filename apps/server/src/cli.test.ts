@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { browserInvocation, launchUrl, parseCliArguments } from "./cli.js";
+import path from "node:path";
+import { browserInvocation, launchUrl, parseCliArguments, resolveWorkingDirectory } from "./cli.js";
 
 describe("wingdiff CLI", () => {
   it("accepts an optional target and launcher flags", () => {
@@ -10,13 +11,32 @@ describe("wingdiff CLI", () => {
       openBrowser: false,
       help: false,
     });
+    expect(parseCliArguments(["--checkout", "../codex", "openai/codex#42"])).toEqual({
+      target: "openai/codex#42",
+      checkout: "../codex",
+      demo: false,
+      openBrowser: true,
+      help: false,
+    });
+    expect(parseCliArguments(["openai/codex#42", "--checkout=../codex"])).toMatchObject({ checkout: "../codex" });
     expect(parseCliArguments(["--demo"])).toMatchObject({ demo: true });
   });
 
   it("rejects conflicting or unknown arguments", () => {
     expect(() => parseCliArguments(["--wat"])).toThrow(/Unknown option/);
+    expect(() => parseCliArguments(["--checkout"])).toThrow(/requires a path/);
+    expect(() => parseCliArguments(["--checkout", "one", "--checkout", "two"])).toThrow(/one checkout path/);
     expect(() => parseCliArguments(["--demo", "openai/codex#42"])).toThrow(/either --demo/);
     expect(() => parseCliArguments(["one", "two"])).toThrow(/one pull request target/);
+  });
+
+  it("prefers an explicit checkout and otherwise preserves npm's launch directory", () => {
+    expect(resolveWorkingDirectory("../selected", "/work/caller", "/work/wingdiff/apps/server"))
+      .toBe(path.resolve("/work/caller", "../selected"));
+    expect(resolveWorkingDirectory(undefined, "/work/caller", "/work/wingdiff/apps/server"))
+      .toBe(path.resolve("/work/caller"));
+    expect(resolveWorkingDirectory(undefined, undefined, "/work/wingdiff/apps/server"))
+      .toBe(path.resolve("/work/wingdiff/apps/server"));
   });
 
   it("constructs safe browser URLs", () => {
