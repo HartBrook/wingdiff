@@ -16,6 +16,7 @@ test("reviews a real-session fixture from privacy preview through an anchored dr
   await contextDialog.getByRole("button", { name: "Generate with this context" }).click();
 
   await expect(page.getByText("No findings currently block approval")).toBeVisible();
+  await expect(page.locator(".summary-context li")).toHaveText(["Preserve expiry", "Add regression coverage"]);
   await page.getByRole("button", { name: "Start review" }).click();
   await expect(page.getByRole("heading", { name: "Counter updates become atomic" })).toBeVisible();
 
@@ -47,6 +48,20 @@ test("reviews a real-session fixture from privacy preview through an anchored dr
   await page.getByRole("button", { name: "New review" }).click();
   await expect(page.getByRole("heading", { name: "Choose a pull request." })).toBeVisible();
   await expect(page.getByRole("button", { name: "Check setup" })).toBeVisible();
+});
+
+test("returns to the top when marking a stop understood", async ({ page }) => {
+  await page.goto("/?demo=1");
+  await page.getByRole("button", { name: "Review updates" }).click();
+
+  const canvas = page.locator("main.main-canvas");
+  await canvas.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+  expect(await canvas.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+
+  const firstTitle = await page.locator(".stop-header h1").textContent();
+  await page.getByRole("button", { name: "Mark understood", exact: true }).click();
+  await expect(page.locator(".stop-header h1")).not.toHaveText(firstTitle ?? "");
+  await expect.poll(() => canvas.evaluate((element) => element.scrollTop)).toBe(0);
 });
 
 async function mockReviewApi(page: Page) {
@@ -130,7 +145,7 @@ const session = {
   id: "pilot-session",
   target: { owner: "acme", repository: "service", number: 42, canonicalUrl: "https://github.com/acme/service/pull/42", label: "acme/service#42", source: "url" },
   metadata: {
-    number: 42, repository: "acme/service", url: "https://github.com/acme/service/pull/42", title: "Make the counter update atomic", body: "Replace a read/write pair.",
+    number: 42, repository: "acme/service", url: "https://github.com/acme/service/pull/42", title: "Make the counter update atomic", body: "Replace a read/write pair.\n\n- Preserve expiry\n- Add regression coverage",
     author: { login: "dev" }, base: { ref: "main", sha: baseSha }, head: { ref: "atomic-counter", sha: headSha },
     additions: 1, deletions: 1, filesChanged: 1, commits: [], checks: { passed: 3, failed: 0, pending: 0, total: 3 }, reviews: { count: 0 }, state: "OPEN", draft: false, updatedAt: now,
   },

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { mockAnswers, pullRequest, reviewUpdate, tourStops, updateStops } from "./fixture";
 import {
   DEFAULT_SELECTION,
@@ -84,6 +84,8 @@ interface ComposerState {
 }
 
 type AcquiredScope = "full" | "update";
+
+const MarkdownContent = lazy(() => import("./components/MarkdownContent"));
 
 const initialStatuses = Object.fromEntries(
   tourStops.map((stop) => [stop.id, "unseen"]),
@@ -249,6 +251,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   const [mobileRouteOpen, setMobileRouteOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [activeEvidenceId, setActiveEvidenceId] = useState<string | null>(null);
+  const tourCanvasRef = useRef<HTMLElement>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [progress, setProgress] = useState<ReviewProgressSnapshot>({
     activeScope: null,
@@ -352,6 +355,10 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     setActiveEvidenceId(activeStop?.evidence[0]?.id ?? null);
     setSelection(null);
   }, [activeStop]);
+
+  useEffect(() => {
+    if (view === "tour") tourCanvasRef.current?.scrollTo({ top: 0 });
+  }, [activeIndex, reviewScope, view]);
 
   async function generateTour() {
     if (!activeProvider?.configured) {
@@ -734,7 +741,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     </header>
     {view === "tour" && generated && activeStop && activeEvidence ? <div className={`workspace acquired-workspace ${mobileRouteOpen ? "is-mobile-open" : ""}`}>
       <AcquiredTourRail activeIndex={activeIndex} inheritedStopIds={inheritedStopIds} onBrowse={() => { setView("browse"); setMobileRouteOpen(false); }} onReview={() => { setView("review"); setMobileRouteOpen(false); }} onSelect={(index) => { selectStop(index); setMobileRouteOpen(false); }} onSummary={() => { setView("summary"); setMobileRouteOpen(false); }} statuses={statuses} stops={stops} />
-      <main className="main-canvas"><AcquiredTourView activeEvidence={activeEvidence} activeEvidenceId={activeEvidenceId} activeFindingRevisions={activeFindingRevisions} activeIndex={activeIndex} comments={comments.filter((comment) => comment.stopId === activeStop.id).length} headSha={metadata.head.sha} onAsk={(prompt) => { setDrawerOpen(true); if (prompt) void askQuestion(prompt); }} onComment={() => openComment(false)} onEvidence={setActiveEvidenceId} onFindingComment={() => openComment(true)} onFlag={toggleFlag} onNavigate={navigateStop} onSelectLine={selectLine} onUnderstood={markUnderstood} selection={selection} status={statuses[activeStop.id] ?? "unseen"} stop={activeStop} totalStops={stops.length} /></main>
+      <main className="main-canvas" ref={tourCanvasRef}><AcquiredTourView activeEvidence={activeEvidence} activeEvidenceId={activeEvidenceId} activeFindingRevisions={activeFindingRevisions} activeIndex={activeIndex} comments={comments.filter((comment) => comment.stopId === activeStop.id).length} headSha={metadata.head.sha} onAsk={(prompt) => { setDrawerOpen(true); if (prompt) void askQuestion(prompt); }} onComment={() => openComment(false)} onEvidence={setActiveEvidenceId} onFindingComment={() => openComment(true)} onFlag={toggleFlag} onNavigate={navigateStop} onSelectLine={selectLine} onUnderstood={markUnderstood} selection={selection} status={statuses[activeStop.id] ?? "unseen"} stop={activeStop} totalStops={stops.length} /></main>
     </div> : <main className="main-canvas acquired-canvas">
       {view === "summary" ? <AcquiredSummary activeModel={activeModelLabel} baselineCheckpoint={baselineCheckpoint} checkpoint={checkpoint} completing={completing} error={error} generated={generated} generating={generating || contextLoading} modelReady={Boolean(activeProvider?.configured)} notice={notice} onBegin={() => { selectStop(activeIndex); setView("tour"); }} onBrowse={() => setView("browse")} onCheckUpdates={() => void checkForUpdates()} onComplete={() => void completeReview()} onGenerate={() => void previewGenerationContext()} onScope={selectScope} onSelectStop={(index) => { selectStop(index); setView("tour"); }} refreshing={refreshing} reviewScope={reviewScope} scopedEvidence={scopedEvidence} session={session} statuses={statuses} stops={stops} tourLoading={tourLoading} update={update} /> : view === "browse" ? <AcquiredBrowse blocks={blocks} onSummary={() => setView("summary")} scope={reviewScope} session={session} /> : <AcquiredReviewDesk comments={comments} disposition={disposition} error={error} failedChecks={metadata.checks.failed} headSha={metadata.head.sha} highFindingCount={unresolvedHighFindingCount} onAllowRetry={() => void allowPublicationRetry()} onBack={() => setView(generated ? "tour" : "summary")} onDisposition={(event) => { setDisposition(event); void persistReviewDraft(reviewSummary, event); }} onPublish={(acknowledged) => void publishReviewToGitHub(acknowledged)} onRemoveComment={(id) => void removeComment(id)} onSave={() => void persistReviewDraft()} onSummary={setReviewSummary} publication={publication} publishing={publishingReview} saving={savingReview} statuses={statuses} stops={stops} submission={submission} summary={reviewSummary} />}
     </main>}
@@ -798,12 +805,12 @@ function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completi
         {findings.length > 0 && <div className="summary-finding-group"><div className="summary-finding-group__label">New findings</div><div className="summary-finding-list">{findings.map(({ finding, stop, stopIndex }, index) => <button key={finding.id} onClick={() => onSelectStop(stopIndex)} type="button"><span className="finding-rank">{String(earlierFindings.length + index + 1).padStart(2, "0")}</span><span className={`risk-level risk-level--${finding.severity}`}>{finding.severity}</span><span><strong>{finding.title}</strong><small>{finding.body}</small><em>{finding.category} · {stop.title}</em></span><Icon name="chevron-right" size={16} /></button>)}</div></div>}
         {!earlierFindings.length && !findings.length && <div className="summary-clear"><Icon name="check" size={18} /><div><strong>Nothing in the analyzed evidence currently argues against approval.</strong><span>The guided route still provides a full-PR backstop.</span></div></div>}
       </section>
-      <section className="summary-context"><div><span>{reviewScope === "update" ? "Update" : "Change"}</span><p>{generated.tour.summary}</p></div><div><span>Author intent</span><p>{metadata.body || "No pull request description was provided."}</p></div></section>
+      <section className="summary-context"><div><span>{reviewScope === "update" ? "Update" : "Change"}</span><p>{generated.tour.summary}</p></div><div><span>Author intent</span><AuthorMarkdown fallback="No pull request description was provided." source={metadata.body} /></div></section>
       <section className="begin-card"><div><strong>{stops.length} review stop{stops.length === 1 ? "" : "s"}</strong><span>{stops.reduce((total, stop) => total + stop.minutes, 0)} min · pinned to {generated.headSha.slice(0, 7)}{generated.contextFingerprint ? ` · context ${generated.contextFingerprint.slice(0, 10)}` : ""}</span></div><button className="button button--hero" onClick={onBegin} type="button">Start review <Icon name="arrow-right" /></button></section>
       <section className="checkpoint-card"><div><span className={`card-icon ${checkpoint ? "" : "card-icon--spark"}`}><Icon name={checkpoint ? "check" : "shield"} size={17} /></span><div><strong>{checkpoint ? `Reviewed at ${checkpoint.reviewedHeadSha.slice(0, 7)}` : allReviewed ? "Ready to save this review point" : `${stops.length - reviewedStops} stop${stops.length - reviewedStops === 1 ? "" : "s"} remaining`}</strong><span>{checkpoint ? "Check whether the author has pushed anything new." : allReviewed ? "Future update reviews will begin from this exact head." : "Review every stop before creating the update baseline."}</span></div></div>{checkpoint ? <button className="button button--secondary" disabled={refreshing} onClick={onCheckUpdates} type="button">{refreshing ? "Checking…" : "Check for updates"}<Icon name="arrow-right" size={14} /></button> : <button className="button button--secondary" disabled={!allReviewed || completing} onClick={onComplete} type="button">{completing ? "Saving…" : "Complete review"}<Icon name="check" size={14} /></button>}</section>
     </> : <>
       <section className="summary-findings acquired-evidence-ready"><header><div><div className="eyebrow">Evidence ready</div><h2>The pull request is pinned and ready for a guided review</h2></div><span className="summary-verdict"><Icon name="code" size={14} />{tourLoading ? "Checking" : "Not analyzed"}</span></header><div className="summary-clear"><Icon name="check" size={18} /><div><strong>{session.evidence.files.length} changed file{session.evidence.files.length === 1 ? "" : "s"} passed anchor validation.</strong><span>Generate a semantic route with {activeModel}, or inspect the diff directly.</span></div></div></section>
-      {metadata.body && <section className="summary-context acquired-description"><div><span>Author description</span><p>{metadata.body}</p></div></section>}
+      {metadata.body && <section className="summary-context acquired-description"><div><span>Author description</span><AuthorMarkdown source={metadata.body} /></div></section>}
       {error && <div className="target-error acquired-generation-error" role="alert"><Icon name="flag" size={14} />{error}</div>}
       <section className="begin-card"><div><strong>{modelReady ? activeModel : "Choose a configured model"}</strong><span>Analysis stays inside the local Wingdiff process</span></div><div className="acquired-start-actions"><button className="button button--quiet" onClick={onBrowse} type="button">Browse diff</button><button className="button button--hero" disabled={tourLoading || generating} onClick={onGenerate} type="button">{generating ? "Building tour…" : modelReady ? "Generate guided review" : "Choose model"} <Icon name="arrow-right" /></button></div></section>
     </>}
@@ -915,6 +922,7 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [activeEvidenceId, setActiveEvidenceId] = useState<string | null>(null);
+  const tourCanvasRef = useRef<HTMLElement>(null);
   const [composer, setComposer] = useState<ComposerState | null>(null);
   const [question, setQuestion] = useState("");
   const [answering, setAnswering] = useState(false);
@@ -963,6 +971,10 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
     setActiveEvidenceId(activeStop.evidence[0]?.id ?? null);
     setSelection(null);
   }, [activeStop]);
+
+  useEffect(() => {
+    if (view === "tour") tourCanvasRef.current?.scrollTo({ top: 0 });
+  }, [activeIndex, reviewMode, view]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -1160,7 +1172,7 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
           view={view}
         />
 
-        <main className="main-canvas">
+        <main className="main-canvas" ref={tourCanvasRef}>
           {view === "brief" && <Summary onBegin={beginTour} onReviewMode={selectReviewMode} onSelectStop={selectStop} reviewMode={reviewMode} />}
           {view === "tour" && (
             <TourView
@@ -1317,7 +1329,7 @@ function Summary({ onBegin, onReviewMode, onSelectStop, reviewMode }: { onBegin:
         </header>
         {isUpdate ? <div className="summary-finding-list">{reviewUpdate.findingRevisions.map((finding, index) => <button key={finding.findingId} onClick={() => onSelectStop(updateStops.findIndex((stop) => stop.id === finding.stopId))} type="button"><span className="finding-rank">{String(index + 1).padStart(2, "0")}</span><span className="resolution-badge"><Icon name="check" size={12} />addressed</span><span><strong>{finding.title}</strong><small>{finding.summary}</small><em>{finding.severity} priority · recheck</em></span><Icon name="chevron-right" size={16} /></button>)}</div> : rankedFindings.length ? <div className="summary-finding-list">{rankedFindings.map(({ finding, stop, stopIndex }, index) => <button key={finding.id} onClick={() => onSelectStop(stopIndex)} type="button"><span className="finding-rank">{String(index + 1).padStart(2, "0")}</span><span className={`risk-level risk-level--${finding.severity}`}>{finding.severity}</span><span><strong>{finding.title}</strong><small>{finding.body}</small><em>{finding.category} · {stop.eyebrow}</em></span><Icon name="chevron-right" size={16} /></button>)}</div> : <div className="summary-clear"><Icon name="check" size={18} /><div><strong>Nothing in the analyzed evidence currently argues against approval.</strong><span>{reviewUpdate.unchangedStopIds.length} previously reviewed areas are unchanged.</span></div></div>}
       </section>
-      <section className="summary-context"><div><span>{isUpdate ? "Update" : "Change"}</span><p>{isUpdate ? "The author replaced the Redis counter operation and added its concurrent regression test." : pullRequest.inferredSummary}</p></div><div><span>Author intent</span><p>{pullRequest.statedIntent}</p></div></section>
+      <section className="summary-context"><div><span>{isUpdate ? "Update" : "Change"}</span><p>{isUpdate ? "The author replaced the Redis counter operation and added its concurrent regression test." : pullRequest.inferredSummary}</p></div><div><span>Author intent</span><AuthorMarkdown source={pullRequest.statedIntent} /></div></section>
       <section className="begin-card"><div><strong>{activeStops.length} review stops</strong><span>{activeStops.reduce((total, stop) => total + stop.minutes, 0)} min · {isUpdate ? "only code changed since your review" : "full PR backstop"}</span></div><button className="button button--hero" onClick={onBegin} type="button">{isUpdate ? "Review updates" : "Review entire PR"} <Icon name="arrow-right" /></button></section>
     </div>
   );
@@ -1454,6 +1466,10 @@ function checkoutMessage(preparation: TargetPreparation): string {
   if (checkout.status === "matched") return "Current checkout matches";
   if (checkout.status === "different" && checkout.repository) return `Current checkout is ${checkout.repository}`;
   return "No local checkout resolved";
+}
+
+function AuthorMarkdown({ fallback, source }: { fallback?: string; source: string }) {
+  return <Suspense fallback={<p className="markdown-loading">Formatting description…</p>}><MarkdownContent fallback={fallback} source={source} /></Suspense>;
 }
 
 function usePersistentState<T>(key: string, fallback: T) {
