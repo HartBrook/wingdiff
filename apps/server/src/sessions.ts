@@ -112,6 +112,18 @@ export interface SubmittedReview {
   submittedAt: string;
 }
 
+export interface ReviewPublicationAttempt {
+  sessionId: string;
+  headSha: string;
+  state: "publishing" | "uncertain";
+  event: ReviewDraft["event"];
+  body: string;
+  comments: DraftReviewComment[];
+  startedAt: string;
+  updatedAt: string;
+  error?: string;
+}
+
 export interface InvestigationEntry {
   id: string;
   sessionId: string;
@@ -140,6 +152,7 @@ export class SessionStore {
     this.database = new DatabaseSync(databasePath);
     this.database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;");
     migrate(this.database);
+    this.database.prepare("UPDATE review_publications SET state = 'uncertain' WHERE state = 'publishing'").run();
   }
 
   upsertReadySession(target: PullRequestTarget, metadata: PullRequestMetadata, evidence: PullRequestEvidence): ReviewSession {
@@ -523,6 +536,83 @@ export class SessionStore {
     return this.getSubmittedReview(sessionId, headSha)!;
   }
 
+  getReviewPublication(sessionId: string, headSha: string): ReviewPublicationAttempt | undefined {
+    this.requireSession(sessionId);
+    const row = this.database.prepare("SELECT * FROM review_publications WHERE session_id = ? AND head_sha = ?")
+      .get(sessionId, headSha);
+    if (!row) return undefined;
+    return {
+      sessionId: String(row.session_id),
+      headSha: String(row.head_sha),
+      state: String(row.state) as ReviewPublicationAttempt["state"],
+      event: String(row.event) as ReviewDraft["event"],
+      body: String(row.body),
+      comments: JSON.parse(String(row.comments_json)) as DraftReviewComment[],
+      startedAt: String(row.started_at),
+      updatedAt: String(row.updated_at),
+      ...(row.error ? { error: String(row.error) } : {}),
+    };
+  }
+
+  beginReviewPublication(
+    sessionId: string,
+    headSha: string,
+    draft: Pick<ReviewDraft, "body" | "event">,
+    comments: DraftReviewComment[],
+  ): ReviewPublicationAttempt {
+    this.requireSession(sessionId);
+    if (this.getSubmittedReview(sessionId, headSha)) throw new Error("A review has already been published for this pinned head.");
+    const existing = this.getReviewPublication(sessionId, headSha);
+    if (existing) {
+      throw new Error(existing.state === "publishing"
+        ? "A review publication is already in progress for this pinned head."
+        : "A previous publication has an uncertain outcome. Verify GitHub before allowing a retry.");
+    }
+    const timestamp = this.now().toISOString();
+    this.database.prepare(`
+      INSERT INTO review_publications (
+        session_id, head_sha, state, event, body, comments_json, started_at, updated_at, error
+      ) VALUES (?, ?, 'publishing', ?, ?, ?, ?, ?, NULL)
+    `).run(sessionId, headSha, draft.event, draft.body, JSON.stringify(comments), timestamp, timestamp);
+    return this.getReviewPublication(sessionId, headSha)!;
+  }
+
+  markReviewPublicationUncertain(sessionId: string, headSha: string, error: string): ReviewPublicationAttempt {
+    this.requireSession(sessionId);
+    this.database.prepare(`
+      UPDATE review_publications SET state = 'uncertain', error = ?, updated_at = ?
+      WHERE session_id = ? AND head_sha = ?
+    `).run(error.slice(0, 2_000), this.now().toISOString(), sessionId, headSha);
+    return this.getReviewPublication(sessionId, headSha)!;
+  }
+
+  clearUncertainReviewPublication(sessionId: string, headSha: string): boolean {
+    this.requireSession(sessionId);
+    return this.database.prepare(`
+      DELETE FROM review_publications WHERE session_id = ? AND head_sha = ? AND state = 'uncertain'
+    `).run(sessionId, headSha).changes > 0;
+  }
+
+  completeReviewPublication(
+    sessionId: string,
+    headSha: string,
+    githubReviewId: number,
+    url: string,
+    draft: Pick<ReviewDraft, "body" | "event">,
+    comments: DraftReviewComment[],
+  ): SubmittedReview {
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const submitted = this.saveSubmittedReview(sessionId, headSha, githubReviewId, url, draft, comments);
+      this.database.prepare("DELETE FROM review_publications WHERE session_id = ? AND head_sha = ?").run(sessionId, headSha);
+      this.database.exec("COMMIT");
+      return submitted;
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   listInvestigationEntries(sessionId: string): InvestigationEntry[] {
     this.requireSession(sessionId);
     return this.database.prepare(`
@@ -585,7 +675,7 @@ export function defaultDatabasePath(environment: NodeJS.ProcessEnv = process.env
 
 function migrate(database: DatabaseSync) {
   let version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
-  if (version > 12) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
+  if (version > 13) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
 
   if (version === 0) database.exec(`
     BEGIN;
@@ -830,6 +920,25 @@ function migrate(database: DatabaseSync) {
       updated_at TEXT NOT NULL
     );
     PRAGMA user_version = 12;
+    COMMIT;
+  `);
+
+  version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+  if (version === 12) database.exec(`
+    BEGIN;
+    CREATE TABLE review_publications (
+      session_id TEXT NOT NULL REFERENCES review_sessions(id) ON DELETE CASCADE,
+      head_sha TEXT NOT NULL,
+      state TEXT NOT NULL CHECK (state IN ('publishing', 'uncertain')),
+      event TEXT NOT NULL CHECK (event IN ('COMMENT', 'APPROVE', 'REQUEST_CHANGES')),
+      body TEXT NOT NULL,
+      comments_json TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      error TEXT,
+      PRIMARY KEY(session_id, head_sha)
+    );
+    PRAGMA user_version = 13;
     COMMIT;
   `);
 }

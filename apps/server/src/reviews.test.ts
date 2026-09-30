@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { publishPullRequestReview, submitSessionReview } from "./reviews.js";
 import { SessionStore, type DraftReviewComment } from "./sessions.js";
 import { parsePullRequestTarget } from "./targets.js";
@@ -101,6 +101,61 @@ describe("GitHub review submission", () => {
       dependencies,
       { scope: "full", acknowledgeApprovalRisks: true },
     )).resolves.toMatchObject({ githubReviewId: 92 });
+    store.close();
+  });
+
+  it("serializes concurrent publications and preserves ambiguous outcomes", async () => {
+    const store = new SessionStore(":memory:");
+    const session = store.upsertReadySession(target, metadata(), evidence());
+    let finishPublication!: (value: { id: number; url: string; state: string }) => void;
+    let publishCount = 0;
+    const dependencies = {
+      readMetadata: async () => metadata(),
+      publishReview: async () => {
+        publishCount += 1;
+        return new Promise<{ id: number; url: string; state: string }>((resolve) => { finishPublication = resolve; });
+      },
+    };
+    const first = submitSessionReview(session, store, "/work/codex", { body: "Review.", event: "COMMENT" }, dependencies);
+    await vi.waitFor(() => expect(publishCount).toBe(1));
+
+    await expect(submitSessionReview(session, store, "/work/codex", { body: "Review.", event: "COMMENT" }, dependencies))
+      .rejects.toThrow(/already in progress/);
+    expect(publishCount).toBe(1);
+    finishPublication({ id: 93, url: "url", state: "COMMENTED" });
+    await expect(first).resolves.toMatchObject({ githubReviewId: 93 });
+    expect(store.getReviewPublication(session.id, session.metadata.head.sha)).toBeUndefined();
+    store.close();
+  });
+
+  it("blocks retries after an ambiguous GitHub failure until the reviewer clears it", async () => {
+    const store = new SessionStore(":memory:");
+    const session = store.upsertReadySession(target, metadata(), evidence());
+    let shouldFail = true;
+    let publishCount = 0;
+    const dependencies = {
+      readMetadata: async () => metadata(),
+      publishReview: async () => {
+        publishCount += 1;
+        if (shouldFail) throw new Error("connection closed after upload");
+        return { id: 94, url: "url", state: "COMMENTED" };
+      },
+    };
+
+    await expect(submitSessionReview(session, store, "/work/codex", { body: "Review.", event: "COMMENT" }, dependencies))
+      .rejects.toThrow(/outcome is uncertain/);
+    expect(store.getReviewPublication(session.id, session.metadata.head.sha)).toMatchObject({
+      state: "uncertain",
+      error: "connection closed after upload",
+    });
+    await expect(submitSessionReview(session, store, "/work/codex", { body: "Review.", event: "COMMENT" }, dependencies))
+      .rejects.toThrow(/uncertain outcome/);
+    expect(publishCount).toBe(1);
+
+    expect(store.clearUncertainReviewPublication(session.id, session.metadata.head.sha)).toBe(true);
+    shouldFail = false;
+    await expect(submitSessionReview(session, store, "/work/codex", { body: "Review.", event: "COMMENT" }, dependencies))
+      .resolves.toMatchObject({ githubReviewId: 94 });
     store.close();
   });
 });

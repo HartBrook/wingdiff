@@ -273,6 +273,32 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
     response.json({ submission: sessionStore.getSubmittedReview(session.id, session.metadata.head.sha) ?? null });
   });
 
+  app.get("/api/sessions/:id/review-publication", (request, response) => {
+    const session = sessionStore.getSession(request.params.id);
+    if (!session) {
+      response.status(404).json({ error: "Review session not found." });
+      return;
+    }
+    response.json({ publication: sessionStore.getReviewPublication(session.id, session.metadata.head.sha) ?? null });
+  });
+
+  app.delete("/api/sessions/:id/review-publication", (request, response) => {
+    const session = sessionStore.getSession(request.params.id);
+    if (!session) {
+      response.status(404).json({ error: "Review session not found." });
+      return;
+    }
+    if (request.body?.verifiedGitHub !== true) {
+      response.status(400).json({ error: "Confirm that GitHub does not contain the review before allowing a retry." });
+      return;
+    }
+    if (!sessionStore.clearUncertainReviewPublication(session.id, session.metadata.head.sha)) {
+      response.status(409).json({ error: "Only an uncertain publication can be cleared." });
+      return;
+    }
+    response.status(204).end();
+  });
+
   app.post("/api/sessions/:id/review-submission", async (request, response) => {
     try {
       const session = sessionStore.getSession(request.params.id);

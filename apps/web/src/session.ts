@@ -175,6 +175,18 @@ export interface StoredReviewSubmission {
   submittedAt: string;
 }
 
+export interface StoredReviewPublication {
+  sessionId: string;
+  headSha: string;
+  state: "publishing" | "uncertain";
+  event: StoredReviewDraft["event"];
+  body: string;
+  comments: StoredDraftReviewComment[];
+  startedAt: string;
+  updatedAt: string;
+  error?: string;
+}
+
 export interface StoredInvestigationEntry {
   id: string;
   sessionId: string;
@@ -428,6 +440,24 @@ export async function fetchReviewSubmission(id: string, signal?: AbortSignal): P
   const body = await response.json() as { submission?: StoredReviewSubmission | null; error?: string };
   if (!response.ok) throw new Error(body.error ?? "Wingdiff could not load the submitted review.");
   return body.submission ?? null;
+}
+
+export async function fetchReviewPublication(id: string, signal?: AbortSignal): Promise<StoredReviewPublication | null> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/review-publication`, { signal });
+  const body = await response.json() as { publication?: StoredReviewPublication | null; error?: string };
+  if (!response.ok) throw new Error(body.error ?? "Wingdiff could not load the publication state.");
+  return body.publication ?? null;
+}
+
+export async function clearUncertainReviewPublication(id: string): Promise<void> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/review-publication`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ verifiedGitHub: true }),
+  });
+  if (response.ok) return;
+  const body = await response.json() as { error?: string };
+  throw new Error(body.error ?? "Wingdiff could not allow another publication attempt.");
 }
 
 export async function publishReview(

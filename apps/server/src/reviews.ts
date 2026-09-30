@@ -58,14 +58,17 @@ export async function submitSessionReview(
   if (!draft.body.trim() && draft.event !== "APPROVE") throw new Error(`${draft.event === "COMMENT" ? "Comment" : "Request changes"} reviews require a summary.`);
   if (!draft.body.trim() && comments.length === 0) throw new Error("Add a review summary or an inline comment before publishing.");
 
-  const published = await dependencies.publishReview(session.target, cwd, session.metadata.head.sha, draft, comments);
-  return store.saveSubmittedReview(
-    session.id,
-    session.metadata.head.sha,
-    published.id,
-    published.url,
-    draft,
-    comments,
+  store.beginReviewPublication(session.id, session.metadata.head.sha, draft, comments);
+  let published: PublishedReview;
+  try {
+    published = await dependencies.publishReview(session.target, cwd, session.metadata.head.sha, draft, comments);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "GitHub review publication failed.";
+    store.markReviewPublicationUncertain(session.id, session.metadata.head.sha, message);
+    throw new Error(`${message} The publication outcome is uncertain; verify GitHub before allowing a retry.`);
+  }
+  return store.completeReviewPublication(
+    session.id, session.metadata.head.sha, published.id, published.url, draft, comments,
   );
 }
 

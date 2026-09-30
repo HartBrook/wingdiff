@@ -464,6 +464,10 @@ code, kbd { font-family: var(--mono); }
 .approval-warning ul { margin: 7px 0; padding-left: 16px; }
 .approval-warning label { display: flex; align-items: flex-start; gap: 7px; cursor: pointer; }
 .approval-warning input { margin-top: 2px; accent-color: var(--accent); }
+.publication-warning { margin-top: 12px; padding: 10px; border: 1px solid color-mix(in srgb, var(--coral) 45%, var(--border)); border-radius: 9px; background: var(--coral-soft); color: var(--text-2); font-size: 9px; line-height: 1.45; }
+.publication-warning strong, .publication-warning p { display: block; margin: 0; }
+.publication-warning p { margin-top: 6px; }
+.publication-warning .button { margin-top: 9px; }
 
 .drawer-backdrop { position: fixed; z-index: 70; inset: 62px 0 0; width: 100%; border: 0; background: rgba(4,5,5,.55); backdrop-filter: blur(2px); }
 .investigation-drawer { position: fixed; z-index: 80; top: 62px; right: 0; bottom: 0; display: flex; width: min(450px, 94vw); flex-direction: column; border-left: 1px solid var(--border); background: var(--surface); box-shadow: -30px 0 80px rgba(0,0,0,.3); animation: drawer-in 260ms cubic-bezier(.2,.8,.2,1); }

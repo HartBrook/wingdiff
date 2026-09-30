@@ -68,6 +68,7 @@ async function mockReviewApi(page: Page) {
     }
     if (path === "/api/sessions/pilot-session/review-draft") return json(route, { draft: null });
     if (path === "/api/sessions/pilot-session/review-submission") return json(route, { submission: null });
+    if (path === "/api/sessions/pilot-session/review-publication") return json(route, { publication: null });
     if (path === "/api/sessions/pilot-session/checkpoint") return json(route, { checkpoint: null });
     if (path === "/api/sessions/pilot-session/context") return json(route, { manifest });
     if (path === "/api/sessions/pilot-session/tour") {

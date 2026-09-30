@@ -112,7 +112,7 @@ describe("local review sessions", () => {
       selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
       tour: { summary: "The counter change is small and focused." },
     });
-    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(12);
+    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(13);
     store.close();
   });
 
@@ -198,6 +198,19 @@ describe("local review sessions", () => {
     expect(store.saveContextExclusions(session.id, ["vendor/**", "**/*.pem"])).toEqual(["vendor/**", "**/*.pem"]);
     expect(store.getTour(session.id, "full")).toBeUndefined();
     store.close();
+  });
+
+  it("turns an interrupted publication into an explicit uncertain state on restart", async () => {
+    const directory = await temporaryDirectory();
+    const databasePath = path.join(directory, "sessions.sqlite3");
+    const first = new SessionStore(databasePath);
+    const session = first.upsertReadySession(target, metadata(), evidence());
+    first.beginReviewPublication(session.id, session.metadata.head.sha, { body: "Review.", event: "COMMENT" }, []);
+    first.close();
+
+    const reopened = new SessionStore(databasePath);
+    expect(reopened.getReviewPublication(session.id, session.metadata.head.sha)).toMatchObject({ state: "uncertain" });
+    reopened.close();
   });
 
   it("finds the latest pull request checkpoint and persists its update evidence", () => {
