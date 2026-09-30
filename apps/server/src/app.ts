@@ -361,7 +361,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
     });
   });
 
-  app.get("/api/sessions/:id/tour", (request, response) => {
+  app.get("/api/sessions/:id/tour", async (request, response) => {
     const session = sessionStore.getSession(request.params.id);
     if (!session) {
       response.status(404).json({ error: "Review session not found." });
@@ -384,6 +384,18 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
     if (!generated) {
       response.status(404).json({ error: "This revision does not have a generated tour yet." });
       return;
+    }
+    if (generated.contextFingerprint) {
+      try {
+        const currentContext = await buildSessionGenerationContext(session, sessionStore, scope, cwd);
+        if (currentContext.manifest.fingerprint !== generated.contextFingerprint) {
+          response.status(409).json({ error: "The model context changed after this tour was generated. Generate it again." });
+          return;
+        }
+      } catch (error) {
+        response.status(400).json({ error: error instanceof Error ? error.message : "Tour context could not be verified." });
+        return;
+      }
     }
     response.json({ generated });
   });

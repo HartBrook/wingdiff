@@ -74,6 +74,7 @@ export interface GeneratedSessionTour {
   selection: ModelSelection;
   baseSha: string;
   headSha: string;
+  contextFingerprint?: string;
   tour: {
     summary: string;
     stops: Array<{
@@ -247,7 +248,7 @@ export async function fetchReviewSession(id: string, signal?: AbortSignal): Prom
 
 export async function fetchSessionTour(id: string, scope: "full" | "update" = "full", signal?: AbortSignal): Promise<GeneratedSessionTour | null> {
   const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/tour?scope=${scope}`, { signal });
-  if (response.status === 404) return null;
+  if (response.status === 404 || response.status === 409) return null;
   const body = await response.json() as { generated?: GeneratedSessionTour; error?: string };
   if (!response.ok || !body.generated) throw new Error(body.error ?? "Wingdiff could not load this guided tour.");
   return body.generated;

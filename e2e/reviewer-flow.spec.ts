@@ -32,6 +32,18 @@ test("reviews a real-session fixture from privacy preview through an anchored dr
   await commentDialog.getByRole("button", { name: "Add to review" }).click();
   await expect(page.getByRole("button", { name: /Review 1/ })).toBeVisible();
 
+  await page.getByRole("button", { name: /Review 1/ }).click();
+  await expect(page.getByRole("heading", { name: "Prepare your decision." })).toBeVisible();
+  await page.getByPlaceholder("Summarize your review…").fill("The atomic update is ready.");
+  await page.getByRole("button", { name: /Approve Signal/ }).click();
+  await expect(page.getByText("Approval needs acknowledgement")).toBeVisible();
+  const publish = page.getByRole("button", { name: "Publish review to GitHub" });
+  await expect(publish).toBeDisabled();
+  await page.getByLabel("I reviewed these signals and still intend to approve.").check();
+  await expect(publish).toBeEnabled();
+  await publish.click();
+  await expect(page.getByRole("link", { name: "Open on GitHub" })).toBeVisible();
+
   await page.getByRole("button", { name: "New review" }).click();
   await expect(page.getByRole("heading", { name: "Paste a pull request." })).toBeVisible();
 });
@@ -66,8 +78,20 @@ async function mockReviewApi(page: Page) {
       const update = request.postDataJSON();
       return json(route, { entry: { id: investigationId, sessionId: session.id, stopId: "atomic-counter", evidenceId: "session-0-src/counter.ts", question: "Can concurrent callers lose increments?", provider: "codex", model: "Codex CLI · GPT-6 Sol", createdAt: now, updatedAt: now, ...update } });
     }
-    if (path === "/api/sessions/pilot-session/review-draft") return json(route, { draft: null });
-    if (path === "/api/sessions/pilot-session/review-submission") return json(route, { submission: null });
+    if (path === "/api/sessions/pilot-session/review-draft") {
+      if (method === "PUT") return json(route, { draft: { sessionId: session.id, updatedAt: now, ...request.postDataJSON() } });
+      return json(route, { draft: null });
+    }
+    if (path === "/api/sessions/pilot-session/review-submission") {
+      if (method === "POST") {
+        const input = request.postDataJSON();
+        return json(route, { submission: {
+          sessionId: session.id, headSha, githubReviewId: 91, url: "https://github.com/acme/service/pull/42#pullrequestreview-91",
+          event: input.event, body: input.body, comments: [], submittedAt: now,
+        } }, 201);
+      }
+      return json(route, { submission: null });
+    }
     if (path === "/api/sessions/pilot-session/review-publication") return json(route, { publication: null });
     if (path === "/api/sessions/pilot-session/checkpoint") return json(route, { checkpoint: null });
     if (path === "/api/sessions/pilot-session/context") return json(route, { manifest });

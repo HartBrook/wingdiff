@@ -40,7 +40,7 @@ describe("generated tour contract", () => {
 
     expect(input.pullRequest.baseSha).toBe("c".repeat(40));
     expect(input.pullRequest.headSha).toBe(metadata.head.sha);
-    expect(input.pullRequest.baseRef).toBe("reviewed-head");
+    expect(input.pullRequest.baseRef).toBe("comparison-base");
   });
 
   it("accepts concise, fully grounded stops", () => {
@@ -59,6 +59,22 @@ describe("generated tour contract", () => {
     const uncovered = validTour(input.fileAnchorIds);
     uncovered.stops.pop();
     expect(() => validateGeneratedTour(uncovered, input)).toThrow(/does not cover changed file/);
+  });
+
+  it("requires exact line grounding for textual coverage, facts, and findings", () => {
+    const input = buildTourGenerationInput(metadata, evidence);
+
+    const fileOnlyCoverage = validTour(input.fileAnchorIds);
+    fileOnlyCoverage.stops[0]!.anchorIds = [input.fileAnchorIds[0]!];
+    expect(() => validateGeneratedTour(fileOnlyCoverage, input)).toThrow(/does not cite changed lines/);
+
+    const fileOnlyClaim = validTour(input.fileAnchorIds);
+    fileOnlyClaim.stops[0]!.claims[0]!.anchorIds = [input.fileAnchorIds[0]!];
+    expect(() => validateGeneratedTour(fileOnlyClaim, input)).toThrow(/claim must cite an exact changed line/);
+
+    const fileOnlyFinding = validTour(input.fileAnchorIds);
+    fileOnlyFinding.stops[0]!.finding!.anchorIds = [input.fileAnchorIds[0]!];
+    expect(() => validateGeneratedTour(fileOnlyFinding, input)).toThrow(/finding must cite an exact changed line/);
   });
 
   it("rejects duplicate IDs and conspicuously verbose copy", () => {

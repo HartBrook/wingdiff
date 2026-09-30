@@ -1,5 +1,8 @@
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "./app.js";
 import type { PullRequestEvidence } from "./diff.js";
@@ -10,12 +13,14 @@ import { parsePullRequestTarget } from "./targets.js";
 
 let server: Server | undefined;
 let store: SessionStore | undefined;
+const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
   if (server) await new Promise<void>((resolve, reject) => server!.close((error) => error ? reject(error) : resolve()));
   store?.close();
   server = undefined;
   store = undefined;
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
 describe("generated tour API", () => {
@@ -100,6 +105,44 @@ describe("generated tour API", () => {
     expect(investigationContext?.stop.title).toBe("Counter update");
     expect(investigationContext?.stop.evidence.flatMap((item) => item.lines).map((line) => line.content))
       .toContain("return redis.incr(key)");
+  });
+
+  it("invalidates a persisted tour when repository instructions change", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "wingdiff-app-context-"));
+    temporaryDirectories.push(root);
+    await writeFile(path.join(root, "AGENTS.md"), "Review concurrency carefully.\n", "utf8");
+    store = new SessionStore(":memory:");
+    const session = store.upsertReadySession(target, metadata, evidence);
+    const provider: TextProvider = {
+      id: "codex",
+      async generateTour(_selection, input) {
+        return {
+          summary: "The counter update is atomic.",
+          stops: [{
+            id: "atomic-counter", title: "Counter update", summary: "Redis performs the increment.", purpose: "Verify behavior.",
+            anchorIds: [input.fileAnchorIds[0]!, "line_new-counter"],
+            claims: [{ text: "The new path calls INCR.", kind: "fact", confidence: "high", anchorIds: ["line_new-counter"] }],
+            prompts: [], finding: null,
+          }],
+        };
+      },
+      async *streamInvestigation() { yield ""; },
+    };
+    const app = createApp({}, { sessionStore: store, providers: new Map([["codex", provider]]), cwd: root });
+    server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => server!.once("listening", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const url = `http://127.0.0.1:${port}/api/sessions/${session.id}/tour`;
+    const created = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" } }),
+    });
+    expect(created.status).toBe(201);
+
+    await writeFile(path.join(root, "AGENTS.md"), "Review failure handling carefully.\n", "utf8");
+    const stale = await fetch(url);
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toMatchObject({ error: expect.stringMatching(/context changed/) });
   });
 
   it("stages only comments anchored to the pinned diff", async () => {

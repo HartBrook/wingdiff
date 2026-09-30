@@ -134,9 +134,12 @@ export function validateGeneratedTour(raw: unknown, input: TourGenerationInput):
   const rawStops = list(value.stops, "tour stops", 1, 12);
   const knownAnchors = new Set(input.anchors.map((anchor) => anchor.id));
   const anchorToPath = new Map(input.anchors.map((anchor) => [anchor.id, anchor.path]));
+  const anchorById = new Map(input.anchors.map((anchor) => [anchor.id, anchor]));
+  const pathsWithLineAnchors = new Set(input.anchors.filter((anchor) => anchor.kind !== "file").map((anchor) => anchor.path));
   const fileAnchorToPath = new Map(input.fileAnchorIds.map((id) => [id, anchorToPath.get(id)!]));
   const ids = new Set<string>();
   const coveredPaths = new Set<string>();
+  const coveredLinePaths = new Set<string>();
 
   const stops = rawStops.map((candidate, index): GeneratedTourStop => {
     const stop = record(candidate, `tour stop ${index + 1}`);
@@ -146,21 +149,27 @@ export function validateGeneratedTour(raw: unknown, input: TourGenerationInput):
     ids.add(id);
 
     const anchorIds = anchors(stop.anchorIds, `${id} anchors`, knownAnchors, 1, 24);
-    anchorIds.forEach((anchorId) => coveredPaths.add(anchorToPath.get(anchorId)!));
+    anchorIds.forEach((anchorId) => {
+      coveredPaths.add(anchorToPath.get(anchorId)!);
+      if (anchorById.get(anchorId)?.kind !== "file") coveredLinePaths.add(anchorToPath.get(anchorId)!);
+    });
     const claims = list(stop.claims, `${id} claims`, 1, 6).map((claimValue, claimIndex): GeneratedTourClaim => {
       const claim = record(claimValue, `${id} claim ${claimIndex + 1}`);
+      const kind = choice(claim.kind, `${id} claim kind`, ["fact", "inference", "unknown"] as const);
+      const claimAnchorIds = anchors(claim.anchorIds, `${id} claim anchors`, knownAnchors, 1, 8);
+      if (kind !== "unknown") requirePreciseTextAnchor(claimAnchorIds, `${id} claim`, anchorById, pathsWithLineAnchors);
       return {
         text: boundedText(claim.text, `${id} claim text`, 280),
-        kind: choice(claim.kind, `${id} claim kind`, ["fact", "inference", "unknown"] as const),
+        kind,
         confidence: choice(claim.confidence, `${id} claim confidence`, ["high", "medium", "low"] as const),
-        anchorIds: anchors(claim.anchorIds, `${id} claim anchors`, knownAnchors, 1, 8),
+        anchorIds: claimAnchorIds,
       };
     });
     const prompts = list(stop.prompts, `${id} prompts`, 0, 4)
       .map((prompt, promptIndex) => boundedText(prompt, `${id} prompt ${promptIndex + 1}`, 220));
     const finding = stop.finding === undefined || stop.finding === null
       ? undefined
-      : validateFinding(stop.finding, id, knownAnchors);
+      : validateFinding(stop.finding, id, knownAnchors, anchorById, pathsWithLineAnchors);
 
     return {
       id,
@@ -176,6 +185,9 @@ export function validateGeneratedTour(raw: unknown, input: TourGenerationInput):
 
   for (const [fileAnchorId, path] of fileAnchorToPath) {
     if (!coveredPaths.has(path)) throw new Error(`Generated tour does not cover changed file ${path} (${fileAnchorId}).`);
+    if (pathsWithLineAnchors.has(path) && !coveredLinePaths.has(path)) {
+      throw new Error(`Generated tour does not cite changed lines in ${path} (${fileAnchorId}).`);
+    }
   }
 
   const findingRevisions = validateFindingRevisions(value.findingRevisions ?? [], input, knownAnchors);
@@ -267,16 +279,40 @@ function validateFindingRevisions(
   return result;
 }
 
-function validateFinding(raw: unknown, stopId: string, knownAnchors: Set<string>): GeneratedTourFinding {
+function validateFinding(
+  raw: unknown,
+  stopId: string,
+  knownAnchors: Set<string>,
+  anchorById: Map<string, TourEvidenceAnchor>,
+  pathsWithLineAnchors: Set<string>,
+): GeneratedTourFinding {
   const finding = record(raw, `${stopId} finding`);
+  const anchorIds = anchors(finding.anchorIds, `${stopId} finding anchors`, knownAnchors, 1, 8);
+  requirePreciseTextAnchor(anchorIds, `${stopId} finding`, anchorById, pathsWithLineAnchors);
   return {
     title: boundedText(finding.title, `${stopId} finding title`, 160),
     body: boundedText(finding.body, `${stopId} finding body`, 420),
     severity: choice(finding.severity, `${stopId} finding severity`, ["high", "medium", "low"] as const),
     category: boundedText(finding.category, `${stopId} finding category`, 80),
-    anchorIds: anchors(finding.anchorIds, `${stopId} finding anchors`, knownAnchors, 1, 8),
+    anchorIds,
     suggestedComment: boundedText(finding.suggestedComment, `${stopId} suggested comment`, 500),
   };
+}
+
+function requirePreciseTextAnchor(
+  anchorIds: string[],
+  label: string,
+  anchorById: Map<string, TourEvidenceAnchor>,
+  pathsWithLineAnchors: Set<string>,
+) {
+  const referenced = anchorIds.flatMap((id) => {
+    const anchor = anchorById.get(id);
+    return anchor ? [anchor] : [];
+  });
+  const textual = referenced.filter((anchor) => pathsWithLineAnchors.has(anchor.path));
+  if (textual.length && !textual.some((anchor) => anchor.kind !== "file")) {
+    throw new Error(`${label} must cite an exact changed line, not only a file anchor.`);
+  }
 }
 
 function fileAnchorId(file: ChangedFileEvidence, index: number): string {

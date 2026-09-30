@@ -7,6 +7,8 @@ import type { PullRequestEvidence } from "./diff.js";
 import type { PullRequestMetadata } from "./github.js";
 import type { ModelSelection } from "./providers/types.js";
 import type { GeneratedTour } from "./tour.js";
+import type { TourEvidenceAnchor } from "./tour.js";
+import type { SessionContextManifest } from "./context.js";
 import { parsePullRequestTarget, type PullRequestTarget } from "./targets.js";
 
 export type SessionStatus = "acquiring" | "ready" | "failed";
@@ -72,6 +74,9 @@ export interface StoredTour {
   baseSha: string;
   headSha: string;
   tour: GeneratedTour;
+  contextFingerprint?: string;
+  contextManifest?: SessionContextManifest;
+  anchors?: TourEvidenceAnchor[];
   createdAt: string;
   updatedAt: string;
 }
@@ -393,13 +398,15 @@ export class SessionStore {
     baseSha: string,
     headSha: string,
     tour: GeneratedTour,
+    provenance?: { manifest: SessionContextManifest; anchors: TourEvidenceAnchor[] },
   ): StoredTour {
     this.requireSession(sessionId);
     const timestamp = this.now().toISOString();
     this.database.prepare(`
       INSERT INTO generated_tours (
-        session_id, scope, provider, model, reasoning_effort, base_sha, head_sha, tour_json, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        session_id, scope, provider, model, reasoning_effort, base_sha, head_sha, tour_json,
+        context_fingerprint, context_manifest_json, anchors_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(session_id, scope) DO UPDATE SET
         provider = excluded.provider,
         model = excluded.model,
@@ -407,6 +414,9 @@ export class SessionStore {
         base_sha = excluded.base_sha,
         head_sha = excluded.head_sha,
         tour_json = excluded.tour_json,
+        context_fingerprint = excluded.context_fingerprint,
+        context_manifest_json = excluded.context_manifest_json,
+        anchors_json = excluded.anchors_json,
         updated_at = excluded.updated_at
     `).run(
       sessionId,
@@ -417,6 +427,9 @@ export class SessionStore {
       baseSha,
       headSha,
       JSON.stringify(tour),
+      provenance?.manifest.fingerprint ?? "",
+      provenance ? JSON.stringify(provenance.manifest) : null,
+      provenance ? JSON.stringify(provenance.anchors) : null,
       timestamp,
       timestamp,
     );
@@ -441,6 +454,9 @@ export class SessionStore {
         ...parsedTour,
         findingRevisions: Array.isArray(parsedTour.findingRevisions) ? parsedTour.findingRevisions : [],
       },
+      ...(row.context_fingerprint ? { contextFingerprint: String(row.context_fingerprint) } : {}),
+      ...(row.context_manifest_json ? { contextManifest: JSON.parse(String(row.context_manifest_json)) as SessionContextManifest } : {}),
+      ...(row.anchors_json ? { anchors: JSON.parse(String(row.anchors_json)) as TourEvidenceAnchor[] } : {}),
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
     };
@@ -675,7 +691,7 @@ export function defaultDatabasePath(environment: NodeJS.ProcessEnv = process.env
 
 function migrate(database: DatabaseSync) {
   let version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
-  if (version > 13) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
+  if (version > 14) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
 
   if (version === 0) database.exec(`
     BEGIN;
@@ -939,6 +955,16 @@ function migrate(database: DatabaseSync) {
       PRIMARY KEY(session_id, head_sha)
     );
     PRAGMA user_version = 13;
+    COMMIT;
+  `);
+
+  version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+  if (version === 13) database.exec(`
+    BEGIN;
+    ALTER TABLE generated_tours ADD COLUMN context_fingerprint TEXT NOT NULL DEFAULT '';
+    ALTER TABLE generated_tours ADD COLUMN context_manifest_json TEXT;
+    ALTER TABLE generated_tours ADD COLUMN anchors_json TEXT;
+    PRAGMA user_version = 14;
     COMMIT;
   `);
 }

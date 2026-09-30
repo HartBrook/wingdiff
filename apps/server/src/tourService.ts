@@ -7,7 +7,7 @@ import {
   type TourEvidenceAnchor,
 } from "./tour.js";
 
-export interface SessionTour extends StoredTour {
+export interface SessionTour extends Omit<StoredTour, "contextManifest" | "anchors"> {
   anchors: TourEvidenceAnchor[];
 }
 
@@ -26,8 +26,12 @@ export async function generateSessionTour(
   if (!manifest.ready) throw new Error("Model context is too large. Exclude generated or low-value files before generating a tour.");
   const raw = await provider.generateTour(selection, input, signal);
   const tour = validateGeneratedTour(raw, input);
-  const stored = store.saveTour(session.id, scope, selection, evidence.baseSha, evidence.headSha, tour);
-  return { ...stored, anchors: input.anchors };
+  const stored = store.saveTour(session.id, scope, selection, evidence.baseSha, evidence.headSha, tour, {
+    manifest,
+    anchors: input.anchors,
+  });
+  const { contextManifest: _contextManifest, anchors: storedAnchors, ...publicStored } = stored;
+  return { ...publicStored, anchors: storedAnchors ?? input.anchors };
 }
 
 export function getSessionTour(session: ReviewSession, store: SessionStore, scope: TourScope = "full"): SessionTour | undefined {
@@ -39,6 +43,7 @@ export function getSessionTour(session: ReviewSession, store: SessionStore, scop
     const classified = new Set(stored.tour.findingRevisions.map((revision) => revision.findingId));
     if (classified.size !== priorFindings.length || priorFindings.some((finding) => !classified.has(finding.id))) return undefined;
   }
-  const input = buildTourGenerationInput(session.metadata, evidence, priorFindings);
-  return { ...stored, anchors: input.anchors };
+  const anchors = stored.anchors ?? buildTourGenerationInput(session.metadata, evidence, priorFindings).anchors;
+  const { contextManifest: _contextManifest, anchors: _storedAnchors, ...publicStored } = stored;
+  return { ...publicStored, anchors };
 }

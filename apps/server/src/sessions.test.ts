@@ -112,7 +112,7 @@ describe("local review sessions", () => {
       selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
       tour: { summary: "The counter change is small and focused." },
     });
-    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(13);
+    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(14);
     store.close();
   });
 

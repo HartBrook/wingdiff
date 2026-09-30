@@ -41,6 +41,13 @@ describe("session tour generation", () => {
 
     expect(generated.tour.stops[0]?.finding).toBeUndefined();
     expect(generated.anchors.map((anchor) => anchor.id)).toContain("line_new-counter");
+    expect(generated.contextFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(store.getTour(session.id)?.contextManifest).toMatchObject({
+      fingerprint: generated.contextFingerprint,
+      baseSha: evidence.baseSha,
+      headSha: evidence.headSha,
+    });
+    expect(store.getTour(session.id)?.anchors).toEqual(generated.anchors);
     expect(getSessionTour(session, store)).toEqual(generated);
     store.close();
   });
