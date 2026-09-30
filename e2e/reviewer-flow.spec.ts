@@ -45,7 +45,8 @@ test("reviews a real-session fixture from privacy preview through an anchored dr
   await expect(page.getByRole("link", { name: "Open on GitHub" })).toBeVisible();
 
   await page.getByRole("button", { name: "New review" }).click();
-  await expect(page.getByRole("heading", { name: "Paste a pull request." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Choose a pull request." })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Check setup" })).toBeVisible();
 });
 
 async function mockReviewApi(page: Page) {

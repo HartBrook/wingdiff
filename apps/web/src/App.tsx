@@ -182,12 +182,12 @@ function Launcher({ initialTarget, onDemo, onSession }: { initialTarget?: string
     <main className="launcher-main">
       <section className="launcher-intro">
         <div className="eyebrow">Start a review</div>
-        <h1>Paste a pull request.</h1>
-        <p>Wingdiff opens it locally and guides you through what changed.</p>
+        <h1>Choose a pull request.</h1>
+        <p>Wingdiff checks your local setup, then builds a guided review.</p>
         <form className={`target-form ${error ? "is-error" : ""}`} onSubmit={(event) => { event.preventDefault(); void submitTarget(); }}>
           <Icon name="git-pull" size={19} />
           <input autoFocus aria-label="GitHub pull request" onChange={(event) => { setInput(event.target.value); setPreparation(null); setError(null); }} placeholder="https://github.com/owner/repo/pull/123" spellCheck={false} value={input} />
-          <button disabled={!input.trim() || submitting} type="submit">{submitting ? "Checking…" : "Continue"}<Icon name="arrow-right" size={16} /></button>
+          <button disabled={!input.trim() || submitting} type="submit">{submitting ? "Checking setup…" : preparation ? "Recheck setup" : "Check setup"}<Icon name="arrow-right" size={16} /></button>
         </form>
         {error && <div className="target-error" role="alert"><Icon name="flag" size={14} />{error}</div>}
         <div className="target-help"><span>Also accepts</span><code>owner/repo#123</code><span>or run</span><code>wingdiff 123</code><span>inside a checkout</span></div>
@@ -195,12 +195,12 @@ function Launcher({ initialTarget, onDemo, onSession }: { initialTarget?: string
 
       {preparation ? <section className="target-ready">
         <span className="target-ready__icon"><Icon name="check" size={19} /></span>
-        <div><div className="eyebrow">Target ready</div><h2>{preparation.target.label}</h2><p>{checkoutMessage(preparation)} · {preparation.environment.githubCli.installed ? "GitHub CLI installed" : "GitHub CLI not found"}. No GitHub request was made.</p>{blocker && <p className="target-ready__blocker" role="alert"><Icon name="flag" size={13} />{blocker}</p>}</div>
-        <div className="target-ready__actions"><button className="button button--primary" disabled={!canAcquire || acquiring} onClick={() => void openPullRequest()} title={blocker} type="button">{acquiring ? "Preparing locally…" : "Open pull request"}<Icon name="arrow-right" size={15} /></button><button className="button button--quiet" onClick={onDemo} type="button">Open demo</button></div>
+        <div><div className="eyebrow">{blocker ? "Setup needed" : "Ready to review"}</div><h2>{preparation.target.label}</h2><p>{checkoutMessage(preparation)} · {preparation.environment.githubCli.installed ? "GitHub CLI installed" : "GitHub CLI not found"}. No GitHub request was made.</p>{blocker && <p className="target-ready__blocker" role="alert"><Icon name="flag" size={13} />{blocker}</p>}</div>
+        <div className="target-ready__actions"><button className="button button--primary" disabled={!canAcquire || acquiring} onClick={() => void openPullRequest()} title={blocker} type="button">{acquiring ? "Preparing review…" : "Start review"}<Icon name="arrow-right" size={15} /></button><button className="button button--quiet" onClick={onDemo} type="button">Try demo</button></div>
       </section> : recent.length > 0 ? <section className="recent-targets">
         <header><span>Recent pull requests</span><small>Stored on this device</small></header>
         {recent.map((item) => <button key={item.canonicalUrl} onClick={() => void submitTarget(item.canonicalUrl)} type="button"><span><strong>{item.label}</strong><small>{item.canonicalUrl}</small></span><Icon name="chevron-right" size={15} /></button>)}
-      </section> : <button className="demo-link" onClick={onDemo} type="button"><span><Icon name="spark" size={15} /> Explore the fixture review</span><Icon name="arrow-right" size={14} /></button>}
+      </section> : <button className="demo-link" onClick={onDemo} type="button"><span><Icon name="spark" size={15} /> Try the demo review</span><Icon name="arrow-right" size={14} /></button>}
     </main>
     <footer className="launcher-footer"><span><Icon name="shield" size={13} /> Local server · no Wingdiff account</span><code>127.0.0.1</code></footer>
   </div>;
