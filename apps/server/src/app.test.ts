@@ -157,7 +157,7 @@ describe("generated tour API", () => {
     const submissionUrl = `http://127.0.0.1:${port}/api/sessions/${session.id}/review-submission`;
     const submitted = await fetch(submissionUrl, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ body: "The implementation looks ready.", event: "APPROVE" }),
+      body: JSON.stringify({ body: "The implementation looks ready.", event: "APPROVE", scope: "full", acknowledgeApprovalRisks: true }),
     });
     expect(submitted.status).toBe(201);
     expect(publishedComments).toBe(0);
@@ -203,6 +203,7 @@ describe("generated tour API", () => {
   it("persists scope-aware review progress", async () => {
     store = new SessionStore(":memory:");
     const session = store.upsertReadySession(target, metadata, evidence);
+    saveFixtureTour(store, session.id, "full");
     const app = createApp({}, { sessionStore: store, providers: new Map() });
     server = app.listen(0, "127.0.0.1");
     await new Promise<void>((resolve) => server!.once("listening", resolve));
@@ -212,16 +213,38 @@ describe("generated tour API", () => {
     const saved = await fetch(url, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        scope: "update", activeStopId: "atomic-counter",
+        scope: "full", activeStopId: "atomic-counter",
         change: { stopId: "atomic-counter", status: "understood" },
       }),
     });
     expect(saved.status).toBe(200);
     expect(await (await fetch(url)).json()).toEqual({ progress: {
-      activeScope: "update",
-      activeStopIds: { full: null, update: "atomic-counter" },
-      scopes: { full: {}, update: { "atomic-counter": "understood" } },
+      activeScope: "full",
+      activeStopIds: { full: "atomic-counter", update: null },
+      scopes: { full: { "atomic-counter": "understood" }, update: {} },
     } });
+
+    const checkpoint = await fetch(`http://127.0.0.1:${port}/api/sessions/${session.id}/checkpoint`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        scope: "full",
+        coverage: { "atomic-counter": "understood" },
+        findingRevisions: [{ findingId: "invented", title: "Invented", severity: "high", state: "new", summary: "No." }],
+      }),
+    });
+    expect(checkpoint.status).toBe(201);
+    expect(await checkpoint.json()).toMatchObject({ checkpoint: {
+      scope: "full",
+      coverage: { "full-atomic-counter": "understood" },
+      findingRevisions: [],
+    } });
+
+    const stale = await fetch(url, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: "full", activeStopId: "stale-stop" }),
+    });
+    expect(stale.status).toBe(400);
   });
 
   it("previews and persists the exact model-context boundary", async () => {
@@ -263,3 +286,16 @@ const evidence = {
     ],
   }] }],
 } satisfies PullRequestEvidence;
+
+function saveFixtureTour(store: SessionStore, sessionId: string, scope: "full" | "update") {
+  store.saveTour(sessionId, scope, { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" }, evidence.baseSha, evidence.headSha, {
+    summary: "The counter update moves to Redis.",
+    findingRevisions: [],
+    stops: [{
+      id: "atomic-counter", title: "Counter update", summary: "Redis performs the increment.", purpose: "Verify behavior.",
+      anchorIds: ["line_new-counter"],
+      claims: [{ text: "The new path calls INCR.", kind: "fact", confidence: "high", anchorIds: ["line_new-counter"] }],
+      prompts: [],
+    }],
+  });
+}

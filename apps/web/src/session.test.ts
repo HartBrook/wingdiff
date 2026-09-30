@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  checkpointFindings,
   evidenceBlocks,
   generatedTourStops,
   revisionStopIndex,
   type AcquiredReviewSession,
   type GeneratedSessionTour,
-  type ReviewCheckpoint,
 } from "./session";
 
 describe("acquired session evidence", () => {
@@ -97,7 +95,7 @@ describe("acquired session evidence", () => {
     expect(block.lines.find((line) => line.newLine === 13)?.emphasized).toBe(true);
   });
 
-  it("carries finding continuity into the next checkpoint", () => {
+  it("locates the stop carrying a revised finding", () => {
     const acquired = session();
     const generated = generatedTour(acquired, "update");
     generated.tour.findingRevisions = [{
@@ -106,38 +104,7 @@ describe("acquired session evidence", () => {
       summary: "The increment is now atomic in Redis.",
       anchorIds: ["line-new"],
     }];
-    const baseline: ReviewCheckpoint = {
-      reviewedHeadSha: "c".repeat(40), completedAt: "2026-09-29T11:00:00Z", scope: "full", coverage: {},
-      findingRevisions: [{ findingId: "counter-race", title: "Counter can race", severity: "high", state: "new", summary: "Read and write are separate.", pathHints: ["src/counter.ts"] }],
-    };
-
     expect(revisionStopIndex(generated, ["line-new"])).toBe(0);
-    expect(checkpointFindings(generated, generatedTourStops(acquired, generated), baseline)).toEqual([{
-      findingId: "counter-race",
-      title: "Counter can race",
-      severity: "high",
-      state: "appears-addressed",
-      summary: "The increment is now atomic in Redis.",
-      pathHints: ["src/counter.ts"],
-    }]);
-  });
-
-  it("records new findings alongside terminal finding history", () => {
-    const acquired = session();
-    const generated = generatedTour(acquired, "update");
-    generated.tour.stops[0]!.finding = {
-      title: "Expiry may be lost", body: "INCR does not establish the expected expiry.", severity: "medium",
-      category: "Correctness", anchorIds: ["line-new"], suggestedComment: "Where is expiry preserved?",
-    };
-    const baseline: ReviewCheckpoint = {
-      reviewedHeadSha: "c".repeat(40), completedAt: "2026-09-29T11:00:00Z", scope: "full", coverage: {},
-      findingRevisions: [{ findingId: "old-race", title: "Old race", severity: "high", state: "resolved", summary: "Reviewer confirmed the fix.", pathHints: ["src/counter.ts"] }],
-    };
-
-    expect(checkpointFindings(generated, generatedTourStops(acquired, generated), baseline)).toEqual([
-      baseline.findingRevisions[0],
-      { findingId: "atomic-counter-finding", title: "Expiry may be lost", severity: "medium", state: "new", summary: "INCR does not establish the expected expiry.", pathHints: ["src/counter.ts"] },
-    ]);
   });
 });
 

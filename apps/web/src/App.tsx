@@ -31,7 +31,6 @@ import {
   createDraftComment,
   createInvestigationEntry,
   completeReviewCheckpoint,
-  checkpointFindings,
   deleteDraftComment,
   evidenceBlocksFor,
   fetchReviewCheckpoint,
@@ -281,6 +280,11 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     const prior = baselineCheckpoint?.findingRevisions.find((finding) => finding.findingId === revision.findingId);
     return prior && revisionStopIndex(generated, revision.anchorIds) === activeIndex ? [{ prior, revision }] : [];
   }) ?? [];
+  const unresolvedHighFindingCount = stops.filter((stop) => stop.finding?.severity === "high").length
+    + (generated?.tour.findingRevisions.filter((revision) => {
+      const prior = baselineCheckpoint?.findingRevisions.find((finding) => finding.findingId === revision.findingId);
+      return prior?.severity === "high" && (revision.state === "still-applies" || revision.state === "recheck");
+    }).length ?? 0);
   const inheritedStopIds = useMemo(() => {
     if (reviewScope !== "full" || !update || !baselineCheckpoint) return new Set<string>();
     const changedPaths = new Set(update.evidence.files.flatMap((file) => [file.path, ...(file.oldPath ? [file.oldPath] : [])]));
@@ -411,14 +415,12 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     setError(null);
     try {
       const coverage = {
-        ...(reviewScope === "update" ? baselineCheckpoint?.coverage ?? {} : {}),
         ...Object.fromEntries(stops.map((stop) => [
-          `${reviewScope}-${stop.id}`,
-          statuses[stop.id] === "flagged" ? "flagged" : "understood",
+          stop.id,
+          statuses[stop.id] ?? "understood",
         ])),
       };
-      const findingRevisions = checkpointFindings(generated, stops, baselineCheckpoint);
-      const saved = await completeReviewCheckpoint(session.id, reviewScope, coverage, findingRevisions);
+      const saved = await completeReviewCheckpoint(session.id, reviewScope, coverage);
       setCheckpoints((current) => ({ ...current, [reviewScope]: saved }));
       setNotice(`Review checkpoint saved at ${saved.reviewedHeadSha.slice(0, 7)}.`);
     } catch (caught) {
@@ -570,13 +572,13 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     }
   }
 
-  async function publishReviewToGitHub() {
+  async function publishReviewToGitHub(acknowledgeApprovalRisks = false) {
     if (submission || publishingReview) return;
     setPublishingReview(true);
     setError(null);
     setNotice(null);
     try {
-      const published = await publishReview(session.id, reviewSummary, disposition);
+      const published = await publishReview(session.id, reviewSummary, disposition, reviewScope, acknowledgeApprovalRisks);
       setSubmission(published);
       setNotice("Review published to GitHub.");
     } catch (caught) {
@@ -710,7 +712,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       <AcquiredTourRail activeIndex={activeIndex} inheritedStopIds={inheritedStopIds} onBrowse={() => { setView("browse"); setMobileRouteOpen(false); }} onReview={() => { setView("review"); setMobileRouteOpen(false); }} onSelect={(index) => { selectStop(index); setMobileRouteOpen(false); }} onSummary={() => { setView("summary"); setMobileRouteOpen(false); }} statuses={statuses} stops={stops} />
       <main className="main-canvas"><AcquiredTourView activeEvidence={activeEvidence} activeEvidenceId={activeEvidenceId} activeFindingRevisions={activeFindingRevisions} activeIndex={activeIndex} comments={comments.filter((comment) => comment.stopId === activeStop.id).length} headSha={metadata.head.sha} onAsk={(prompt) => { setDrawerOpen(true); if (prompt) void askQuestion(prompt); }} onComment={() => openComment(false)} onEvidence={setActiveEvidenceId} onFindingComment={() => openComment(true)} onFlag={toggleFlag} onNavigate={navigateStop} onSelectLine={selectLine} onUnderstood={markUnderstood} selection={selection} status={statuses[activeStop.id] ?? "unseen"} stop={activeStop} totalStops={stops.length} /></main>
     </div> : <main className="main-canvas acquired-canvas">
-      {view === "summary" ? <AcquiredSummary activeModel={activeModelLabel} baselineCheckpoint={baselineCheckpoint} checkpoint={checkpoint} completing={completing} error={error} generated={generated} generating={generating || contextLoading} modelReady={Boolean(activeProvider?.configured)} notice={notice} onBegin={() => { selectStop(activeIndex); setView("tour"); }} onBrowse={() => setView("browse")} onCheckUpdates={() => void checkForUpdates()} onComplete={() => void completeReview()} onGenerate={() => void previewGenerationContext()} onScope={selectScope} onSelectStop={(index) => { selectStop(index); setView("tour"); }} refreshing={refreshing} reviewScope={reviewScope} scopedEvidence={scopedEvidence} session={session} statuses={statuses} stops={stops} tourLoading={tourLoading} update={update} /> : view === "browse" ? <AcquiredBrowse blocks={blocks} onSummary={() => setView("summary")} scope={reviewScope} session={session} /> : <AcquiredReviewDesk comments={comments} disposition={disposition} error={error} headSha={metadata.head.sha} onBack={() => setView(generated ? "tour" : "summary")} onDisposition={(event) => { setDisposition(event); void persistReviewDraft(reviewSummary, event); }} onPublish={() => void publishReviewToGitHub()} onRemoveComment={(id) => void removeComment(id)} onSave={() => void persistReviewDraft()} onSummary={setReviewSummary} publishing={publishingReview} saving={savingReview} statuses={statuses} stops={stops} submission={submission} summary={reviewSummary} />}
+      {view === "summary" ? <AcquiredSummary activeModel={activeModelLabel} baselineCheckpoint={baselineCheckpoint} checkpoint={checkpoint} completing={completing} error={error} generated={generated} generating={generating || contextLoading} modelReady={Boolean(activeProvider?.configured)} notice={notice} onBegin={() => { selectStop(activeIndex); setView("tour"); }} onBrowse={() => setView("browse")} onCheckUpdates={() => void checkForUpdates()} onComplete={() => void completeReview()} onGenerate={() => void previewGenerationContext()} onScope={selectScope} onSelectStop={(index) => { selectStop(index); setView("tour"); }} refreshing={refreshing} reviewScope={reviewScope} scopedEvidence={scopedEvidence} session={session} statuses={statuses} stops={stops} tourLoading={tourLoading} update={update} /> : view === "browse" ? <AcquiredBrowse blocks={blocks} onSummary={() => setView("summary")} scope={reviewScope} session={session} /> : <AcquiredReviewDesk comments={comments} disposition={disposition} error={error} failedChecks={metadata.checks.failed} headSha={metadata.head.sha} highFindingCount={unresolvedHighFindingCount} onBack={() => setView(generated ? "tour" : "summary")} onDisposition={(event) => { setDisposition(event); void persistReviewDraft(reviewSummary, event); }} onPublish={(acknowledged) => void publishReviewToGitHub(acknowledged)} onRemoveComment={(id) => void removeComment(id)} onSave={() => void persistReviewDraft()} onSummary={setReviewSummary} publishing={publishingReview} saving={savingReview} statuses={statuses} stops={stops} submission={submission} summary={reviewSummary} />}
     </main>}
     {modelPickerOpen && <ModelPicker onClose={() => setModelPickerOpen(false)} onSelection={setModelSelection} providers={providers} selection={modelSelection} />}
     {contextPreviewOpen && contextManifest && activeProvider && <ContextPreview error={error} exclusions={exclusionText} manifest={contextManifest} modelName={activeModel.name} onCancel={() => setContextPreviewOpen(false)} onConfirm={() => void confirmGenerationContext()} onExclusions={setExclusionText} provider={activeProvider} saving={contextSaving} />}
@@ -834,14 +836,16 @@ function AcquiredBrowse({ blocks, onSummary, scope, session }: { blocks: Evidenc
   return <div className="page page--browse"><header className="browse-header"><div><div className="eyebrow">{scope === "update" ? "Since your review" : "Entire PR"} · {session.metadata.head.sha.slice(0, 7)}</div><h1>Changed files</h1><p>{scope === "update" ? "Only code changed after your explicit review checkpoint." : "The full pull request diff remains available as a backstop."}</p></div><button className="button button--secondary" onClick={onSummary} type="button"><Icon name="arrow-left" size={16} /> Back to summary</button></header><div className="browse-layout"><aside className="file-index"><div className="section-label"><span>Changed files</span><b>{blocks.length}</b></div>{blocks.map((block) => <a href={`#${block.id}`} key={block.id}><Icon name="code" size={14} /><span>{fileName(block.path)}<small>{directoryName(block.path)}</small></span><Icon name="chevron-right" size={13} /></a>)}</aside><div className="browse-diffs">{blocks.map((block) => <div className="browse-file" id={block.id} key={block.id}><CodeDiff evidence={block} minimal /></div>)}</div></div></div>;
 }
 
-function AcquiredReviewDesk({ comments, disposition, error, headSha, onBack, onDisposition, onPublish, onRemoveComment, onSave, onSummary, publishing, saving, statuses, stops, submission, summary }: {
+function AcquiredReviewDesk({ comments, disposition, error, failedChecks, headSha, highFindingCount, onBack, onDisposition, onPublish, onRemoveComment, onSave, onSummary, publishing, saving, statuses, stops, submission, summary }: {
   comments: DraftComment[];
   disposition: ReviewDisposition;
   error: string | null;
+  failedChecks: number;
   headSha: string;
+  highFindingCount: number;
   onBack: () => void;
   onDisposition: (value: ReviewDisposition) => void;
-  onPublish: () => void;
+  onPublish: (acknowledgeApprovalRisks: boolean) => void;
   onRemoveComment: (id: string) => void;
   onSave: () => void;
   onSummary: (value: string) => void;
@@ -854,14 +858,23 @@ function AcquiredReviewDesk({ comments, disposition, error, headSha, onBack, onD
 }) {
   const reviewed = stops.filter((stop) => (statuses[stop.id] ?? "unseen") !== "unseen").length;
   const flagged = stops.filter((stop) => statuses[stop.id] === "flagged").length;
+  const [approvalAcknowledged, setApprovalAcknowledged] = useState(false);
   const rankedComments = [...comments].sort((left, right) => compareSeverity(left.severity, right.severity) || left.path.localeCompare(right.path));
-  const canPublish = disposition === "APPROVE" ? Boolean(summary.trim() || comments.length) : Boolean(summary.trim());
+  const approvalRisks = [
+    ...(reviewed < stops.length ? [`${stops.length - reviewed} review stop${stops.length - reviewed === 1 ? " is" : "s are"} still unseen.`] : []),
+    ...(flagged ? [`${flagged} review stop${flagged === 1 ? " remains" : "s remain"} flagged.`] : []),
+    ...(highFindingCount ? [`${highFindingCount} high-severity finding${highFindingCount === 1 ? " remains" : "s remain"}.`] : []),
+    ...(failedChecks ? [`${failedChecks} required check${failedChecks === 1 ? " is" : "s are"} failing.`] : []),
+  ];
+  const needsApprovalAcknowledgement = disposition === "APPROVE" && approvalRisks.length > 0;
+  const hasPublishContent = disposition === "APPROVE" ? Boolean(summary.trim() || comments.length) : Boolean(summary.trim());
+  const canPublish = hasPublishContent && (!needsApprovalAcknowledgement || approvalAcknowledged);
 
   return <div className="page page--review">
     <header className="review-header"><button className="back-link" onClick={onBack} type="button"><Icon name="arrow-left" size={15} /> Back to review</button><div className="eyebrow">Review desk</div><h1>Prepare your decision.</h1><p>Confirm the feedback and disposition that will represent your review.</p></header>
     <div className="review-summary-strip"><div><span className="summary-icon summary-icon--green"><Icon name="check" /></span><span><strong>{reviewed}/{stops.length}</strong><small>stops reviewed</small></span></div><div><span className="summary-icon summary-icon--amber"><Icon name="flag" /></span><span><strong>{flagged}</strong><small>open flag{flagged === 1 ? "" : "s"}</small></span></div><div><span className="summary-icon summary-icon--blue"><Icon name="comment" /></span><span><strong>{comments.length}</strong><small>draft comment{comments.length === 1 ? "" : "s"}</small></span></div><div className="review-sha"><span className="live-dot" /><span><strong>Pinned head</strong><small>{headSha.slice(0, 12)}</small></span></div></div>
     {error && <div className="target-error acquired-generation-error" role="alert"><Icon name="flag" size={14} />{error}</div>}
-    <div className="review-grid"><div className="review-main"><section className="review-section"><header><div><span>01</span><div><h2>Review summary</h2><p>Keep it concise and decision-relevant.</p></div></div><small>{summary.length} characters</small></header><textarea disabled={Boolean(submission)} onBlur={onSave} onChange={(event) => onSummary(event.target.value)} placeholder="Summarize your review…" rows={6} value={summary} /></section><section className="review-section"><header><div><span>02</span><div><h2>Inline comments</h2><p>Ranked by severity and pinned to the diff.</p></div></div><small>{comments.length} draft{comments.length === 1 ? "" : "s"}</small></header>{rankedComments.length === 0 ? <div className="empty-comments"><Icon name="comment" /><strong>No inline comments</strong><span>A summary-only review is valid.</span></div> : <div className="review-comments">{rankedComments.map((comment) => <article key={comment.id}><header><span className={`risk-level risk-level--${comment.severity}`}>{comment.severity}</span><code>{comment.path}:{comment.startLine}{comment.endLine !== comment.startLine ? `–${comment.endLine}` : ""}</code>{!submission && <button aria-label="Remove draft comment" onClick={() => onRemoveComment(comment.id)} type="button"><Icon name="x" size={15} /></button>}</header><p>{comment.body}</p></article>)}</div>}</section></div><aside className="publish-card"><div className="eyebrow">Final disposition</div><h2>{submission ? "Review published" : "How should GitHub record this review?"}</h2>{submission ? <div className="submitted-review"><span className="summary-icon summary-icon--green"><Icon name="check" /></span><div><strong>{labelDisposition(submission.event)}</strong><small>{new Date(submission.submittedAt).toLocaleString()}</small></div></div> : <div className="disposition-list">{(["COMMENT", "APPROVE", "REQUEST_CHANGES"] as ReviewDisposition[]).map((value) => <button className={disposition === value ? "is-active" : ""} key={value} onClick={() => onDisposition(value)} type="button"><span className="radio"><i /></span><span><strong>{labelDisposition(value)}</strong><small>{dispositionDescription(value)}</small></span></button>)}</div>}<div className="publish-preview"><span>{submission ? "Sent to GitHub" : "Will publish"}</span><strong>{comments.length} inline comment{comments.length === 1 ? "" : "s"}</strong><strong>{summary.trim() ? "1 review summary" : "No review summary"}</strong><small>{headSha.slice(0, 12)}</small></div>{submission ? <a className="button button--publish" href={submission.url} rel="noreferrer" target="_blank">Open on GitHub <Icon name="external" size={16} /></a> : <><button className="button button--publish" disabled={!canPublish || publishing || saving} onClick={onPublish} type="button">{publishing ? "Revalidating…" : "Publish review to GitHub"}<Icon name="external" size={16} /></button><p className="publish-note"><Icon name="shield" size={13} /> Head and line anchors are revalidated before publishing.</p></>}</aside></div>
+    <div className="review-grid"><div className="review-main"><section className="review-section"><header><div><span>01</span><div><h2>Review summary</h2><p>Keep it concise and decision-relevant.</p></div></div><small>{summary.length} characters</small></header><textarea disabled={Boolean(submission)} onBlur={onSave} onChange={(event) => onSummary(event.target.value)} placeholder="Summarize your review…" rows={6} value={summary} /></section><section className="review-section"><header><div><span>02</span><div><h2>Inline comments</h2><p>Ranked by severity and pinned to the diff.</p></div></div><small>{comments.length} draft{comments.length === 1 ? "" : "s"}</small></header>{rankedComments.length === 0 ? <div className="empty-comments"><Icon name="comment" /><strong>No inline comments</strong><span>A summary-only review is valid.</span></div> : <div className="review-comments">{rankedComments.map((comment) => <article key={comment.id}><header><span className={`risk-level risk-level--${comment.severity}`}>{comment.severity}</span><code>{comment.path}:{comment.startLine}{comment.endLine !== comment.startLine ? `–${comment.endLine}` : ""}</code>{!submission && <button aria-label="Remove draft comment" onClick={() => onRemoveComment(comment.id)} type="button"><Icon name="x" size={15} /></button>}</header><p>{comment.body}</p></article>)}</div>}</section></div><aside className="publish-card"><div className="eyebrow">Final disposition</div><h2>{submission ? "Review published" : "How should GitHub record this review?"}</h2>{submission ? <div className="submitted-review"><span className="summary-icon summary-icon--green"><Icon name="check" /></span><div><strong>{labelDisposition(submission.event)}</strong><small>{new Date(submission.submittedAt).toLocaleString()}</small></div></div> : <div className="disposition-list">{(["COMMENT", "APPROVE", "REQUEST_CHANGES"] as ReviewDisposition[]).map((value) => <button className={disposition === value ? "is-active" : ""} key={value} onClick={() => { setApprovalAcknowledged(false); onDisposition(value); }} type="button"><span className="radio"><i /></span><span><strong>{labelDisposition(value)}</strong><small>{dispositionDescription(value)}</small></span></button>)}</div>}{needsApprovalAcknowledgement && !submission && <div className="approval-warning"><strong>Approval needs acknowledgement</strong><ul>{approvalRisks.map((risk) => <li key={risk}>{risk}</li>)}</ul><label><input checked={approvalAcknowledged} onChange={(event) => setApprovalAcknowledged(event.target.checked)} type="checkbox" />I reviewed these signals and still intend to approve.</label></div>}<div className="publish-preview"><span>{submission ? "Sent to GitHub" : "Will publish"}</span><strong>{comments.length} inline comment{comments.length === 1 ? "" : "s"}</strong><strong>{summary.trim() ? "1 review summary" : "No review summary"}</strong><small>{headSha.slice(0, 12)}</small></div>{submission ? <a className="button button--publish" href={submission.url} rel="noreferrer" target="_blank">Open on GitHub <Icon name="external" size={16} /></a> : <><button className="button button--publish" disabled={!canPublish || publishing || saving} onClick={() => onPublish(approvalAcknowledged)} type="button">{publishing ? "Revalidating…" : "Publish review to GitHub"}<Icon name="external" size={16} /></button><p className="publish-note"><Icon name="shield" size={13} /> Head and line anchors are revalidated before publishing.</p></>}</aside></div>
   </div>;
 }
 

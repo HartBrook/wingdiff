@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
 import { validateDraftComment } from "./comments.js";
 import { readPullRequestMetadata, type PullRequestMetadata } from "./github.js";
-import type { DraftReviewComment, ReviewDraft, ReviewSession, SessionStore, SubmittedReview } from "./sessions.js";
+import type { DraftReviewComment, ReviewDraft, ReviewSession, SessionStore, SubmittedReview, TourScope } from "./sessions.js";
 import type { PullRequestTarget } from "./targets.js";
+import { approvalWarnings } from "./reviewWorkflow.js";
 
 export interface PublishedReview {
   id: number;
@@ -32,6 +33,7 @@ export async function submitSessionReview(
   cwd: string,
   draft: Pick<ReviewDraft, "body" | "event">,
   dependencies: ReviewSubmissionDependencies = defaultDependencies,
+  reviewContext: { scope: TourScope; acknowledgeApprovalRisks: boolean } = { scope: "full", acknowledgeApprovalRisks: true },
 ): Promise<SubmittedReview> {
   if (store.getSubmittedReview(session.id, session.metadata.head.sha)) {
     throw new Error("A review has already been published for this pinned head.");
@@ -41,6 +43,15 @@ export async function submitSessionReview(
     throw new Error(`The pull request head changed from ${session.metadata.head.sha.slice(0, 7)} to ${current.head.sha.slice(0, 7)}. Check for updates before publishing.`);
   }
   if (current.state.toUpperCase() !== "OPEN") throw new Error(`This pull request is ${current.state.toLowerCase()} and cannot receive a review.`);
+  if (draft.event === "APPROVE") {
+    const warnings = approvalWarnings(session, store, reviewContext.scope);
+    if (current.checks.failed && !warnings.some((warning) => warning.includes("required check"))) {
+      warnings.push(`${current.checks.failed} required check${current.checks.failed === 1 ? " is" : "s are"} failing.`);
+    }
+    if (warnings.length && !reviewContext.acknowledgeApprovalRisks) {
+      throw new Error(`Approval requires explicit acknowledgement: ${warnings.join(" ")}`);
+    }
+  }
 
   const comments = store.listDraftComments(session.id);
   comments.forEach((comment) => validateDraftComment(comment, session.evidence));

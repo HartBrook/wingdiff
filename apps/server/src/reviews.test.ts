@@ -58,6 +58,51 @@ describe("GitHub review submission", () => {
     expect(publishCount).toBe(1);
     store.close();
   });
+
+  it("requires explicit acknowledgement before approving unresolved review signals", async () => {
+    const store = new SessionStore(":memory:");
+    const session = store.upsertReadySession(target, metadata(), evidence());
+    store.saveTour(session.id, "full", { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
+      session.evidence.baseSha, session.evidence.headSha, {
+        summary: "The change needs review.",
+        findingRevisions: [],
+        stops: [{
+          id: "risky-stop", title: "Risky behavior", summary: "A boundary changed.", purpose: "Verify the boundary.",
+          anchorIds: ["file-risk"],
+          claims: [{ text: "The boundary changed.", kind: "fact", confidence: "high", anchorIds: ["file-risk"] }],
+          prompts: [],
+          finding: {
+            title: "Failure is unhandled", body: "The new failure path is not handled.", severity: "high",
+            category: "Correctness", anchorIds: ["file-risk"], suggestedComment: "How is this failure handled?",
+          },
+        }],
+      });
+    let published = false;
+    const dependencies = {
+      readMetadata: async () => metadata(),
+      publishReview: async () => { published = true; return { id: 92, url: "url", state: "APPROVED" }; },
+    };
+
+    await expect(submitSessionReview(
+      session,
+      store,
+      "/work/codex",
+      { body: "Looks good.", event: "APPROVE" },
+      dependencies,
+      { scope: "full", acknowledgeApprovalRisks: false },
+    )).rejects.toThrow(/explicit acknowledgement/);
+    expect(published).toBe(false);
+
+    await expect(submitSessionReview(
+      session,
+      store,
+      "/work/codex",
+      { body: "Looks good.", event: "APPROVE" },
+      dependencies,
+      { scope: "full", acknowledgeApprovalRisks: true },
+    )).resolves.toMatchObject({ githubReviewId: 92 });
+    store.close();
+  });
 });
 
 function draftComment(): DraftReviewComment {

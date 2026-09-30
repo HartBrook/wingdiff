@@ -8,11 +8,12 @@ import { buildSessionInvestigationContext } from "./investigation.js";
 import { createProviders, publicProviders, validateSelection } from "./providers/index.js";
 import type { ProviderId, TextProvider } from "./providers/types.js";
 import { SessionStore } from "./sessions.js";
-import type { FindingCheckpoint, InvestigationEntry, ReviewDraft, ReviewProgressStatus, TourScope } from "./sessions.js";
+import type { InvestigationEntry, ReviewDraft, ReviewProgressStatus, TourScope } from "./sessions.js";
 import { parsePullRequestTarget } from "./targets.js";
 import { generateSessionTour, getSessionTour } from "./tourService.js";
 import { validateInvestigationContext } from "./validation.js";
 import { submitSessionReview, type ReviewSubmissionDependencies } from "./reviews.js";
+import { checkpointCoverageForSession, checkpointFindingsForSession, validateCurrentTourStop } from "./reviewWorkflow.js";
 
 export interface AppOptions {
   cwd?: string;
@@ -103,9 +104,9 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
         response.status(404).json({ error: "Review session not found." });
         return;
       }
-      const coverage = reviewCoverage(request.body?.coverage);
       const scope = tourScope(request.body?.scope);
-      const findingRevisions = findingCheckpoints(request.body?.findingRevisions);
+      const coverage = checkpointCoverageForSession(session, sessionStore, scope, reviewCoverage(request.body?.coverage));
+      const findingRevisions = checkpointFindingsForSession(session, sessionStore, scope);
       const checkpoint = {
         reviewedHeadSha: session.metadata.head.sha,
         completedAt: new Date().toISOString(),
@@ -138,6 +139,8 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
         return;
       }
       const input = reviewProgressInput(request.body);
+      validateCurrentTourStop(session, sessionStore, input.scope, input.activeStopId);
+      if (input.change) validateCurrentTourStop(session, sessionStore, input.scope, input.change.stopId);
       response.json({ progress: sessionStore.saveReviewProgress(session.id, input.scope, input.activeStopId, input.change) });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Wingdiff could not save review progress.";
@@ -280,7 +283,8 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
       if (sessionStore.getSubmittedReview(session.id, session.metadata.head.sha)) {
         throw new Error("A review has already been published for this pinned head.");
       }
-      const draft = reviewDraftInput(request.body);
+      const submissionInput = reviewSubmissionInput(request.body);
+      const draft = submissionInput.draft;
       sessionStore.saveReviewDraft(session.id, draft.body, draft.event);
       const submission = await submitSessionReview(
         session,
@@ -288,6 +292,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
         cwd,
         draft,
         options.reviewSubmissionDependencies,
+        { scope: submissionInput.scope, acknowledgeApprovalRisks: submissionInput.acknowledgeApprovalRisks },
       );
       response.status(201).json({ submission });
     } catch (error) {
@@ -614,30 +619,6 @@ function tourScope(input: unknown): TourScope {
   throw new Error(`Invalid tour scope: ${String(input)}`);
 }
 
-function findingCheckpoints(input: unknown) {
-  if (input === undefined) return [];
-  if (!Array.isArray(input) || input.length > 100) throw new Error("Finding revisions must be a bounded list.");
-  return input.map((candidate, index) => {
-    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
-      throw new Error(`Finding revision ${index + 1} is invalid.`);
-    }
-    const value = candidate as Record<string, unknown>;
-    const findingId = requiredText(value.findingId, `finding revision ${index + 1} id`, 128);
-    const title = requiredText(value.title, `${findingId} title`, 160);
-    const summary = requiredText(value.summary, `${findingId} summary`, 420);
-    const severity = String(value.severity);
-    const state = String(value.state);
-    if (!["high", "medium", "low"].includes(severity)) throw new Error(`Invalid severity for ${findingId}.`);
-    if (!["new", "still-applies", "appears-addressed", "recheck", "superseded", "resolved"].includes(state)) {
-      throw new Error(`Invalid state for ${findingId}.`);
-    }
-    const pathHints = Array.isArray(value.pathHints)
-      ? value.pathHints.map((path, pathIndex) => requiredText(path, `${findingId} path ${pathIndex + 1}`, 500))
-      : [];
-    return { findingId, title, summary, severity, state, pathHints } as FindingCheckpoint;
-  });
-}
-
 function reviewDraftInput(input: unknown): Pick<ReviewDraft, "body" | "event"> {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Review draft is required.");
   const value = input as Record<string, unknown>;
@@ -646,6 +627,20 @@ function reviewDraftInput(input: unknown): Pick<ReviewDraft, "body" | "event"> {
   const event = value.event;
   if (event !== "COMMENT" && event !== "APPROVE" && event !== "REQUEST_CHANGES") throw new Error("Review disposition is invalid.");
   return { body, event };
+}
+
+function reviewSubmissionInput(input: unknown): {
+  draft: Pick<ReviewDraft, "body" | "event">;
+  scope: TourScope;
+  acknowledgeApprovalRisks: boolean;
+} {
+  const draft = reviewDraftInput(input);
+  const value = input as Record<string, unknown>;
+  return {
+    draft,
+    scope: tourScope(value.scope),
+    acknowledgeApprovalRisks: value.acknowledgeApprovalRisks === true,
+  };
 }
 
 function investigationEntryInput(input: unknown): Pick<InvestigationEntry, "stopId" | "evidenceId" | "question" | "provider" | "model"> {
