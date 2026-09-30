@@ -1,33 +1,42 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
-import { browserInvocation, launchUrl, parseCliArguments, resolveWorkingDirectory } from "./cli.js";
+import { browserInvocation, diagnoseEnvironment, inferPullRequestTarget, launchUrl, parseCliArguments, resolveWorkingDirectory } from "./cli.js";
 
 describe("wingdiff CLI", () => {
   it("accepts an optional target and launcher flags", () => {
-    expect(parseCliArguments([])).toEqual({ demo: false, openBrowser: true, help: false });
+    expect(parseCliArguments([])).toEqual({ command: "open", demo: false, openBrowser: true, help: false, version: false });
     expect(parseCliArguments(["openai/codex#42", "--no-open"])).toEqual({
+      command: "open",
       target: "openai/codex#42",
       demo: false,
       openBrowser: false,
       help: false,
+      version: false,
     });
     expect(parseCliArguments(["--checkout", "../codex", "openai/codex#42"])).toEqual({
+      command: "open",
       target: "openai/codex#42",
       checkout: "../codex",
       demo: false,
       openBrowser: true,
       help: false,
+      version: false,
     });
     expect(parseCliArguments(["openai/codex#42", "--checkout=../codex"])).toMatchObject({ checkout: "../codex" });
     expect(parseCliArguments(["--demo"])).toMatchObject({ demo: true });
+    expect(parseCliArguments(["demo"])).toMatchObject({ command: "open", demo: true });
+    expect(parseCliArguments(["doctor"])).toMatchObject({ command: "doctor" });
+    expect(parseCliArguments(["stop"])).toMatchObject({ command: "stop" });
+    expect(parseCliArguments(["--version"])).toMatchObject({ version: true });
   });
 
   it("rejects conflicting or unknown arguments", () => {
     expect(() => parseCliArguments(["--wat"])).toThrow(/Unknown option/);
     expect(() => parseCliArguments(["--checkout"])).toThrow(/requires a path/);
     expect(() => parseCliArguments(["--checkout", "one", "--checkout", "two"])).toThrow(/one checkout path/);
-    expect(() => parseCliArguments(["--demo", "openai/codex#42"])).toThrow(/either --demo/);
+    expect(() => parseCliArguments(["--demo", "openai/codex#42"])).toThrow(/either demo/);
     expect(() => parseCliArguments(["one", "two"])).toThrow(/one pull request target/);
+    expect(() => parseCliArguments(["doctor", "--no-open"])).toThrow(/does not accept/);
   });
 
   it("prefers an explicit checkout and otherwise preserves npm's launch directory", () => {
@@ -63,5 +72,38 @@ describe("wingdiff CLI", () => {
     expect(browserInvocation("darwin", "http://localhost")).toEqual({ command: "open", arguments: ["http://localhost"] });
     expect(browserInvocation("linux", "http://localhost")).toEqual({ command: "xdg-open", arguments: ["http://localhost"] });
     expect(browserInvocation("win32", "http://localhost")).toEqual({ command: "cmd", arguments: ["/c", "start", "", "http://localhost"] });
+  });
+
+  it("infers the pull request for the current branch", async () => {
+    const calls: string[] = [];
+    const target = await inferPullRequestTarget("/work/codex", async (command, arguments_) => {
+      calls.push(`${command} ${arguments_.join(" ")}`);
+      if (command === "git") return "git@github.com:openai/codex.git\n";
+      return "https://github.com/openai/codex/pull/42\n";
+    });
+    expect(target).toBe("https://github.com/openai/codex/pull/42");
+    expect(calls).toEqual([
+      "git config --get remote.origin.url",
+      "gh pr view --json url --jq .url",
+    ]);
+  });
+
+  it("falls back to the launcher when no current pull request can be inferred", async () => {
+    await expect(inferPullRequestTarget("/tmp", async () => { throw new Error("not a repository"); }))
+      .resolves.toBeUndefined();
+  });
+
+  it("reports actionable environment diagnostics", async () => {
+    const checks = await diagnoseEnvironment("/work/codex", {}, async (command, arguments_) => {
+      if (command === "codex") throw new Error("missing");
+      if (command === "gh" && arguments_[0] === "auth") throw new Error("logged out");
+      return "ok";
+    });
+    expect(checks).toEqual([
+      { label: "Git", ok: true, detail: "installed" },
+      { label: "GitHub CLI", ok: true, detail: "installed" },
+      { label: "GitHub authentication", ok: false, detail: "not authenticated; run: gh auth login" },
+      { label: "AI provider", ok: false, detail: "not configured; run: codex login" },
+    ]);
   });
 });

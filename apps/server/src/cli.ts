@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { loadWingdiffEnvironment } from "./environment.js";
+import { repositoryRoot } from "./environment.js";
 import { startWingdiffServer } from "./server.js";
 import { defaultDatabasePath } from "./sessions.js";
 import { parsePullRequestTarget, repositoryFromRemoteUrl, type PullRequestTarget } from "./targets.js";
@@ -13,11 +14,13 @@ import { parsePullRequestTarget, repositoryFromRemoteUrl, type PullRequestTarget
 const execFile = promisify(execFileCallback);
 
 export interface CliOptions {
+  command: "open" | "doctor" | "stop";
   target?: string;
   checkout?: string;
   demo: boolean;
   openBrowser: boolean;
   help: boolean;
+  version: boolean;
 }
 
 export function parseCliArguments(arguments_: string[]): CliOptions {
@@ -26,12 +29,19 @@ export function parseCliArguments(arguments_: string[]): CliOptions {
   let demo = false;
   let openBrowser = true;
   let help = false;
+  let version = false;
+  let command: CliOptions["command"] = "open";
 
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index]!;
-    if (argument === "--demo") demo = true;
+    if (argument === "demo" || argument === "--demo") demo = true;
+    else if (argument === "doctor" || argument === "stop") {
+      if (command !== "open" || target || demo) throw new Error("Wingdiff accepts one command at a time.");
+      command = argument;
+    }
     else if (argument === "--no-open") openBrowser = false;
     else if (argument === "--help" || argument === "-h") help = true;
+    else if (argument === "--version" || argument === "-v") version = true;
     else if (argument === "--checkout") {
       const value = arguments_[index + 1];
       if (!value || value.startsWith("-")) throw new Error("--checkout requires a path.");
@@ -49,8 +59,11 @@ export function parseCliArguments(arguments_: string[]): CliOptions {
     else target = argument;
   }
 
-  if (demo && target) throw new Error("Use either --demo or a pull request target, not both.");
-  return { target, ...(checkout ? { checkout } : {}), demo, openBrowser, help };
+  if (demo && target) throw new Error("Use either demo or a pull request target, not both.");
+  if (command !== "open" && (target || checkout || demo || !openBrowser)) {
+    throw new Error(`${command} does not accept pull request or launcher options.`);
+  }
+  return { command, target, ...(checkout ? { checkout } : {}), demo, openBrowser, help, version };
 }
 
 export function resolveWorkingDirectory(
@@ -85,20 +98,99 @@ export async function repositoryForCheckout(cwd: string): Promise<string | undef
   }
 }
 
+export type CliCommandRunner = (command: string, arguments_: string[], cwd: string) => Promise<string>;
+
+export async function inferPullRequestTarget(
+  cwd: string,
+  runCommand: CliCommandRunner = runCliCommand,
+): Promise<string | undefined> {
+  try {
+    const repository = (await runCommand("git", ["config", "--get", "remote.origin.url"], cwd)).trim();
+    if (!repositoryFromRemoteUrl(repository)) return undefined;
+    const url = (await runCommand("gh", ["pr", "view", "--json", "url", "--jq", ".url"], cwd)).trim();
+    return url || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export interface DoctorCheck {
+  label: string;
+  ok: boolean;
+  detail: string;
+}
+
+export async function diagnoseEnvironment(
+  cwd: string,
+  environment: NodeJS.ProcessEnv = process.env,
+  runCommand: CliCommandRunner = runCliCommand,
+): Promise<DoctorCheck[]> {
+  const available = async (command: string, arguments_: string[]) => {
+    try {
+      await runCommand(command, arguments_, cwd);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const [git, githubCli, githubAuth, codex] = await Promise.all([
+    available("git", ["--version"]),
+    available("gh", ["--version"]),
+    available("gh", ["auth", "status", "--hostname", "github.com"]),
+    available(environment.WINGDIFF_CODEX_BIN || "codex", ["login", "status"]),
+  ]);
+  const directProvider = Boolean(environment.OPENAI_API_KEY || environment.ANTHROPIC_API_KEY);
+  return [
+    { label: "Git", ok: git, detail: git ? "installed" : "not found; install Git" },
+    { label: "GitHub CLI", ok: githubCli, detail: githubCli ? "installed" : "not found; install gh" },
+    {
+      label: "GitHub authentication",
+      ok: githubAuth,
+      detail: githubAuth ? "authenticated" : "not authenticated; run: gh auth login",
+    },
+    {
+      label: "AI provider",
+      ok: codex || directProvider,
+      detail: codex
+        ? "Codex CLI authenticated"
+        : directProvider
+          ? "direct API key configured"
+          : "not configured; run: codex login",
+    },
+  ];
+}
+
 async function run() {
   loadWingdiffEnvironment();
   const options = parseCliArguments(process.argv.slice(2));
+  if (options.version) {
+    process.stdout.write(`${await packageVersion()}\n`);
+    return;
+  }
   if (options.help) {
     process.stdout.write(helpText());
     return;
   }
 
   const workingDirectory = resolveWorkingDirectory(options.checkout, process.env.INIT_CWD);
-  const checkoutRepository = options.target && /^#?\d+$/.test(options.target)
+  if (options.command === "doctor") {
+    const checks = await diagnoseEnvironment(workingDirectory);
+    for (const check of checks) process.stdout.write(`${check.ok ? "✓" : "✗"} ${check.label}: ${check.detail}\n`);
+    if (checks.some((check) => !check.ok)) process.exitCode = 1;
+    return;
+  }
+
+  const discoveryPath = serverDiscoveryPath(process.env);
+  if (options.command === "stop") {
+    await stopWingdiff(discoveryPath);
+    return;
+  }
+
+  const targetInput = options.target ?? (!options.demo ? await inferPullRequestTarget(workingDirectory) : undefined);
+  const checkoutRepository = targetInput && /^#?\d+$/.test(targetInput)
     ? await repositoryForCheckout(workingDirectory)
     : undefined;
-  const target = options.target ? parsePullRequestTarget(options.target, checkoutRepository) : undefined;
-  const discoveryPath = serverDiscoveryPath(process.env);
+  const target = targetInput ? parsePullRequestTarget(targetInput, checkoutRepository) : undefined;
   const existing = await readServerDiscovery(discoveryPath);
   if (existing && await isWingdiffRunning(existing.url, existing.authToken)) {
     if (path.resolve(existing.cwd) !== workingDirectory) {
@@ -122,6 +214,29 @@ async function run() {
   process.stdout.write(`Wingdiff is ready at ${runningDestination}\n`);
   process.stdout.write("Press Ctrl+C to stop the local server.\n");
   if (options.openBrowser) openBrowser(runningDestination);
+}
+
+async function packageVersion(): Promise<string> {
+  const manifest = JSON.parse(await readFile(path.join(repositoryRoot, "package.json"), "utf8")) as { version?: unknown };
+  if (typeof manifest.version !== "string") throw new Error("Wingdiff package version is unavailable.");
+  return manifest.version;
+}
+
+async function stopWingdiff(discoveryPath: string) {
+  const existing = await readServerDiscovery(discoveryPath);
+  if (!existing || !await isWingdiffRunning(existing.url, existing.authToken)) {
+    await unlink(discoveryPath).catch(() => undefined);
+    process.stdout.write("Wingdiff is not running.\n");
+    return;
+  }
+  process.kill(existing.pid, "SIGTERM");
+  await unlink(discoveryPath).catch(() => undefined);
+  process.stdout.write("Stopped Wingdiff.\n");
+}
+
+async function runCliCommand(command: string, arguments_: string[], cwd: string): Promise<string> {
+  const { stdout } = await execFile(command, arguments_, { cwd });
+  return stdout;
 }
 
 async function isWingdiffRunning(baseUrl: string, authToken: string): Promise<boolean> {
@@ -185,7 +300,7 @@ function openBrowser(url: string) {
 }
 
 function helpText(): string {
-  return `wingdiff — guided pull request review\n\nUsage:\n  wingdiff [pull-request]\n  wingdiff --checkout <path> [pull-request]\n  wingdiff --demo\n\nTargets:\n  https://github.com/owner/repo/pull/123\n  owner/repo#123\n  123                         Resolve from the selected checkout\n\nOptions:\n  --checkout <path>           Use this local repository checkout\n  --demo                      Open the fixture review\n  --no-open                   Start without opening a browser\n  -h, --help                  Show this help\n`;
+  return `wingdiff — guided pull request review\n\nUsage:\n  wingdiff [pull-request]\n  wingdiff demo\n  wingdiff doctor\n  wingdiff stop\n\nWith no target, Wingdiff opens the pull request for the current branch when one exists.\n\nTargets:\n  https://github.com/owner/repo/pull/123\n  owner/repo#123\n  123                         Resolve from the current checkout\n\nOptions:\n  --checkout <path>           Use a specific local checkout\n  --no-open                   Start without opening a browser\n  -v, --version               Show the installed version\n  -h, --help                  Show this help\n`;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

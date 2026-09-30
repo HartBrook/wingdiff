@@ -49,7 +49,7 @@ Inside a matching checkout, a pull request number is enough:
 
 ```bash
 npx wingdiff 123
-npx wingdiff --demo
+npx wingdiff demo
 ```
 
 Install the command permanently if you use it regularly:
@@ -58,6 +58,10 @@ Install the command permanently if you use it regularly:
 npm install --global wingdiff
 wingdiff 123
 ```
+
+Run `wingdiff` with no arguments to open the pull request associated with the
+current branch, or open the launcher when the branch has no pull request. Run
+`wingdiff doctor` for actionable GitHub and model-provider setup checks.
 
 ### Run from source
 
