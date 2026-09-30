@@ -1,9 +1,20 @@
 {
   "name": "wingdiff",
   "version": "0.2.0",
-  "private": true,
   "description": "A guided, evidence-backed tour of a pull request.",
   "license": "MIT",
+  "bin": {
+    "wingdiff": "apps/server/dist/cli.js"
+  },
+  "files": [
+    "apps/server/dist",
+    "apps/web/dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/HartBrook/wingdiff.git"
@@ -26,7 +37,13 @@
     "build": "npm run build --workspace @wingdiff/web && npm run build --workspace @wingdiff/server",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0",
+    "express": "^5.2.1",
+    "openai": "^7.23.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

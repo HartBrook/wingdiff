@@ -25,12 +25,12 @@ This repository contains the local-first review foundation described in the [pro
 
 Real pull requests can be acquired, turned into grounded guided tours, and reviewed through GitHub. Review progress, investigation notebooks, comments, the summary, disposition, and submitted-review receipt are persisted locally. The fixture demo still simulates submission. Contextual investigation defaults to the locally installed Codex CLI using its existing ChatGPT sign-in. Direct OpenAI and Anthropic APIs remain optional; the demo uses clearly labeled fixture answers when no provider is available.
 
-## Run locally
+## Get started
 
 ### Prerequisites
 
 - [Git](https://git-scm.com/downloads)
-- [Node.js](https://nodejs.org/) 22.13+ (excluding Node 23) or Node.js 24+
+- [Node.js](https://nodejs.org/) 22.13+ (excluding Node 23) or Node.js 24+ when using the npm package
 - [GitHub CLI](https://cli.github.com/) authenticated with `gh auth login` for real pull requests
 - [Codex](https://developers.openai.com/learn/codex) CLI authenticated with `codex login` for the default model transport, or an optional direct provider API key
 
@@ -40,18 +40,41 @@ default and is not intended to be deployed as a public web service.
 ### Quick start
 
 ```bash
+npx wingdiff https://github.com/owner/repository/pull/123
+```
+
+Run that command from a checkout of the repository that owns the pull request.
+Wingdiff starts on a loopback address and opens an authenticated local URL.
+Inside a matching checkout, a pull request number is enough:
+
+```bash
+npx wingdiff 123
+npx wingdiff --demo
+```
+
+Install the command permanently if you use it regularly:
+
+```bash
+npm install --global wingdiff
+wingdiff 123
+```
+
+### Run from source
+
+Contributors and source-build users can run the same command surface locally:
+
+```bash
 git clone https://github.com/HartBrook/wingdiff.git
 cd wingdiff
 npm ci
 npm run wingdiff -- --demo
 ```
 
-The launcher starts Wingdiff on a loopback address and opens an authenticated local URL. Pass the checkout that owns the pull request when reviewing another repository:
+Pass the checkout that owns the pull request when launching from the Wingdiff
+source directory:
 
 ```bash
-npm run wingdiff -- --demo
 npm run wingdiff -- --checkout /path/to/repository https://github.com/owner/repository/pull/123
-npm run wingdiff -- --checkout /path/to/repository 123
 ```
 
 `--checkout` may be relative to the directory where you invoked npm. If you
@@ -66,9 +89,7 @@ npm --prefix /path/to/wingdiff run wingdiff -- https://github.com/owner/reposito
 Only one checkout can be attached to a running Wingdiff server. Stop the
 existing process before launching against a different repository.
 
-Wingdiff is currently distributed from source rather than through npm. The
-server workspace builds a `wingdiff` binary for future packaged releases. Use
-`npm run dev` when developing the UI without automatic browser launch.
+Use `npm run dev` when developing the UI without automatic browser launch.
 
 ### Read-only PR acquisition
 
