@@ -14,7 +14,7 @@ describe("Wingdiff configuration", () => {
 
   it("supports explicit and XDG overrides", () => {
     expect(defaultConfigPath({ WINGDIFF_CONFIG: "/private/wingdiff.env" }, "linux", "/home/reviewer"))
-      .toBe("/private/wingdiff.env");
+      .toBe(path.resolve("/private/wingdiff.env"));
     expect(defaultConfigPath({ XDG_CONFIG_HOME: "/config" }, "linux", "/home/reviewer"))
       .toBe(path.join("/config", "wingdiff", "config.env"));
   });
