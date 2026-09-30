@@ -62,6 +62,41 @@ describe("acquired session evidence", () => {
     expect(stops[0]?.evidence[0]?.lines.find((line) => line.newLine === 3)?.emphasized).toBe(true);
   });
 
+  it("limits each stop to a focused window around its exact anchors", () => {
+    const acquired = session();
+    const leadingContext = Array.from({ length: 12 }, (_, index) => ({
+      kind: "context" as const,
+      content: `const context${index + 1} = true;`,
+      oldLine: index + 1,
+      newLine: index + 1,
+      fingerprint: `context-${index + 1}`,
+    }));
+    acquired.evidence.files[0]!.hunks = [{
+      header: "@@ -1,13 +1,13 @@",
+      oldStart: 1,
+      oldLines: 13,
+      newStart: 1,
+      newLines: 13,
+      lines: [...leadingContext, { kind: "addition", content: "return redis.incr(key);", newLine: 13, fingerprint: "new" }],
+    }, {
+      header: "@@ -100 +100 @@",
+      oldStart: 100,
+      oldLines: 1,
+      newStart: 100,
+      newLines: 1,
+      lines: [{ kind: "context", content: "unrelated();", oldLine: 100, newLine: 100, fingerprint: "unrelated" }],
+    }];
+    const generated = generatedTour(acquired, "full");
+    generated.anchors[1] = { id: "line-new", path: "src/counter.ts", kind: "addition", newLine: 13, content: "return redis.incr(key);" };
+
+    const block = generatedTourStops(acquired, generated)[0]!.evidence[0]!;
+
+    expect(block.lines.some((line) => line.content === "const context1 = true;")).toBe(false);
+    expect(block.lines.some((line) => line.content === "unrelated();")).toBe(false);
+    expect(block.lines.filter((line) => line.kind !== "header")).toHaveLength(6);
+    expect(block.lines.find((line) => line.newLine === 13)?.emphasized).toBe(true);
+  });
+
   it("carries finding continuity into the next checkpoint", () => {
     const acquired = session();
     const generated = generatedTour(acquired, "update");

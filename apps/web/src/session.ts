@@ -501,15 +501,7 @@ export function generatedTourStops(
     const evidence = paths.flatMap((path) => {
       const block = blocks.get(path);
       if (!block) return [];
-      return [{
-        ...block,
-        lines: block.lines.map((line) => ({
-          ...line,
-          emphasized: stopAnchors.some((anchor) => anchor.path === path && anchor.kind !== "file" && (
-            anchor.oldLine === line.oldLine && anchor.newLine === line.newLine && anchor.content === line.content
-          )),
-        })),
-      }];
+      return [focusedEvidenceBlock(block, stopAnchors.filter((anchor) => anchor.path === path))];
     });
     const fallback = evidence[0] ?? [...blocks.values()][0]!;
     const evidenceFor = (anchorIds: string[]) => [...new Set(anchorIds.flatMap((id) => {
@@ -552,6 +544,62 @@ export function generatedTourStops(
       } : {}),
     };
   });
+}
+
+const FOCUSED_CONTEXT_LINES = 5;
+
+function focusedEvidenceBlock(block: EvidenceBlock, anchors: TourEvidenceAnchor[]): EvidenceBlock {
+  const lineAnchors = anchors.filter((anchor) => anchor.kind !== "file");
+  if (!lineAnchors.length) return block;
+
+  const lines: EvidenceBlock["lines"] = [];
+  let segmentStart = 0;
+  while (segmentStart < block.lines.length) {
+    const header = block.lines[segmentStart]?.kind === "header" ? block.lines[segmentStart] : undefined;
+    const contentStart = header ? segmentStart + 1 : segmentStart;
+    let segmentEnd = contentStart;
+    while (segmentEnd < block.lines.length && block.lines[segmentEnd]?.kind !== "header") segmentEnd += 1;
+
+    const anchorIndexes = block.lines.slice(contentStart, segmentEnd).flatMap((line, offset) => (
+      lineAnchors.some((anchor) => anchorMatchesLine(anchor, line)) ? [contentStart + offset] : []
+    ));
+    const ranges = coalesceRanges(anchorIndexes.map((index) => ({
+      start: Math.max(contentStart, index - FOCUSED_CONTEXT_LINES),
+      end: Math.min(segmentEnd, index + FOCUSED_CONTEXT_LINES + 1),
+    })));
+    for (const range of ranges) {
+      if (header) lines.push(header);
+      lines.push(...block.lines.slice(range.start, range.end).map((line) => ({
+        ...line,
+        emphasized: lineAnchors.some((anchor) => anchorMatchesLine(anchor, line)),
+      })));
+    }
+    segmentStart = segmentEnd;
+  }
+
+  if (!lines.length) return block;
+  const numberedLines = lines.flatMap((line) => [line.oldLine, line.newLine]).filter((line): line is number => line !== undefined);
+  return {
+    ...block,
+    startLine: numberedLines.length ? Math.min(...numberedLines) : block.startLine,
+    endLine: numberedLines.length ? Math.max(...numberedLines) : block.endLine,
+    lines,
+  };
+}
+
+function anchorMatchesLine(anchor: TourEvidenceAnchor, line: EvidenceBlock["lines"][number]): boolean {
+  return anchor.oldLine === line.oldLine && anchor.newLine === line.newLine && anchor.content === line.content;
+}
+
+function coalesceRanges(ranges: Array<{ start: number; end: number }>): Array<{ start: number; end: number }> {
+  const sorted = [...ranges].sort((left, right) => left.start - right.start);
+  const result: Array<{ start: number; end: number }> = [];
+  for (const range of sorted) {
+    const previous = result.at(-1);
+    if (previous && range.start <= previous.end) previous.end = Math.max(previous.end, range.end);
+    else result.push({ ...range });
+  }
+  return result;
 }
 
 export function revisionStopIndex(generated: GeneratedSessionTour, revisionAnchorIds: string[]): number {
