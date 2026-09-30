@@ -3,6 +3,25 @@
 This checklist is for maintainers changing Wingdiff from private to public.
 Repository visibility is not changed by the project scripts or workflows.
 
+## Publish the npm package
+
+The `wingdiff` name is configured as the public package in the repository root.
+Before the first release, add a granular npm publishing token as the
+`NPM_TOKEN` repository secret. Prefer configuring `publish-npm.yml` as an npm
+trusted publisher when the package and npm organization settings support it.
+
+1. Update the version in `package.json` and `package-lock.json`.
+2. Run the **Publish npm package** workflow in dry-run mode and inspect its
+   package-content output.
+3. Create a GitHub release tagged `v<version>` from the intended commit.
+4. Confirm the workflow tests, builds, and publishes the package with
+   provenance.
+5. Test `npx wingdiff --version` from a clean temporary directory.
+
+The release job rejects a tag that does not exactly match `package.json`. Do
+not publish from a developer checkout; release publication belongs to the
+audited GitHub Actions workflow.
+
 ## Before changing visibility
 
 - Confirm every contributor intends their name and commit email to become
