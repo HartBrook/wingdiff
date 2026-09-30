@@ -154,6 +154,15 @@ The local server generates a fresh launch token, exchanges it for an HTTP-only, 
 ### Configuration
 
 All configuration is optional and is read only by the local Node process.
+Shell environment variables take precedence. Installed copies also read a
+user-owned `config.env` file from the platform configuration directory:
+
+- macOS: `~/Library/Application Support/wingdiff/config.env`
+- Linux: `${XDG_CONFIG_HOME:-~/.config}/wingdiff/config.env`
+- Windows: `%APPDATA%\\wingdiff\\config.env`
+
+Set `WINGDIFF_CONFIG` to use another file. Run `wingdiff doctor` to print the
+resolved path. Source checkouts continue to support the repository-root `.env`.
 
 | Variable | Purpose |
 |---|---|
@@ -162,6 +171,7 @@ All configuration is optional and is read only by the local Node process.
 | `WINGDIFF_CODEX_BIN` | Override the Codex CLI executable |
 | `WINGDIFF_CODEX_TIMEOUT_MS` | Override the Codex request timeout |
 | `WINGDIFF_DATA_DIR` | Choose the directory containing `wingdiff.sqlite3` |
+| `WINGDIFF_CONFIG` | Read configuration from a specific environment file |
 | `WINGDIFF_HOST` | Override the loopback host |
 | `WINGDIFF_PORT` | Override the local port |
 | `WINGDIFF_UNSAFE_ALLOW_REMOTE` | Allow a non-loopback host when set to `1`; unsupported and dangerous |

@@ -5,8 +5,7 @@ import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { loadWingdiffEnvironment } from "./environment.js";
-import { repositoryRoot } from "./environment.js";
+import { defaultConfigPath, loadWingdiffEnvironment, repositoryRoot } from "./environment.js";
 import { startWingdiffServer } from "./server.js";
 import { defaultDatabasePath } from "./sessions.js";
 import { parsePullRequestTarget, repositoryFromRemoteUrl, type PullRequestTarget } from "./targets.js";
@@ -176,6 +175,7 @@ async function run() {
   if (options.command === "doctor") {
     const checks = await diagnoseEnvironment(workingDirectory);
     for (const check of checks) process.stdout.write(`${check.ok ? "✓" : "✗"} ${check.label}: ${check.detail}\n`);
+    process.stdout.write(`  Config: ${defaultConfigPath()}\n`);
     if (checks.some((check) => !check.ok)) process.exitCode = 1;
     return;
   }
