@@ -48,7 +48,7 @@ describe("generated tour API", () => {
 
   it("generates and resumes a revision-pinned tour", async () => {
     store = new SessionStore(":memory:");
-    const session = store.upsertReadySession(target, metadata, evidence);
+    const session = store.upsertReadySession(target, metadata, evidence, process.cwd());
     let investigationContext: InvestigationContext | undefined;
     const provider: TextProvider = {
       id: "codex",
@@ -112,7 +112,7 @@ describe("generated tour API", () => {
     temporaryDirectories.push(root);
     await writeFile(path.join(root, "AGENTS.md"), "Review concurrency carefully.\n", "utf8");
     store = new SessionStore(":memory:");
-    const session = store.upsertReadySession(target, metadata, evidence);
+    const session = store.upsertReadySession(target, metadata, evidence, root);
     const provider: TextProvider = {
       id: "codex",
       async generateTour(_selection, input) {
@@ -147,7 +147,7 @@ describe("generated tour API", () => {
 
   it("stages only comments anchored to the pinned diff", async () => {
     store = new SessionStore(":memory:");
-    const session = store.upsertReadySession(target, metadata, evidence);
+    const session = store.upsertReadySession(target, metadata, evidence, process.cwd());
     let publishedComments = 0;
     const app = createApp({}, {
       sessionStore: store,
@@ -209,7 +209,7 @@ describe("generated tour API", () => {
 
   it("persists a session investigation notebook", async () => {
     store = new SessionStore(":memory:");
-    const session = store.upsertReadySession(target, metadata, evidence);
+    const session = store.upsertReadySession(target, metadata, evidence, process.cwd());
     const app = createApp({}, { sessionStore: store, providers: new Map() });
     server = app.listen(0, "127.0.0.1");
     await new Promise<void>((resolve) => server!.once("listening", resolve));
@@ -245,7 +245,7 @@ describe("generated tour API", () => {
 
   it("persists scope-aware review progress", async () => {
     store = new SessionStore(":memory:");
-    const session = store.upsertReadySession(target, metadata, evidence);
+    const session = store.upsertReadySession(target, metadata, evidence, process.cwd());
     saveFixtureTour(store, session.id, "full");
     const app = createApp({}, { sessionStore: store, providers: new Map() });
     server = app.listen(0, "127.0.0.1");
@@ -292,7 +292,7 @@ describe("generated tour API", () => {
 
   it("previews and persists the exact model-context boundary", async () => {
     store = new SessionStore(":memory:");
-    const session = store.upsertReadySession(target, metadata, evidence);
+    const session = store.upsertReadySession(target, metadata, evidence, process.cwd());
     const app = createApp({}, { sessionStore: store, providers: new Map(), cwd: process.cwd() });
     server = app.listen(0, "127.0.0.1");
     await new Promise<void>((resolve) => server!.once("listening", resolve));

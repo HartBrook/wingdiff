@@ -13,13 +13,14 @@ import { generateSessionTour, getSessionTour } from "./tourService.js";
 import { validateInvestigationContext } from "./validation.js";
 import { submitSessionReview, type ReviewSubmissionDependencies } from "./reviews.js";
 import { checkpointCoverageForSession, checkpointFindingsForSession, validateCurrentTourStop } from "./reviewWorkflow.js";
-import { prepareRepositoryTarget, resolveRepositoryTarget } from "./repositories.js";
+import { prepareRepositoryTarget, resolveRepositoryTarget, type RepositoryResolutionDependencies } from "./repositories.js";
 
 export interface AppOptions {
   cwd?: string;
   sessionStore?: SessionStore;
   providers?: Map<ProviderId, TextProvider>;
   acquisitionDependencies?: AcquisitionDependencies;
+  repositoryDependencies?: RepositoryResolutionDependencies;
   reviewSubmissionDependencies?: ReviewSubmissionDependencies;
   authToken?: string;
 }
@@ -29,6 +30,11 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
   const providers = options.providers ?? createProviders(environment);
   const cwd = options.cwd ?? process.cwd();
   const sessionStore = options.sessionStore ?? new SessionStore();
+  const repositoryPathFor = (session: { target: ReturnType<typeof parsePullRequestTarget>; repositoryPath?: string }) => (
+    session.repositoryPath
+      ? Promise.resolve(session.repositoryPath)
+      : resolveRepositoryTarget(session.target, cwd, environment, options.repositoryDependencies)
+  );
 
   app.disable("x-powered-by");
   app.use(express.json({ limit: "256kb" }));
@@ -51,7 +57,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
   app.post("/api/targets/prepare", async (request, response) => {
     try {
       const target = parsePullRequestTarget(request.body?.input, request.body?.checkoutRepository);
-      const preparation = await prepareRepositoryTarget(target, cwd, environment);
+      const preparation = await prepareRepositoryTarget(target, cwd, environment, options.repositoryDependencies);
       response.json({ target, environment: preparation });
     } catch (error) {
       const message = error instanceof Error ? error.message : "The pull request target could not be prepared.";
@@ -75,7 +81,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
   app.post("/api/sessions", async (request, response) => {
     try {
       const target = parsePullRequestTarget(request.body?.input, request.body?.checkoutRepository);
-      const repositoryPath = await resolveRepositoryTarget(target, cwd, environment);
+      const repositoryPath = await resolveRepositoryTarget(target, cwd, environment, options.repositoryDependencies);
       const session = await acquireReviewSession(target, repositoryPath, sessionStore, undefined, options.acquisitionDependencies);
       response.status(201).json({ session });
     } catch (error) {
@@ -316,7 +322,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
       const submission = await submitSessionReview(
         session,
         sessionStore,
-        session.repositoryPath ?? cwd,
+        await repositoryPathFor(session),
         draft,
         options.reviewSubmissionDependencies,
         { scope: submissionInput.scope, acknowledgeApprovalRisks: submissionInput.acknowledgeApprovalRisks },
@@ -337,7 +343,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
       }
       const result = await refreshReviewSession(
         session.target,
-        session.repositoryPath ?? await resolveRepositoryTarget(session.target, cwd, environment),
+        await repositoryPathFor(session),
         sessionStore,
         undefined,
         options.acquisitionDependencies,
@@ -388,7 +394,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
     }
     if (generated.contextFingerprint) {
       try {
-        const currentContext = await buildSessionGenerationContext(session, sessionStore, scope, session.repositoryPath ?? cwd);
+        const currentContext = await buildSessionGenerationContext(session, sessionStore, scope, await repositoryPathFor(session));
         if (currentContext.manifest.fingerprint !== generated.contextFingerprint) {
           response.status(409).json({ error: "The model context changed after this tour was generated. Generate it again." });
           return;
@@ -409,7 +415,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
         return;
       }
       const scope = tourScope(request.query.scope);
-      const context = await buildSessionGenerationContext(session, sessionStore, scope, session.repositoryPath ?? cwd);
+      const context = await buildSessionGenerationContext(session, sessionStore, scope, await repositoryPathFor(session));
       response.json({ manifest: context.manifest });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Wingdiff could not prepare the model context.";
@@ -427,7 +433,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
       const scope = tourScope(request.body?.scope);
       const patterns = contextExclusions(request.body?.excludedPatterns);
       sessionStore.saveContextExclusions(session.id, patterns);
-      const context = await buildSessionGenerationContext(session, sessionStore, scope, session.repositoryPath ?? cwd);
+      const context = await buildSessionGenerationContext(session, sessionStore, scope, await repositoryPathFor(session));
       response.json({ manifest: context.manifest });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Wingdiff could not save model-context settings.";
@@ -464,7 +470,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
         sessionStore,
         scope,
         abortController.signal,
-        session.repositoryPath ?? cwd,
+        await repositoryPathFor(session),
       );
       response.status(201).json({ generated });
     } catch (error) {
@@ -497,7 +503,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
         input.scope,
         input.stopId,
         input.question,
-        session.repositoryPath ?? cwd,
+        await repositoryPathFor(session),
       );
       await streamInvestigationResponse(response, provider, selection, context);
     } catch (error) {
