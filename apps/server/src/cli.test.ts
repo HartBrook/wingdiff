@@ -5,15 +5,15 @@ import { browserInvocation, diagnoseEnvironment, inferPullRequestTarget, isDirec
 
 describe("wingdiff CLI", () => {
   it("recognizes npm's symlinked executable as the CLI entrypoint", () => {
-    const modulePath = "/package/apps/server/dist/cli.js";
-    const executablePath = "/package/node_modules/.bin/wingdiff";
-    const canonicalPath = "/registry/wingdiff/apps/server/dist/cli.js";
+    const modulePath = path.resolve("package", "apps", "server", "dist", "cli.js");
+    const executablePath = path.resolve("package", "node_modules", ".bin", "wingdiff");
+    const canonicalPath = path.resolve("registry", "wingdiff", "apps", "server", "dist", "cli.js");
     const resolveRealPath = (filePath: string) => filePath === modulePath || filePath === executablePath
       ? canonicalPath
       : filePath;
 
     expect(isDirectCliInvocation(pathToFileURL(modulePath).href, executablePath, resolveRealPath)).toBe(true);
-    expect(isDirectCliInvocation(pathToFileURL(modulePath).href, "/other/wingdiff", resolveRealPath)).toBe(false);
+    expect(isDirectCliInvocation(pathToFileURL(modulePath).href, path.resolve("other", "wingdiff"), resolveRealPath)).toBe(false);
     expect(isDirectCliInvocation(pathToFileURL(modulePath).href, undefined, resolveRealPath)).toBe(false);
   });
 
