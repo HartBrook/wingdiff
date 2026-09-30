@@ -19,7 +19,7 @@ export function buildInvestigationPrompt(context: InvestigationContext): string 
       const number = line.newLine ?? line.oldLine ?? "";
       return `${number}\t${line.content}`;
     }).join("\n");
-    return `FILE: ${item.path}\nRANGE: ${item.startLine}-${item.endLine}\n${lines}`;
+    return `FILE: ${item.path}\nSOURCE: ${item.revision ?? "diff"}\nRANGE: ${item.startLine}-${item.endLine}\n${lines}`;
   }).join("\n\n");
 
   const claims = context.stop.claims

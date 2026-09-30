@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "./app.js";
 import type { PullRequestEvidence } from "./diff.js";
 import type { PullRequestMetadata } from "./github.js";
-import type { TextProvider } from "./providers/types.js";
+import type { InvestigationContext, TextProvider } from "./providers/types.js";
 import { SessionStore } from "./sessions.js";
 import { parsePullRequestTarget } from "./targets.js";
 
@@ -44,6 +44,7 @@ describe("generated tour API", () => {
   it("generates and resumes a revision-pinned tour", async () => {
     store = new SessionStore(":memory:");
     const session = store.upsertReadySession(target, metadata, evidence);
+    let investigationContext: InvestigationContext | undefined;
     const provider: TextProvider = {
       id: "codex",
       async generateTour(_selection, input) {
@@ -57,7 +58,10 @@ describe("generated tour API", () => {
           }],
         };
       },
-      async *streamInvestigation() { yield ""; },
+      async *streamInvestigation(_selection, context) {
+        investigationContext = context;
+        yield "The pinned evidence is atomic.";
+      },
     };
     const app = createApp({}, { sessionStore: store, providers: new Map([["codex", provider]]) });
     server = app.listen(0, "127.0.0.1");
@@ -79,6 +83,23 @@ describe("generated tour API", () => {
     const resumedBody = await resumed.json();
     expect(resumed.status).toBe(200);
     expect(resumedBody).toEqual(createdBody);
+
+    const investigated = await fetch(`${url.replace(/\/tour$/, "")}/investigate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
+        scope: "full",
+        stopId: "atomic-counter",
+        question: "Can concurrent calls race?",
+        context: { stop: { title: "Invented client evidence" } },
+      }),
+    });
+    expect(investigated.status).toBe(200);
+    expect(await investigated.text()).toContain("The pinned evidence is atomic.");
+    expect(investigationContext?.stop.title).toBe("Counter update");
+    expect(investigationContext?.stop.evidence.flatMap((item) => item.lines).map((line) => line.content))
+      .toContain("return redis.incr(key)");
   });
 
   it("stages only comments anchored to the pinned diff", async () => {

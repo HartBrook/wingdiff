@@ -6,6 +6,7 @@ import {
   fetchProviders,
   selectedModel,
   streamInvestigation,
+  streamSessionInvestigation,
 } from "./ai";
 import type {
   DraftComment,
@@ -609,9 +610,11 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       });
       entryId = entry.id;
       setNotebook((current) => [...current, entry]);
-      await streamInvestigation({
+      await streamSessionInvestigation({
+        sessionId: session.id,
+        scope: reviewScope,
         selection: modelSelection,
-        stop: activeStop,
+        stopId: activeStop.id,
         question: value,
         signal: controller.signal,
         onDelta: (delta) => {

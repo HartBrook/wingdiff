@@ -78,7 +78,7 @@ async function mockReviewApi(page: Page) {
       if (url.searchParams.get("scope") === "update" || !tourReady) return json(route, { error: "This revision does not have a generated tour yet." }, 404);
       return json(route, { generated: tour });
     }
-    if (path === "/api/investigate") {
+    if (path === "/api/sessions/pilot-session/investigate") {
       return route.fulfill({
         status: 200,
         contentType: "text/event-stream",

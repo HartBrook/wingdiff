@@ -43,6 +43,7 @@ export interface InvestigationContext {
     }>;
     evidence: Array<{
       path: string;
+      revision?: "diff" | "base" | "head" | "related";
       startLine: number;
       endLine: number;
       lines: Array<{

@@ -65,22 +65,56 @@ export async function streamInvestigation({
   onDelta: (delta: string) => void;
   signal?: AbortSignal;
 }) {
-  const response = await fetch("/api/investigate", {
+  return streamInvestigationRequest("/api/investigate", {
+    selection,
+    context: {
+      question,
+      stop: {
+        title: stop.title,
+        summary: stop.summary,
+        why: stop.why,
+        claims: stop.claims.map(({ text, kind, confidence }) => ({ text, kind, confidence })),
+        evidence: stop.evidence.map(({ path, startLine, endLine, lines }) => ({ path, startLine, endLine, lines })),
+      },
+    },
+  }, onDelta, signal);
+}
+
+export async function streamSessionInvestigation({
+  sessionId,
+  scope,
+  selection,
+  stopId,
+  question,
+  onDelta,
+  signal,
+}: {
+  sessionId: string;
+  scope: "full" | "update";
+  selection: ModelSelection;
+  stopId: string;
+  question: string;
+  onDelta: (delta: string) => void;
+  signal?: AbortSignal;
+}) {
+  return streamInvestigationRequest(`/api/sessions/${encodeURIComponent(sessionId)}/investigate`, {
+    selection,
+    scope,
+    stopId,
+    question,
+  }, onDelta, signal);
+}
+
+async function streamInvestigationRequest(
+  url: string,
+  payload: unknown,
+  onDelta: (delta: string) => void,
+  signal?: AbortSignal,
+) {
+  const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      selection,
-      context: {
-        question,
-        stop: {
-          title: stop.title,
-          summary: stop.summary,
-          why: stop.why,
-          claims: stop.claims.map(({ text, kind, confidence }) => ({ text, kind, confidence })),
-          evidence: stop.evidence.map(({ path, startLine, endLine, lines }) => ({ path, startLine, endLine, lines })),
-        },
-      },
-    }),
+    body: JSON.stringify(payload),
     signal,
   });
 

@@ -4,6 +4,7 @@ import { acquireReviewSession, refreshReviewSession, type AcquisitionDependencie
 import { validateDraftComment } from "./comments.js";
 import { buildSessionGenerationContext } from "./context.js";
 import { inspectLocalTarget } from "./preflight.js";
+import { buildSessionInvestigationContext } from "./investigation.js";
 import { createProviders, publicProviders, validateSelection } from "./providers/index.js";
 import type { ProviderId, TextProvider } from "./providers/types.js";
 import { SessionStore } from "./sessions.js";
@@ -432,48 +433,88 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
     response.json({ providers: publicProviders(environment, new Set(providers.keys())) });
   });
 
+  app.post("/api/sessions/:id/investigate", async (request, response) => {
+    try {
+      const session = sessionStore.getSession(request.params.id);
+      if (!session) {
+        response.status(404).json({ error: "Review session not found." });
+        return;
+      }
+      const selection = validateSelection(request.body?.selection);
+      const input = sessionInvestigationInput(request.body);
+      const provider = providers.get(selection.provider);
+      if (!provider) {
+        unavailableProvider(response, selection.provider);
+        return;
+      }
+      const context = await buildSessionInvestigationContext(
+        session,
+        sessionStore,
+        input.scope,
+        input.stopId,
+        input.question,
+        cwd,
+      );
+      await streamInvestigationResponse(response, provider, selection, context);
+    } catch (error) {
+      investigationError(response, error);
+    }
+  });
+
   app.post("/api/investigate", async (request, response) => {
     try {
       const selection = validateSelection(request.body?.selection);
       const context = validateInvestigationContext(request.body?.context);
       const provider = providers.get(selection.provider);
       if (!provider) {
-        const setup = selection.provider === "codex"
-          ? "Install Codex CLI and run codex login"
-          : `set ${selection.provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY"}`;
-        response.status(503).json({
-          error: `${selection.provider} is not configured. ${setup} before starting Wingdiff.`,
-        });
+        unavailableProvider(response, selection.provider);
         return;
       }
-
-      response.status(200);
-      response.setHeader("Content-Type", "text/event-stream");
-      response.setHeader("Cache-Control", "no-cache, no-transform");
-      response.setHeader("Connection", "keep-alive");
-      response.setHeader("X-Accel-Buffering", "no");
-      response.flushHeaders();
-
-      const abortController = new AbortController();
-      response.on("close", () => abortController.abort());
-
-      for await (const delta of provider.streamInvestigation(selection, context, abortController.signal)) {
-        response.write(`data: ${JSON.stringify({ type: "delta", delta })}\n\n`);
-      }
-      response.write(`data: ${JSON.stringify({ type: "done", provider: selection.provider, model: selection.model })}\n\n`);
-      response.end();
+      await streamInvestigationResponse(response, provider, selection, context);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Investigation failed.";
-      if (!response.headersSent) {
-        response.status(400).json({ error: message });
-      } else {
-        response.write(`data: ${JSON.stringify({ type: "error", error: message })}\n\n`);
-        response.end();
-      }
+      investigationError(response, error);
     }
   });
 
   return app;
+}
+
+async function streamInvestigationResponse(
+  response: express.Response,
+  provider: TextProvider,
+  selection: ReturnType<typeof validateSelection>,
+  context: ReturnType<typeof validateInvestigationContext>,
+) {
+  response.status(200);
+  response.setHeader("Content-Type", "text/event-stream");
+  response.setHeader("Cache-Control", "no-cache, no-transform");
+  response.setHeader("Connection", "keep-alive");
+  response.setHeader("X-Accel-Buffering", "no");
+  response.flushHeaders();
+
+  const abortController = new AbortController();
+  response.on("close", () => abortController.abort());
+  for await (const delta of provider.streamInvestigation(selection, context, abortController.signal)) {
+    response.write(`data: ${JSON.stringify({ type: "delta", delta })}\n\n`);
+  }
+  response.write(`data: ${JSON.stringify({ type: "done", provider: selection.provider, model: selection.model })}\n\n`);
+  response.end();
+}
+
+function unavailableProvider(response: express.Response, provider: ProviderId) {
+  const setup = provider === "codex"
+    ? "Install Codex CLI and run codex login"
+    : `set ${provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY"}`;
+  response.status(503).json({ error: `${provider} is not configured. ${setup} before starting Wingdiff.` });
+}
+
+function investigationError(response: express.Response, error: unknown) {
+  const message = error instanceof Error ? error.message : "Investigation failed.";
+  if (!response.headersSent) response.status(400).json({ error: message });
+  else {
+    response.write(`data: ${JSON.stringify({ type: "error", error: message })}\n\n`);
+    response.end();
+  }
 }
 
 function localAuthentication(authToken: string): express.RequestHandler {
@@ -620,6 +661,16 @@ function investigationEntryInput(input: unknown): Pick<InvestigationEntry, "stop
     question: requiredText(value.question, "Investigation question", 4_000),
     provider,
     model: requiredText(value.model, "Investigation model", 128),
+  };
+}
+
+function sessionInvestigationInput(input: unknown): { scope: TourScope; stopId: string; question: string } {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Investigation context is required.");
+  const value = input as Record<string, unknown>;
+  return {
+    scope: tourScope(value.scope),
+    stopId: requiredText(value.stopId, "Investigation stop", 128),
+    question: requiredText(value.question, "Investigation question", 4_000),
   };
 }
 
