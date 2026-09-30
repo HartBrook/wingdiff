@@ -1,8 +1,22 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
-import { browserInvocation, diagnoseEnvironment, inferPullRequestTarget, launchUrl, parseCliArguments, resolveWorkingDirectory } from "./cli.js";
+import { pathToFileURL } from "node:url";
+import { browserInvocation, diagnoseEnvironment, inferPullRequestTarget, isDirectCliInvocation, launchUrl, parseCliArguments, resolveWorkingDirectory } from "./cli.js";
 
 describe("wingdiff CLI", () => {
+  it("recognizes npm's symlinked executable as the CLI entrypoint", () => {
+    const modulePath = "/package/apps/server/dist/cli.js";
+    const executablePath = "/package/node_modules/.bin/wingdiff";
+    const canonicalPath = "/registry/wingdiff/apps/server/dist/cli.js";
+    const resolveRealPath = (filePath: string) => filePath === modulePath || filePath === executablePath
+      ? canonicalPath
+      : filePath;
+
+    expect(isDirectCliInvocation(pathToFileURL(modulePath).href, executablePath, resolveRealPath)).toBe(true);
+    expect(isDirectCliInvocation(pathToFileURL(modulePath).href, "/other/wingdiff", resolveRealPath)).toBe(false);
+    expect(isDirectCliInvocation(pathToFileURL(modulePath).href, undefined, resolveRealPath)).toBe(false);
+  });
+
   it("accepts an optional target and launcher flags", () => {
     expect(parseCliArguments([])).toEqual({ command: "open", demo: false, openBrowser: true, help: false, version: false });
     expect(parseCliArguments(["openai/codex#42", "--no-open"])).toEqual({

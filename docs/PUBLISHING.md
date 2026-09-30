@@ -31,7 +31,7 @@ publish with `--provenance`. When a release is ready to become the default npm
 version, promote it without rebuilding:
 
 ```bash
-npm dist-tag add wingdiff@0.2.0 latest
+npm dist-tag add wingdiff@1.0.0 latest
 ```
 
 ## Before changing visibility

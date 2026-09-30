@@ -1,6 +1,6 @@
 {
   "name": "wingdiff",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A guided, evidence-backed tour of a pull request.",
   "license": "MIT",
   "bin": {
@@ -39,6 +39,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "test:e2e": "playwright test",
+    "test:package": "node scripts/smoke-package.mjs",
     "prepack": "npm run build"
   },
   "dependencies": {

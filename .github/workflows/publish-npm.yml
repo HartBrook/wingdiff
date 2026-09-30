@@ -36,8 +36,17 @@ jobs:
           throw new Error('Release tag must be v' + manifest.version)"
       - name: Inspect package contents
         run: npm pack --dry-run
+      - name: Verify installed package
+        run: npm run test:package
       - name: Publish to npm
         if: github.event_name == 'release'
         run: npm publish --access public --tag next
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Retire broken prototype release
+        if: github.event_name == 'release' && github.event.release.tag_name == 'v0.2.1'
+        run: |
+          npm deprecate wingdiff@0.2.0 "Broken CLI entrypoint; use wingdiff@next instead."
+          npm dist-tag rm wingdiff latest
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

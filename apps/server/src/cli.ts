@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
 import { execFile as execFileCallback, spawn } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { defaultConfigPath, loadWingdiffEnvironment, repositoryRoot } from "./environment.js";
 import { startWingdiffServer } from "./server.js";
@@ -20,6 +21,19 @@ export interface CliOptions {
   openBrowser: boolean;
   help: boolean;
   version: boolean;
+}
+
+export function isDirectCliInvocation(
+  moduleUrl: string,
+  executablePath: string | undefined,
+  resolveRealPath: (filePath: string) => string = realpathSync,
+): boolean {
+  if (!executablePath) return false;
+  try {
+    return resolveRealPath(fileURLToPath(moduleUrl)) === resolveRealPath(executablePath);
+  } catch {
+    return false;
+  }
 }
 
 export function parseCliArguments(arguments_: string[]): CliOptions {
@@ -300,7 +314,7 @@ function helpText(): string {
   return `wingdiff — guided pull request review\n\nUsage:\n  wingdiff [pull-request]\n  wingdiff demo\n  wingdiff doctor\n  wingdiff stop\n\nWith no target, Wingdiff opens the pull request for the current branch when one exists.\n\nTargets:\n  https://github.com/owner/repo/pull/123\n  owner/repo#123\n  123                         Resolve from the current checkout\n\nOptions:\n  --checkout <path>           Use a specific local checkout\n  --no-open                   Start without opening a browser\n  -v, --version               Show the installed version\n  -h, --help                  Show this help\n`;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isDirectCliInvocation(import.meta.url, process.argv[1])) {
   run().catch((error) => {
     const message = error instanceof Error ? error.message : "Wingdiff could not start.";
     process.stderr.write(`wingdiff: ${message}\n`);
