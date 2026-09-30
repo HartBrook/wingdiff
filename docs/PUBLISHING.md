@@ -23,8 +23,14 @@ source maps, README, and license.
 
 The release job rejects a tag that does not exactly match `package.json`. Do
 not publish from a developer checkout; release publication belongs to the
-audited GitHub Actions workflow. The verified `0.2.1` corrective release is the
-fixed `latest` baseline; subsequent prototype releases advance only `next`.
+audited GitHub Actions workflow. Version `0.2.0` is deprecated and `next`
+points to the verified `0.2.1` corrective release. npm rejected dist-tag
+changes made with the granular publishing token, so an npm account session
+with tag-management permission must repair the default tag separately:
+
+```bash
+npm dist-tag add wingdiff@0.2.1 latest
+```
 
 When the repository becomes public, configure the package's npm trusted
 publisher for this workflow, remove `NPM_TOKEN`, grant `id-token: write`, and

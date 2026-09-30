@@ -53,10 +53,9 @@ npx wingdiff@next 123
 npx wingdiff@next demo
 ```
 
-The `next` tag is the moving channel during the pre-1.0 private-repository
-pilot. The verified `0.2.1` corrective release remains on `latest` so an
-unqualified install cannot select the broken `0.2.0`; later pilot releases
-advance only `next`.
+The `next` tag is the supported moving channel during the pre-1.0
+private-repository pilot. Always include `@next`: npm's `latest` tag currently
+identifies deprecated `0.2.0` and is not supported.
 
 Install the command permanently if you use it regularly:
 
