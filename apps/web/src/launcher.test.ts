@@ -33,7 +33,7 @@ describe("launcher state", () => {
     expect(new Set(recent.map((candidate) => candidate.canonicalUrl)).size).toBe(5);
   });
 
-  it("explains why an external pull request cannot open from the attached checkout", () => {
+  it("allows an external pull request through the managed repository cache", () => {
     const preparation: TargetPreparation = {
       target,
       environment: {
@@ -42,7 +42,7 @@ describe("launcher state", () => {
         networkChecked: false,
       },
     };
-    expect(acquisitionBlocker(preparation)).toMatch(/--checkout.*openai\/codex.*HartBrook\/wingdiff/);
+    expect(acquisitionBlocker(preparation)).toBeUndefined();
     expect(acquisitionBlocker({
       ...preparation,
       environment: { ...preparation.environment, checkout: { status: "matched", path: "/work/codex" } },

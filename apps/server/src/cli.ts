@@ -193,9 +193,6 @@ async function run() {
   const target = targetInput ? parsePullRequestTarget(targetInput, checkoutRepository) : undefined;
   const existing = await readServerDiscovery(discoveryPath);
   if (existing && await isWingdiffRunning(existing.url, existing.authToken)) {
-    if (path.resolve(existing.cwd) !== workingDirectory) {
-      throw new Error(`Wingdiff is already running for ${existing.cwd}. Stop it before launching for ${workingDirectory}.`);
-    }
     const destination = launchUrl(existing.url, { demo: options.demo, target, authToken: existing.authToken });
     process.stdout.write(`Reusing Wingdiff at ${destination}\n`);
     if (options.openBrowser) openBrowser(destination);

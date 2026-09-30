@@ -1,6 +1,8 @@
+import { execFile as execFileCallback } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PullRequestEvidence } from "./diff.js";
 import type { PullRequestMetadata } from "./github.js";
@@ -9,6 +11,7 @@ import { SessionStore } from "./sessions.js";
 import { parsePullRequestTarget } from "./targets.js";
 
 const directories: string[] = [];
+const execFile = promisify(execFileCallback);
 
 afterEach(async () => {
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
@@ -52,6 +55,26 @@ describe("model context manifest", () => {
     store.close();
   });
 
+  it("reads repository instructions from the pinned head instead of the worktree", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "wingdiff-context-git-"));
+    directories.push(root);
+    await git(root, ["init", "--quiet"]);
+    await git(root, ["config", "user.email", "wingdiff@example.com"]);
+    await git(root, ["config", "user.name", "Wingdiff Test"]);
+    await writeFile(path.join(root, "AGENTS.md"), "Pinned instructions.\n", "utf8");
+    await git(root, ["add", "AGENTS.md"]);
+    await git(root, ["commit", "--quiet", "-m", "instructions"]);
+    const headSha = (await git(root, ["rev-parse", "HEAD"])).trim();
+    await writeFile(path.join(root, "AGENTS.md"), "Uncommitted instructions.\n", "utf8");
+    const store = new SessionStore(":memory:");
+    const session = store.upsertReadySession(target, { ...metadata, head: { ...metadata.head, sha: headSha } }, { ...evidence, headSha });
+
+    const context = await buildSessionGenerationContext(session, store, "full", root);
+
+    expect(context.manifest.instructions[0]?.content).toBe("Pinned instructions.\n");
+    store.close();
+  });
+
   it("blocks oversized model context before provider dispatch", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "wingdiff-context-"));
     directories.push(root);
@@ -89,4 +112,9 @@ function changedFile(filePath: string, content: string, fingerprint: string): Pu
     hunks: [{ header: "@@ -0,0 +1 @@", oldStart: 0, oldLines: 0, newStart: 1, newLines: 1,
       lines: [{ kind: "addition", content, newLine: 1, fingerprint }] }],
   };
+}
+
+async function git(cwd: string, arguments_: string[]): Promise<string> {
+  const { stdout } = await execFile("git", arguments_, { cwd });
+  return stdout;
 }

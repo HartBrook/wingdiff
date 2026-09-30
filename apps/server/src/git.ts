@@ -1,4 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
+import path from "node:path";
 import { promisify } from "node:util";
 import type { PullRequestMetadata } from "./github.js";
 import type { PullRequestTarget } from "./targets.js";
@@ -22,7 +23,7 @@ export async function acquirePinnedRevisions(
   checkoutPath: string,
   runCommand: GitCommandRunner = defaultGitCommandRunner,
 ): Promise<PinnedRevisions> {
-  const repositoryRoot = (await runCommand(["rev-parse", "--show-toplevel"], checkoutPath)).trim();
+  const repositoryRoot = path.resolve(checkoutPath);
   const namespace = `refs/wingdiff/pull/${target.number}`;
   const baseRef = `${namespace}/revisions/${metadata.base.sha}`;
   const headRef = `${namespace}/revisions/${metadata.head.sha}`;

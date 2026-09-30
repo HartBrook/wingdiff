@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { execFile as execFileCallback } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import type { ChangedFileEvidence, PullRequestEvidence } from "./diff.js";
 import type { ReviewSession, SessionStore, TourScope } from "./sessions.js";
 import { buildTourGenerationInput, buildTourPrompt, type PriorTourFinding, type TourGenerationInput } from "./tour.js";
@@ -9,6 +11,7 @@ const INSTRUCTION_PATHS = ["AGENTS.md", "CONTRIBUTING.md", ".github/CONTRIBUTING
 const MAX_INSTRUCTION_CHARACTERS = 20_000;
 const MAX_MODEL_CONTEXT_CHARACTERS = 750_000;
 const DEFAULT_EXCLUSIONS = ["**/.env*", "**/*.pem", "**/*.key"];
+const execFile = promisify(execFileCallback);
 
 export interface ContextFileManifest {
   path: string;
@@ -59,7 +62,7 @@ export async function buildSessionGenerationContext(
   const sourceEvidence = evidenceForScope(session, store, scope);
   const excludedPatterns = store.getContextExclusions(session.id, DEFAULT_EXCLUSIONS);
   const { evidence, files } = filterEvidence(sourceEvidence, excludedPatterns);
-  const instructions = await readRepositoryInstructions(repositoryRoot);
+  const instructions = await readRepositoryInstructions(repositoryRoot, session.metadata.head.sha);
   const priorFindings = priorFindingsForSession(session, store, scope);
   const input = buildTourGenerationInput(
     session.metadata,
@@ -165,7 +168,7 @@ function classifyFile(file: ChangedFileEvidence): ContextFileManifest["classific
   return classifications;
 }
 
-async function readRepositoryInstructions(repositoryRoot: string): Promise<RepositoryInstruction[]> {
+async function readRepositoryInstructions(repositoryRoot: string, headSha: string): Promise<RepositoryInstruction[]> {
   let root: string;
   try {
     root = await realpath(repositoryRoot);
@@ -174,11 +177,9 @@ async function readRepositoryInstructions(repositoryRoot: string): Promise<Repos
   }
   const instructions: RepositoryInstruction[] = [];
   for (const relativePath of INSTRUCTION_PATHS) {
-    const candidate = path.resolve(root, relativePath);
     try {
-      const resolved = await realpath(candidate);
-      if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) continue;
-      const raw = await readFile(resolved, "utf8");
+      const raw = await readInstructionAtRevision(root, headSha, relativePath);
+      if (raw === undefined) continue;
       const content = raw.slice(0, MAX_INSTRUCTION_CHARACTERS);
       instructions.push({ path: relativePath, content, characters: content.length, truncated: raw.length > content.length });
     } catch {
@@ -186,6 +187,32 @@ async function readRepositoryInstructions(repositoryRoot: string): Promise<Repos
     }
   }
   return instructions;
+}
+
+async function readInstructionAtRevision(
+  repositoryRoot: string,
+  headSha: string,
+  relativePath: string,
+): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFile("git", ["show", `${headSha}:${relativePath}`], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+      maxBuffer: MAX_INSTRUCTION_CHARACTERS * 2,
+    });
+    return stdout;
+  } catch {
+    // Legacy sessions and synthetic fixtures may not have their pinned objects locally.
+  }
+
+  const candidate = path.resolve(repositoryRoot, relativePath);
+  try {
+    const resolved = await realpath(candidate);
+    if (resolved !== repositoryRoot && !resolved.startsWith(`${repositoryRoot}${path.sep}`)) return undefined;
+    return await readFile(resolved, "utf8");
+  } catch {
+    return undefined;
+  }
 }
 
 function contextWarnings(files: ContextFileManifest[], instructions: RepositoryInstruction[], characters: number): string[] {

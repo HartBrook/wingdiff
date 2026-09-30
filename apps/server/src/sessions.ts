@@ -21,6 +21,7 @@ export interface ReviewSession {
   metadata: PullRequestMetadata;
   evidence: PullRequestEvidence;
   status: SessionStatus;
+  repositoryPath?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -160,7 +161,12 @@ export class SessionStore {
     this.database.prepare("UPDATE review_publications SET state = 'uncertain' WHERE state = 'publishing'").run();
   }
 
-  upsertReadySession(target: PullRequestTarget, metadata: PullRequestMetadata, evidence: PullRequestEvidence): ReviewSession {
+  upsertReadySession(
+    target: PullRequestTarget,
+    metadata: PullRequestMetadata,
+    evidence: PullRequestEvidence,
+    repositoryPath?: string,
+  ): ReviewSession {
     const existing = this.database.prepare(`
       SELECT id, created_at FROM review_sessions
       WHERE repository = ? AND pr_number = ? AND head_sha = ?
@@ -172,8 +178,8 @@ export class SessionStore {
     this.database.prepare(`
       INSERT INTO review_sessions (
         id, repository, pr_number, canonical_url, base_sha, head_sha, title,
-        status, metadata_json, evidence_json, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?)
+        status, metadata_json, evidence_json, repository_path, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?, ?)
       ON CONFLICT(repository, pr_number, head_sha) DO UPDATE SET
         canonical_url = excluded.canonical_url,
         base_sha = excluded.base_sha,
@@ -181,6 +187,7 @@ export class SessionStore {
         status = excluded.status,
         metadata_json = excluded.metadata_json,
         evidence_json = excluded.evidence_json,
+        repository_path = COALESCE(excluded.repository_path, review_sessions.repository_path),
         updated_at = excluded.updated_at
     `).run(
       id,
@@ -192,6 +199,7 @@ export class SessionStore {
       metadata.title,
       JSON.stringify(metadata),
       JSON.stringify(evidence),
+      repositoryPath ?? null,
       createdAt,
       timestamp,
     );
@@ -691,7 +699,7 @@ export function defaultDatabasePath(environment: NodeJS.ProcessEnv = process.env
 
 function migrate(database: DatabaseSync) {
   let version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
-  if (version > 14) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
+  if (version > 15) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
 
   if (version === 0) database.exec(`
     BEGIN;
@@ -967,6 +975,14 @@ function migrate(database: DatabaseSync) {
     PRAGMA user_version = 14;
     COMMIT;
   `);
+
+  version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+  if (version === 14) database.exec(`
+    BEGIN;
+    ALTER TABLE review_sessions ADD COLUMN repository_path TEXT;
+    PRAGMA user_version = 15;
+    COMMIT;
+  `);
 }
 
 function rowToSession(row: Record<string, unknown>): ReviewSession {
@@ -976,6 +992,7 @@ function rowToSession(row: Record<string, unknown>): ReviewSession {
     metadata: JSON.parse(String(row.metadata_json)) as PullRequestMetadata,
     evidence: JSON.parse(String(row.evidence_json)) as PullRequestEvidence,
     status: String(row.status) as SessionStatus,
+    ...(typeof row.repository_path === "string" && row.repository_path ? { repositoryPath: row.repository_path } : {}),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };

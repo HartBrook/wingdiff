@@ -20,13 +20,14 @@ describe("local review sessions", () => {
     const databasePath = path.join(directory, "nested", "wingdiff.sqlite3");
     const times = [new Date("2026-09-29T12:00:00Z"), new Date("2026-09-29T12:01:00Z")];
     const store = new SessionStore(databasePath, () => times.shift()!);
-    const first = store.upsertReadySession(target, metadata(), evidence());
+    const first = store.upsertReadySession(target, metadata(), evidence(), "/work/codex");
     const resumed = store.upsertReadySession(target, { ...metadata(), title: "Updated title" }, evidence());
 
     expect(resumed.id).toBe(first.id);
     expect(resumed.createdAt).toBe(first.createdAt);
     expect(resumed.updatedAt).not.toBe(first.updatedAt);
     expect(resumed.metadata.title).toBe("Updated title");
+    expect(resumed.repositoryPath).toBe("/work/codex");
     expect(store.listSessions()).toMatchObject([{
       id: first.id,
       repository: "openai/codex",
@@ -112,7 +113,7 @@ describe("local review sessions", () => {
       selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
       tour: { summary: "The counter change is small and focused." },
     });
-    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(14);
+    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(15);
     store.close();
   });
 

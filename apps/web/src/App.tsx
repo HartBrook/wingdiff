@@ -1470,6 +1470,8 @@ function preferredAvailableSelection(providers: ProviderDefinition[], current: M
 function checkoutMessage(preparation: TargetPreparation): string {
   const checkout = preparation.environment.checkout;
   if (checkout.status === "matched") return "Current checkout matches";
+  if (checkout.status === "managed" && checkout.path) return "Managed repository cache ready";
+  if (checkout.status === "managed") return "Private repository cache will be created";
   if (checkout.status === "different" && checkout.repository) return `Current checkout is ${checkout.repository}`;
   return "No local checkout resolved";
 }

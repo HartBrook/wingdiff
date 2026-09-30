@@ -17,7 +17,7 @@ export interface TargetPreparation {
   target: PullRequestTarget;
   environment: {
     checkout: {
-      status: "matched" | "different" | "not-found";
+      status: "matched" | "managed" | "different" | "not-found";
       path?: string;
       repository?: string;
     };
@@ -50,14 +50,7 @@ export async function preparePullRequestTarget(input: string, signal?: AbortSign
 }
 
 export function acquisitionBlocker(preparation: TargetPreparation): string | undefined {
-  const { checkout, githubCli } = preparation.environment;
-  if (checkout.status === "different") {
-    const attached = checkout.repository ? ` The server is currently attached to ${checkout.repository}.` : "";
-    return `Restart Wingdiff with --checkout pointing to a local checkout of ${preparation.target.owner}/${preparation.target.repository}.${attached}`;
-  }
-  if (checkout.status === "not-found") {
-    return `Restart Wingdiff with --checkout pointing to a local checkout of ${preparation.target.owner}/${preparation.target.repository}.`;
-  }
+  const { githubCli } = preparation.environment;
   if (!githubCli.installed) return "Install the GitHub CLI, then run: gh auth login";
   if (!githubCli.authenticated) return "GitHub CLI is not authenticated. Run: gh auth login";
   return undefined;

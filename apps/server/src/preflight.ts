@@ -5,7 +5,7 @@ import { repositoryFromRemoteUrl } from "./targets.js";
 
 const execFile = promisify(execFileCallback);
 
-export type CheckoutStatus = "matched" | "different" | "not-found";
+export type CheckoutStatus = "matched" | "managed" | "different" | "not-found";
 
 export interface LocalTargetPreflight {
   checkout: {
@@ -41,19 +41,27 @@ async function inspectCheckout(
   runCommand: CommandRunner,
 ): Promise<LocalTargetPreflight["checkout"]> {
   try {
-    const [path, remote] = await Promise.all([
-      runCommand("git", ["rev-parse", "--show-toplevel"], cwd),
+    const [repositoryPath, remote] = await Promise.all([
+      resolveRepositoryPath(cwd, runCommand),
       runCommand("git", ["config", "--get", "remote.origin.url"], cwd),
     ]);
     const repository = repositoryFromRemoteUrl(remote);
     const expected = `${target.owner}/${target.repository}`.toLowerCase();
     return {
       status: repository?.toLowerCase() === expected ? "matched" : "different",
-      path: path.trim(),
+      path: repositoryPath,
       ...(repository ? { repository } : {}),
     };
   } catch {
     return { status: "not-found" };
+  }
+}
+
+async function resolveRepositoryPath(cwd: string, runCommand: CommandRunner): Promise<string> {
+  try {
+    return (await runCommand("git", ["rev-parse", "--show-toplevel"], cwd)).trim();
+  } catch {
+    return (await runCommand("git", ["rev-parse", "--absolute-git-dir"], cwd)).trim();
   }
 }
 

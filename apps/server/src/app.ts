@@ -3,7 +3,6 @@ import express from "express";
 import { acquireReviewSession, refreshReviewSession, type AcquisitionDependencies } from "./acquisition.js";
 import { validateDraftComment } from "./comments.js";
 import { buildSessionGenerationContext } from "./context.js";
-import { inspectLocalTarget } from "./preflight.js";
 import { buildSessionInvestigationContext } from "./investigation.js";
 import { createProviders, publicProviders, validateSelection } from "./providers/index.js";
 import type { ProviderId, TextProvider } from "./providers/types.js";
@@ -14,6 +13,7 @@ import { generateSessionTour, getSessionTour } from "./tourService.js";
 import { validateInvestigationContext } from "./validation.js";
 import { submitSessionReview, type ReviewSubmissionDependencies } from "./reviews.js";
 import { checkpointCoverageForSession, checkpointFindingsForSession, validateCurrentTourStop } from "./reviewWorkflow.js";
+import { prepareRepositoryTarget, resolveRepositoryTarget } from "./repositories.js";
 
 export interface AppOptions {
   cwd?: string;
@@ -51,8 +51,8 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
   app.post("/api/targets/prepare", async (request, response) => {
     try {
       const target = parsePullRequestTarget(request.body?.input, request.body?.checkoutRepository);
-      const environment = await inspectLocalTarget(target, cwd);
-      response.json({ target, environment });
+      const preparation = await prepareRepositoryTarget(target, cwd, environment);
+      response.json({ target, environment: preparation });
     } catch (error) {
       const message = error instanceof Error ? error.message : "The pull request target could not be prepared.";
       response.status(400).json({ error: message });
@@ -75,7 +75,8 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
   app.post("/api/sessions", async (request, response) => {
     try {
       const target = parsePullRequestTarget(request.body?.input, request.body?.checkoutRepository);
-      const session = await acquireReviewSession(target, cwd, sessionStore, undefined, options.acquisitionDependencies);
+      const repositoryPath = await resolveRepositoryTarget(target, cwd, environment);
+      const session = await acquireReviewSession(target, repositoryPath, sessionStore, undefined, options.acquisitionDependencies);
       response.status(201).json({ session });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Wingdiff could not acquire this pull request.";
@@ -315,7 +316,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
       const submission = await submitSessionReview(
         session,
         sessionStore,
-        cwd,
+        session.repositoryPath ?? cwd,
         draft,
         options.reviewSubmissionDependencies,
         { scope: submissionInput.scope, acknowledgeApprovalRisks: submissionInput.acknowledgeApprovalRisks },
@@ -336,7 +337,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
       }
       const result = await refreshReviewSession(
         session.target,
-        cwd,
+        session.repositoryPath ?? await resolveRepositoryTarget(session.target, cwd, environment),
         sessionStore,
         undefined,
         options.acquisitionDependencies,
@@ -387,7 +388,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
     }
     if (generated.contextFingerprint) {
       try {
-        const currentContext = await buildSessionGenerationContext(session, sessionStore, scope, cwd);
+        const currentContext = await buildSessionGenerationContext(session, sessionStore, scope, session.repositoryPath ?? cwd);
         if (currentContext.manifest.fingerprint !== generated.contextFingerprint) {
           response.status(409).json({ error: "The model context changed after this tour was generated. Generate it again." });
           return;
@@ -408,7 +409,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
         return;
       }
       const scope = tourScope(request.query.scope);
-      const context = await buildSessionGenerationContext(session, sessionStore, scope, cwd);
+      const context = await buildSessionGenerationContext(session, sessionStore, scope, session.repositoryPath ?? cwd);
       response.json({ manifest: context.manifest });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Wingdiff could not prepare the model context.";
@@ -426,7 +427,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
       const scope = tourScope(request.body?.scope);
       const patterns = contextExclusions(request.body?.excludedPatterns);
       sessionStore.saveContextExclusions(session.id, patterns);
-      const context = await buildSessionGenerationContext(session, sessionStore, scope, cwd);
+      const context = await buildSessionGenerationContext(session, sessionStore, scope, session.repositoryPath ?? cwd);
       response.json({ manifest: context.manifest });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Wingdiff could not save model-context settings.";
@@ -463,7 +464,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
         sessionStore,
         scope,
         abortController.signal,
-        cwd,
+        session.repositoryPath ?? cwd,
       );
       response.status(201).json({ generated });
     } catch (error) {
@@ -496,7 +497,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
         input.scope,
         input.stopId,
         input.question,
-        cwd,
+        session.repositoryPath ?? cwd,
       );
       await streamInvestigationResponse(response, provider, selection, context);
     } catch (error) {

@@ -100,5 +100,5 @@ async function acquireReviewArtifacts(
   }
 
   onStage("persisting");
-  return { session: store.upsertReadySession(target, metadata, evidence), revisions };
+  return { session: store.upsertReadySession(target, metadata, evidence, revisions.repositoryRoot), revisions };
 }
