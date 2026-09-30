@@ -64,9 +64,28 @@ test("returns to the top when marking a stop understood", async ({ page }) => {
   await expect.poll(() => canvas.evaluate((element) => element.scrollTop)).toBe(0);
 });
 
-async function mockReviewApi(page: Page) {
+test("publishes on the first click after editing and keeps failures actionable", async ({ page }) => {
+  await mockReviewApi(page, { failFirstPublish: true });
+  await page.goto("/?session=pilot-session");
+  await expect(page.getByRole("heading", { name: "Make the counter update atomic" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await page.getByPlaceholder("Summarize your review…").fill("The atomic update is ready.");
+  const publish = page.getByRole("button", { name: "Publish review to GitHub" });
+  await publish.click();
+
+  const failure = page.getByRole("alert").filter({ hasText: "Review not published" });
+  await expect(failure).toContainText("GitHub rejected the review.");
+  await expect(publish).toBeEnabled();
+
+  await publish.click();
+  await expect(page.getByRole("link", { name: "Open on GitHub" })).toBeVisible();
+});
+
+async function mockReviewApi(page: Page, options: { failFirstPublish?: boolean } = {}) {
   let tourReady = false;
   let investigationId = "investigation-1";
+  let publishAttempts = 0;
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -100,6 +119,8 @@ async function mockReviewApi(page: Page) {
     }
     if (path === "/api/sessions/pilot-session/review-submission") {
       if (method === "POST") {
+        publishAttempts += 1;
+        if (options.failFirstPublish && publishAttempts === 1) return json(route, { error: "GitHub rejected the review." }, 400);
         const input = request.postDataJSON();
         return json(route, { submission: {
           sessionId: session.id, headSha, githubReviewId: 91, url: "https://github.com/acme/service/pull/42#pullrequestreview-91",

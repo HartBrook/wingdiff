@@ -484,6 +484,7 @@ code, kbd { font-family: var(--mono); }
 .publication-warning strong, .publication-warning p { display: block; margin: 0; }
 .publication-warning p { margin-top: 6px; }
 .publication-warning .button { margin-top: 9px; }
+.publish-error { display: flex; margin-top: 12px; padding: 10px; gap: 8px; color: var(--coral); border: 1px solid color-mix(in srgb, var(--coral) 45%, var(--border)); border-radius: 9px; background: var(--coral-soft); font-size: 9px; line-height: 1.45; }.publish-error > svg { flex: 0 0 auto; margin-top: 1px; }.publish-error strong { color: var(--text); }.publish-error p { margin: 3px 0 0; color: var(--text-2); }
 
 .drawer-backdrop { position: fixed; z-index: 70; inset: 62px 0 0; width: 100%; border: 0; background: rgba(4,5,5,.55); backdrop-filter: blur(2px); }
 .investigation-drawer { position: fixed; z-index: 80; top: 62px; right: 0; bottom: 0; display: flex; width: min(450px, 94vw); flex-direction: column; border-left: 1px solid var(--border); background: var(--surface); box-shadow: -30px 0 80px rgba(0,0,0,.3); animation: drawer-in 260ms cubic-bezier(.2,.8,.2,1); }
