@@ -30,7 +30,7 @@ describe("review acquisition", () => {
     const dependencies = fixtureDependencies();
     dependencies.inspectTarget = async () => ({
       checkout: { status: "different", path: "/work/other", repository: "other/repo" },
-      githubCli: { installed: true },
+      githubCli: { installed: true, authenticated: true },
       networkChecked: false,
     });
     const readMetadata = vi.spyOn(dependencies, "readMetadata");
@@ -45,6 +45,22 @@ describe("review acquisition", () => {
     const dependencies = fixtureDependencies();
     dependencies.readEvidence = async () => ({ ...evidence(), headSha: "c".repeat(40) });
     await expect(acquireReviewSession(target, "/work/codex", store, undefined, dependencies)).rejects.toThrow(/does not match/);
+    store.close();
+  });
+
+  it("stops with an actionable error when GitHub is not authenticated", async () => {
+    const store = new SessionStore(":memory:");
+    const dependencies = fixtureDependencies();
+    dependencies.inspectTarget = async () => ({
+      checkout: { status: "matched", path: "/work/codex", repository: "openai/codex" },
+      githubCli: { installed: true, authenticated: false },
+      networkChecked: false,
+    });
+    const readMetadata = vi.spyOn(dependencies, "readMetadata");
+
+    await expect(acquireReviewSession(target, "/work/codex", store, undefined, dependencies))
+      .rejects.toThrow(/gh auth login/);
+    expect(readMetadata).not.toHaveBeenCalled();
     store.close();
   });
 
@@ -116,7 +132,7 @@ function fixtureDependencies(): AcquisitionDependencies {
 function preflight(): LocalTargetPreflight {
   return {
     checkout: { status: "matched", path: "/work/codex", repository: "openai/codex" },
-    githubCli: { installed: true },
+    githubCli: { installed: true, authenticated: true },
     networkChecked: false,
   };
 }

@@ -82,7 +82,10 @@ async function acquireReviewArtifacts(
     throw new Error(`Launch Wingdiff from a checkout of ${target.owner}/${target.repository}.${actual}`);
   }
   if (!preflight.githubCli.installed) {
-    throw new Error("GitHub CLI is not installed. Install gh and authenticate before opening this pull request.");
+    throw new Error("GitHub CLI is not installed. Install gh, then run: gh auth login");
+  }
+  if (!preflight.githubCli.authenticated) {
+    throw new Error("GitHub CLI is not authenticated for github.com. Run: gh auth login");
   }
 
   onStage("metadata");

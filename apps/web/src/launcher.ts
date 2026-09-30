@@ -21,7 +21,7 @@ export interface TargetPreparation {
       path?: string;
       repository?: string;
     };
-    githubCli: { installed: boolean };
+    githubCli: { installed: boolean; authenticated: boolean };
     networkChecked: false;
   };
 }
@@ -58,7 +58,8 @@ export function acquisitionBlocker(preparation: TargetPreparation): string | und
   if (checkout.status === "not-found") {
     return `Restart Wingdiff with --checkout pointing to a local checkout of ${preparation.target.owner}/${preparation.target.repository}.`;
   }
-  if (!githubCli.installed) return "Install and authenticate the GitHub CLI before opening this pull request.";
+  if (!githubCli.installed) return "Install the GitHub CLI, then run: gh auth login";
+  if (!githubCli.authenticated) return "GitHub CLI is not authenticated. Run: gh auth login";
   return undefined;
 }
 

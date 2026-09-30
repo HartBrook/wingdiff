@@ -197,7 +197,7 @@ function Launcher({ initialTarget, onDemo, onSession }: { initialTarget?: string
 
       {preparation ? <section className="target-ready">
         <span className="target-ready__icon"><Icon name="check" size={19} /></span>
-        <div><div className="eyebrow">{blocker ? "Setup needed" : "Ready to review"}</div><h2>{preparation.target.label}</h2><p>{checkoutMessage(preparation)} · {preparation.environment.githubCli.installed ? "GitHub CLI installed" : "GitHub CLI not found"}. No GitHub request was made.</p>{blocker && <p className="target-ready__blocker" role="alert"><Icon name="flag" size={13} />{blocker}</p>}</div>
+        <div><div className="eyebrow">{blocker ? "Setup needed" : "Ready to review"}</div><h2>{preparation.target.label}</h2><p>{checkoutMessage(preparation)} · {githubCliMessage(preparation)}. No pull request data was requested.</p>{blocker && <p className="target-ready__blocker" role="alert"><Icon name="flag" size={13} />{blocker}</p>}</div>
         <div className="target-ready__actions"><button className="button button--primary" disabled={!canAcquire || acquiring} onClick={() => void openPullRequest()} title={blocker} type="button">{acquiring ? "Preparing review…" : "Start review"}<Icon name="arrow-right" size={15} /></button><button className="button button--quiet" onClick={onDemo} type="button">Try demo</button></div>
       </section> : recent.length > 0 ? <section className="recent-targets">
         <header><span>Recent pull requests</span><small>Stored on this device</small></header>
@@ -1472,6 +1472,12 @@ function checkoutMessage(preparation: TargetPreparation): string {
   if (checkout.status === "matched") return "Current checkout matches";
   if (checkout.status === "different" && checkout.repository) return `Current checkout is ${checkout.repository}`;
   return "No local checkout resolved";
+}
+
+function githubCliMessage(preparation: TargetPreparation): string {
+  const githubCli = preparation.environment.githubCli;
+  if (!githubCli.installed) return "GitHub CLI not found";
+  return githubCli.authenticated ? "GitHub authenticated" : "GitHub authentication needed";
 }
 
 function AuthorMarkdown({ fallback, source }: { fallback?: string; source: string }) {

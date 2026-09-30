@@ -14,8 +14,22 @@ describe("local target preflight", () => {
 
     await expect(inspectLocalTarget(target, "/work/codex", runner)).resolves.toEqual({
       checkout: { status: "matched", path: "/work/codex", repository: "openai/codex" },
-      githubCli: { installed: true },
+      githubCli: { installed: true, authenticated: true },
       networkChecked: false,
+    });
+  });
+
+  it("distinguishes an installed GitHub CLI from an authenticated one", async () => {
+    const runner: CommandRunner = async (command, arguments_) => {
+      if (command === "gh" && arguments_[0] === "auth") throw new Error("logged out");
+      if (command === "gh") return "gh version 2";
+      if (arguments_[0] === "rev-parse") return "/work/codex\n";
+      return "git@github.com:openai/codex.git\n";
+    };
+
+    expect((await inspectLocalTarget(target, "/work/codex", runner)).githubCli).toEqual({
+      installed: true,
+      authenticated: false,
     });
   });
 

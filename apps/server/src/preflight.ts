@@ -15,6 +15,7 @@ export interface LocalTargetPreflight {
   };
   githubCli: {
     installed: boolean;
+    authenticated: boolean;
   };
   networkChecked: false;
 }
@@ -26,11 +27,12 @@ export async function inspectLocalTarget(
   cwd: string,
   runCommand: CommandRunner = defaultCommandRunner,
 ): Promise<LocalTargetPreflight> {
-  const [checkout, githubCli] = await Promise.all([
+  const [checkout, githubCli, githubAuth] = await Promise.all([
     inspectCheckout(target, cwd, runCommand),
     commandExists("gh", ["--version"], cwd, runCommand),
+    commandExists("gh", ["auth", "status", "--hostname", "github.com"], cwd, runCommand),
   ]);
-  return { checkout, githubCli: { installed: githubCli }, networkChecked: false };
+  return { checkout, githubCli: { installed: githubCli, authenticated: githubAuth }, networkChecked: false };
 }
 
 async function inspectCheckout(

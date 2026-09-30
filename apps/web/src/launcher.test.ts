@@ -38,7 +38,7 @@ describe("launcher state", () => {
       target,
       environment: {
         checkout: { status: "different", path: "/work/wingdiff", repository: "HartBrook/wingdiff" },
-        githubCli: { installed: true },
+        githubCli: { installed: true, authenticated: true },
         networkChecked: false,
       },
     };
@@ -47,5 +47,17 @@ describe("launcher state", () => {
       ...preparation,
       environment: { ...preparation.environment, checkout: { status: "matched", path: "/work/codex" } },
     })).toBeUndefined();
+  });
+
+  it("gives an actionable authentication command", () => {
+    const preparation: TargetPreparation = {
+      target,
+      environment: {
+        checkout: { status: "matched", path: "/work/codex", repository: "openai/codex" },
+        githubCli: { installed: true, authenticated: false },
+        networkChecked: false,
+      },
+    };
+    expect(acquisitionBlocker(preparation)).toMatch(/gh auth login/);
   });
 });
