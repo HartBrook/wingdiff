@@ -4,6 +4,12 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      repair_0_2_1_registry:
+        description: Point npm latest at 0.2.1 after the registry finishes processing it
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -44,9 +50,11 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Retire broken prototype release
-        if: github.event_name == 'release' && github.event.release.tag_name == 'v0.2.1'
+        if: >-
+          (github.event_name == 'release' && github.event.release.tag_name == 'v0.2.1') ||
+          inputs.repair_0_2_1_registry
         run: |
           npm deprecate wingdiff@0.2.0 "Broken CLI entrypoint; use wingdiff@next instead."
-          npm dist-tag rm wingdiff latest
+          npm dist-tag add wingdiff@0.2.1 latest
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

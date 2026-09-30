@@ -53,8 +53,10 @@ npx wingdiff@next 123
 npx wingdiff@next demo
 ```
 
-The `next` tag is used during the pre-1.0 private-repository pilot so prototype
-releases do not become npm's default `latest` version.
+The `next` tag is the moving channel during the pre-1.0 private-repository
+pilot. The verified `0.2.1` corrective release remains on `latest` so an
+unqualified install cannot select the broken `0.2.0`; later pilot releases
+advance only `next`.
 
 Install the command permanently if you use it regularly:
 

@@ -23,7 +23,8 @@ source maps, README, and license.
 
 The release job rejects a tag that does not exactly match `package.json`. Do
 not publish from a developer checkout; release publication belongs to the
-audited GitHub Actions workflow.
+audited GitHub Actions workflow. The verified `0.2.1` corrective release is the
+fixed `latest` baseline; subsequent prototype releases advance only `next`.
 
 When the repository becomes public, configure the package's npm trusted
 publisher for this workflow, remove `NPM_TOKEN`, grant `id-token: write`, and
