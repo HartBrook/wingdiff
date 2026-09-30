@@ -6,21 +6,33 @@ Repository visibility is not changed by the project scripts or workflows.
 ## Publish the npm package
 
 The `wingdiff` name is configured as the public package in the repository root.
-Before the first release, add a granular npm publishing token as the
-`NPM_TOKEN` repository secret. Prefer configuring `publish-npm.yml` as an npm
-trusted publisher when the package and npm organization settings support it.
+While the GitHub repository is private, releases publish the public npm package
+under the `next` tag using the granular npm token stored in the `NPM_TOKEN`
+repository secret. Provenance is intentionally disabled because npm cannot
+generate provenance for a package built from a private repository. The package
+tarball is public even though the GitHub repository is private, so inspect it
+before releasing; it contains the compiled server and browser application,
+source maps, README, and license.
 
 1. Update the version in `package.json` and `package-lock.json`.
 2. Run the **Publish npm package** workflow in dry-run mode and inspect its
    package-content output.
 3. Create a GitHub release tagged `v<version>` from the intended commit.
-4. Confirm the workflow tests, builds, and publishes the package with
-   provenance.
-5. Test `npx wingdiff --version` from a clean temporary directory.
+4. Confirm the workflow tests, builds, and publishes the package under `next`.
+5. Test `npx wingdiff@next --version` from a clean temporary directory.
 
 The release job rejects a tag that does not exactly match `package.json`. Do
 not publish from a developer checkout; release publication belongs to the
 audited GitHub Actions workflow.
+
+When the repository becomes public, configure the package's npm trusted
+publisher for this workflow, remove `NPM_TOKEN`, grant `id-token: write`, and
+publish with `--provenance`. When a release is ready to become the default npm
+version, promote it without rebuilding:
+
+```bash
+npm dist-tag add wingdiff@0.2.0 latest
+```
 
 ## Before changing visibility
 
