@@ -189,7 +189,7 @@ function Launcher({ initialTarget, onDemo, onSession }: { initialTarget?: string
       <section className="launcher-intro">
         <div className="eyebrow">Start a review</div>
         <h1>Choose a pull request.</h1>
-        <p>Wingdiff checks your local setup, then builds a guided review.</p>
+        <p>Wingdiff builds a guided tour of the change, with every claim linked to the diff. Nothing is posted until you publish your review.</p>
         <form className={`target-form ${error ? "is-error" : ""}`} onSubmit={(event) => { event.preventDefault(); void submitTarget(); }}>
           <Icon name="git-pull" size={19} />
           <input autoFocus aria-label="GitHub pull request" onChange={(event) => { setInput(event.target.value); setPreparation(null); setError(null); }} placeholder="https://github.com/owner/repo/pull/123" spellCheck={false} value={input} />

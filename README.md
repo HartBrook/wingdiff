@@ -4,7 +4,15 @@
 [![CodeQL](https://github.com/HartBrook/wingdiff/actions/workflows/codeql.yml/badge.svg)](https://github.com/HartBrook/wingdiff/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-Wingdiff is a guided, evidence-backed tour of a pull request. It helps an engineer understand a change by behavior, data flow, and risk; investigate the exact supporting code; and publish a thoughtful review to GitHub.
+**Understand a pull request before you approve it.**
+
+Wingdiff turns a pull request into a guided tour, ordered by behavior, data flow, and risk instead of by file name. Every explanation links to the exact lines that support it. You investigate, you write the comments, and you publish one review to GitHub as yourself.
+
+Free and open source under the MIT License. Runs entirely on your machine with the model access you already have.
+
+```bash
+npx wingdiff https://github.com/owner/repository/pull/123
+```
 
 > [!NOTE]
 > Wingdiff is pre-1.0 software. Review the generated evidence and final GitHub
@@ -12,19 +20,37 @@ Wingdiff is a guided, evidence-backed tour of a pull request. It helps an engine
 
 ![Wingdiff guided review interface](./docs/images/wingdiff-demo.png)
 
-This repository contains a local-first review application plus a realistic
-cross-file fixture for exercising the complete review loop:
+## Why Wingdiff
 
-- A default **Since your review** route that isolates the two areas changed after the reviewed head
-- An **Entire PR** backstop that keeps reviewed-but-unchanged areas visible
-- Finding continuity that shows whether earlier concerns still apply or appear addressed
-- A focused summary and semantic tour with exact diff evidence
-- Line selection, flags, contextual investigation, and draft review comments
-- Full evidence Browse mode
-- Review desk with coverage, summary, inline comments, and disposition
-- Dark/light themes, keyboard navigation, responsive layout, and local persistence
+AI review bots made review comments cheap. They did not make changes easier to understand. Pull requests keep getting larger, more of them are written by coding agents, and the person who approves still owns the outcome. Wingdiff is built for that person.
 
-Real pull requests can be acquired, turned into grounded guided tours, and reviewed through GitHub. Review progress, investigation notebooks, comments, the summary, disposition, and submitted-review receipt are persisted locally. The fixture demo still simulates submission. Contextual investigation defaults to the locally installed Codex CLI using its existing ChatGPT sign-in. Direct OpenAI and Anthropic APIs remain optional; the demo uses clearly labeled fixture answers when no provider is available.
+- **No bot comments on your pull request.** Wingdiff never posts on its own and never approves anything. Its findings are for you to confirm, dismiss, or turn into a comment in your own words. Nothing reaches GitHub until you publish, and it arrives as your review.
+- **Every explanation is checked against the diff.** Wingdiff rejects a generated tour unless every claim and finding resolves to an exact line range in the pinned diff, and every changed file is covered. The raw diff is always one keystroke away.
+- **Coverage you can trust.** Wingdiff records which tour stops you actually visited, not which files scrolled past. Approving with unseen stops, open flags, or high-severity findings requires an explicit acknowledgement.
+- **Built for large and agent-written changes.** The tour reconstructs the story a pull request often arrives without: what behavior changed, the path from entry point to effect, and where it can fail. When the author pushes again, **Since your review** shows only what changed since your last checkpoint.
+- **Free, open source, and local.** No Wingdiff account, seat license, or per-review fee, and no review service holding a copy of your code. Wingdiff runs on loopback and uses your existing Codex sign-in or your own OpenAI or Anthropic key, so your organization's model and data policies still apply.
+- **Read-only by design.** Wingdiff fetches pull requests through the GitHub CLI into private Git refs. It never checks out the pull request, touches your working tree, or runs pull-request code.
+
+### Wingdiff and automated reviewers
+
+| | Hosted AI reviewers | Wingdiff |
+|---|---|---|
+| Who reviews | A bot that posts its own comments | You, with AI as a guide |
+| What lands on the pull request | Bot comments, often on every push | One review you wrote and chose to publish |
+| What you get | A list of findings | A tour ordered by behavior and risk, each claim linked to its evidence |
+| Where your code goes | The review vendor's service | Your machine and the model provider you already use |
+| Cost | Per seat or per review | Free; you bring your own model access |
+
+Wingdiff can sit alongside an automated reviewer. Let the bot catch mechanical issues, and use Wingdiff to understand the change you are about to approve.
+
+## What a review looks like
+
+1. **Summary.** What changed in the system, how large the change is, and the findings worth your attention.
+2. **Tour.** A sequence of semantic stops, each with the smallest useful slice of diff evidence. Flag a stop, select lines, or draft a comment as you go.
+3. **Investigate.** Ask about the evidence in front of you. Wingdiff answers from the pinned base and head source, not from whatever the browser sends.
+4. **Conclude.** The review desk shows your coverage, summary, inline comments, and disposition exactly as they will be published.
+
+Browse mode shows the full diff at any time. Review progress, investigation notes, comments, and the publish receipt are stored on your machine. Run `npx wingdiff demo` to try the complete loop on a realistic fixture; the demo simulates publishing and uses clearly labeled sample answers when no model provider is configured.
 
 ## Get started
 
@@ -96,6 +122,8 @@ npm --prefix /path/to/wingdiff run wingdiff -- https://github.com/owner/reposito
 ```
 
 Use `npm run dev` when developing the UI without automatic browser launch.
+
+## How it works
 
 ### Read-only PR acquisition
 

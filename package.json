@@ -1,7 +1,16 @@
 {
   "name": "wingdiff",
   "version": "0.2.2",
-  "description": "A guided, evidence-backed tour of a pull request.",
+  "description": "Understand a pull request before you approve it. A local, open source guided review tour where every claim links to the diff and you publish the review.",
+  "keywords": [
+    "code-review",
+    "pull-request",
+    "github",
+    "review",
+    "ai",
+    "local-first",
+    "cli"
+  ],
   "license": "MIT",
   "bin": {
     "wingdiff": "apps/server/dist/cli.js"
