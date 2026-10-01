@@ -37,6 +37,8 @@ describe("model context manifest", () => {
     expect(context.manifest.promptPreview).toContain("<repository_instructions>");
     expect(context.manifest.promptPreview).toContain("Keep review comments concise.");
     expect(context.manifest.promptPreview).not.toContain("SECRET_TOKEN");
+    expect(context.manifest.promptPreview).toContain("a2\tnew:1\t+return redis.incr(key)");
+    expect(context.manifest.promptPreview).not.toContain("line_counter");
     expect(context.input.fileAnchorIds).toHaveLength(2);
     store.close();
   });

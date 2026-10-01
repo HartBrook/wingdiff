@@ -34,6 +34,11 @@ export interface TourGenerationInput {
   repositoryInstructions?: Array<{ path: string; content: string }>;
 }
 
+export interface ModelTourGenerationInput {
+  input: TourGenerationInput;
+  restoreAnchors(value: unknown): unknown;
+}
+
 export interface PriorTourFinding {
   id: string;
   title: string;
@@ -125,6 +130,25 @@ export function buildTourGenerationInput(
     fileAnchorIds,
     priorFindings,
     repositoryInstructions,
+  };
+}
+
+export function prepareModelTourInput(input: TourGenerationInput): ModelTourGenerationInput {
+  const aliasById = new Map(input.anchors.map((anchor, index) => [anchor.id, `a${index + 1}`]));
+  const originalByAlias = new Map([...aliasById].map(([id, alias]) => [alias, id]));
+  const aliasFor = (id: string) => {
+    const alias = aliasById.get(id);
+    if (!alias) throw new Error(`Evidence anchor ${id} is missing from the model input.`);
+    return alias;
+  };
+
+  return {
+    input: {
+      ...input,
+      anchors: input.anchors.map((anchor) => ({ ...anchor, id: aliasFor(anchor.id) })),
+      fileAnchorIds: input.fileAnchorIds.map(aliasFor),
+    },
+    restoreAnchors: (value) => restoreAnchorReferences(value, originalByAlias),
   };
 }
 
@@ -326,6 +350,17 @@ function anchors(value: unknown, label: string, known: Set<string>, minimum: num
     if (!known.has(anchor)) throw new Error(`${label} references unknown evidence anchor ${anchor}.`);
   }
   return [...new Set(values)];
+}
+
+function restoreAnchorReferences(value: unknown, originalByAlias: Map<string, string>): unknown {
+  if (Array.isArray(value)) return value.map((item) => restoreAnchorReferences(item, originalByAlias));
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+    key,
+    key === "anchorIds" && Array.isArray(item)
+      ? item.map((anchor) => typeof anchor === "string" ? originalByAlias.get(anchor) ?? anchor : anchor)
+      : restoreAnchorReferences(item, originalByAlias),
+  ]));
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {

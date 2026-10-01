@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { buildInvestigationPrompt, INVESTIGATION_INSTRUCTIONS } from "./prompt.js";
 import { buildTourRequestPrompt, parseStructuredJson, TOUR_INSTRUCTIONS } from "./tourPrompt.js";
-import type { TourGenerationInput } from "../tour.js";
+import { prepareModelTourInput, type TourGenerationInput } from "../tour.js";
 import type { InvestigationContext, ModelSelection, TextProvider } from "./types.js";
 
 export class AnthropicProvider implements TextProvider {
@@ -17,18 +17,19 @@ export class AnthropicProvider implements TextProvider {
     input: TourGenerationInput,
     signal?: AbortSignal,
   ): Promise<unknown> {
+    const model = prepareModelTourInput(input);
     const response = await this.client.messages.create({
       model: selection.model,
       max_tokens: 6_000,
       system: TOUR_INSTRUCTIONS,
-      messages: [{ role: "user", content: buildTourRequestPrompt(input) }],
+      messages: [{ role: "user", content: buildTourRequestPrompt(model.input) }],
     }, { signal });
     const text = response.content
       .filter((block) => block.type === "text")
       .map((block) => block.text)
       .join("\n");
 
-    return parseStructuredJson(text);
+    return model.restoreAnchors(parseStructuredJson(text));
   }
 
   async *streamInvestigation(

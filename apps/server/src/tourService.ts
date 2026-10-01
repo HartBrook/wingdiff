@@ -4,6 +4,7 @@ import { buildSessionGenerationContext, filteredEvidenceForSession, priorFinding
 import {
   buildTourGenerationInput,
   validateGeneratedTour,
+  type GeneratedTour,
   type TourEvidenceAnchor,
 } from "./tour.js";
 
@@ -25,7 +26,16 @@ export async function generateSessionTour(
   if (!evidence.files.length) throw new Error("Every changed file is excluded from model context. Keep at least one file to generate a tour.");
   if (!manifest.ready) throw new Error("Model context is too large. Exclude generated or low-value files before generating a tour.");
   const raw = await provider.generateTour(selection, input, signal);
-  const tour = validateGeneratedTour(raw, input);
+  let tour: GeneratedTour;
+  try {
+    tour = validateGeneratedTour(raw, input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "The model returned an invalid guided tour.";
+    if (message.includes("references unknown evidence anchor")) {
+      throw new Error(`The model returned an invalid evidence reference, so Wingdiff discarded the tour. Retry generation. (${message})`);
+    }
+    throw error;
+  }
   const stored = store.saveTour(session.id, scope, selection, evidence.baseSha, evidence.headSha, tour, {
     manifest,
     anchors: input.anchors,

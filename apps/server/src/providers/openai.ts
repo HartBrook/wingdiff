@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import { buildInvestigationPrompt, INVESTIGATION_INSTRUCTIONS } from "./prompt.js";
-import { buildTourRequestPrompt, parseStructuredJson, TOUR_INSTRUCTIONS, TOUR_JSON_SCHEMA } from "./tourPrompt.js";
-import type { TourGenerationInput } from "../tour.js";
+import { buildTourRequestPrompt, parseStructuredJson, TOUR_INSTRUCTIONS, tourJsonSchema } from "./tourPrompt.js";
+import { prepareModelTourInput, type TourGenerationInput } from "../tour.js";
 import type { InvestigationContext, ModelSelection, TextProvider } from "./types.js";
 
 export class OpenAIProvider implements TextProvider {
@@ -17,10 +17,11 @@ export class OpenAIProvider implements TextProvider {
     input: TourGenerationInput,
     signal?: AbortSignal,
   ): Promise<unknown> {
+    const model = prepareModelTourInput(input);
     const response = await this.client.responses.create({
       model: selection.model,
       instructions: TOUR_INSTRUCTIONS,
-      input: buildTourRequestPrompt(input),
+      input: buildTourRequestPrompt(model.input),
       reasoning: { effort: selection.reasoningEffort === "none" ? "none" : selection.reasoningEffort },
       text: {
         verbosity: "low",
@@ -28,14 +29,14 @@ export class OpenAIProvider implements TextProvider {
           type: "json_schema",
           name: "wingdiff_tour",
           strict: true,
-          schema: TOUR_JSON_SCHEMA,
+          schema: tourJsonSchema(model.input),
         },
       },
       max_output_tokens: 6_000,
       store: false,
     }, { signal });
 
-    return parseStructuredJson(response.output_text);
+    return model.restoreAnchors(parseStructuredJson(response.output_text));
   }
 
   async *streamInvestigation(

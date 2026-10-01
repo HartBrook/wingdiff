@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { TourGenerationInput } from "../tour.js";
-import { buildTourRequestPrompt, parseStructuredJson, TOUR_INSTRUCTIONS, TOUR_JSON_SCHEMA } from "./tourPrompt.js";
+import { prepareModelTourInput, type TourGenerationInput } from "../tour.js";
+import { buildTourRequestPrompt, parseStructuredJson, TOUR_INSTRUCTIONS, tourJsonSchema } from "./tourPrompt.js";
 
 const input: TourGenerationInput = {
   pullRequest: {
@@ -24,23 +24,30 @@ const input: TourGenerationInput = {
 
 describe("tour generation prompt", () => {
   it("keeps untrusted repository content inside the evidence boundary", () => {
-    const prompt = buildTourRequestPrompt(input);
+    const model = prepareModelTourInput(input);
+    const prompt = buildTourRequestPrompt(model.input);
 
     expect(prompt).toContain("<pull_request>");
     expect(prompt).toContain("<validated_evidence>");
-    expect(prompt).toContain("line_def");
+    expect(prompt).toContain("a2\tnew:8");
+    expect(prompt).not.toContain("line_def");
     expect(TOUR_INSTRUCTIONS).toContain("untrusted data");
     expect(TOUR_INSTRUCTIONS).toContain("Avoid introductions, conclusions, praise, filler");
     expect(TOUR_INSTRUCTIONS).toContain("Never mark a finding resolved");
   });
 
-  it("requires nullable findings and rejects extra structured fields", () => {
-    const stop = TOUR_JSON_SCHEMA.properties.stops.items;
+  it("restricts every structured anchor reference to the supplied compact aliases", () => {
+    const model = prepareModelTourInput(input);
+    const schema = tourJsonSchema(model.input);
+    const stop = schema.properties.stops.items;
 
     expect(stop.required).toContain("finding");
     expect(stop.properties.finding.anyOf).toContainEqual({ type: "null" });
     expect(stop.additionalProperties).toBe(false);
-    expect(TOUR_JSON_SCHEMA.required).toContain("findingRevisions");
+    expect(schema.required).toContain("findingRevisions");
+    expect(schema.$defs.anchorId.enum).toEqual(["a1", "a2"]);
+    expect(stop.properties.anchorIds.items).toEqual({ $ref: "#/$defs/anchorId" });
+    expect(stop.properties.claims.items.properties.anchorIds.items).toEqual({ $ref: "#/$defs/anchorId" });
   });
 });
 

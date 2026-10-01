@@ -11,7 +11,7 @@ For every prior finding, return exactly one findingRevisions entry. Use still-ap
 
 Write for a developer making a review decision. Be direct, specific, and compact. State what changed, why it matters, and what deserves attention. Avoid introductions, conclusions, praise, filler, repetition, rhetorical questions, and canned AI phrasing. Prompts should be short questions a reviewer could use to investigate an actual uncertainty.
 
-Return only JSON matching the supplied schema. Reference only exact anchor IDs from the evidence.`;
+Return only JSON matching the supplied schema. Anchor IDs are compact request-local aliases such as a17. Reference only exact anchor IDs from the evidence.`;
 
 const stringArray = (minimum: number, maximum: number) => ({
   type: "array",
@@ -20,78 +20,90 @@ const stringArray = (minimum: number, maximum: number) => ({
   items: { type: "string" },
 }) as const;
 
-const findingSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["title", "body", "severity", "category", "anchorIds", "suggestedComment"],
-  properties: {
-    title: { type: "string" },
-    body: { type: "string" },
-    severity: { type: "string", enum: ["high", "medium", "low"] },
-    category: { type: "string" },
-    anchorIds: stringArray(1, 8),
-    suggestedComment: { type: "string" },
-  },
-} as const;
+const anchorArray = (minimum: number, maximum: number) => ({
+  type: "array",
+  minItems: minimum,
+  maxItems: maximum,
+  items: { $ref: "#/$defs/anchorId" },
+}) as const;
 
-export const TOUR_JSON_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["summary", "stops", "findingRevisions"],
-  properties: {
-    summary: { type: "string" },
-    stops: {
-      type: "array",
-      minItems: 1,
-      maxItems: 12,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["id", "title", "summary", "purpose", "anchorIds", "claims", "prompts", "finding"],
-        properties: {
-          id: { type: "string", pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
-          title: { type: "string" },
-          summary: { type: "string" },
-          purpose: { type: "string" },
-          anchorIds: stringArray(1, 24),
-          claims: {
-            type: "array",
-            minItems: 1,
-            maxItems: 6,
-            items: {
-              type: "object",
-              additionalProperties: false,
-              required: ["text", "kind", "confidence", "anchorIds"],
-              properties: {
-                text: { type: "string" },
-                kind: { type: "string", enum: ["fact", "inference", "unknown"] },
-                confidence: { type: "string", enum: ["high", "medium", "low"] },
-                anchorIds: stringArray(1, 8),
+export function tourJsonSchema(input: TourGenerationInput) {
+  const findingSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["title", "body", "severity", "category", "anchorIds", "suggestedComment"],
+    properties: {
+      title: { type: "string" },
+      body: { type: "string" },
+      severity: { type: "string", enum: ["high", "medium", "low"] },
+      category: { type: "string" },
+      anchorIds: anchorArray(1, 8),
+      suggestedComment: { type: "string" },
+    },
+  } as const;
+
+  return {
+    type: "object",
+    additionalProperties: false,
+    $defs: {
+      anchorId: { type: "string", enum: input.anchors.map((anchor) => anchor.id) },
+    },
+    required: ["summary", "stops", "findingRevisions"],
+    properties: {
+      summary: { type: "string" },
+      stops: {
+        type: "array",
+        minItems: 1,
+        maxItems: 12,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "title", "summary", "purpose", "anchorIds", "claims", "prompts", "finding"],
+          properties: {
+            id: { type: "string", pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+            title: { type: "string" },
+            summary: { type: "string" },
+            purpose: { type: "string" },
+            anchorIds: anchorArray(1, 24),
+            claims: {
+              type: "array",
+              minItems: 1,
+              maxItems: 6,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["text", "kind", "confidence", "anchorIds"],
+                properties: {
+                  text: { type: "string" },
+                  kind: { type: "string", enum: ["fact", "inference", "unknown"] },
+                  confidence: { type: "string", enum: ["high", "medium", "low"] },
+                  anchorIds: anchorArray(1, 8),
+                },
               },
             },
+            prompts: stringArray(0, 4),
+            finding: { anyOf: [findingSchema, { type: "null" }] },
           },
-          prompts: stringArray(0, 4),
-          finding: { anyOf: [findingSchema, { type: "null" }] },
+        },
+      },
+      findingRevisions: {
+        type: "array",
+        maxItems: 24,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["findingId", "state", "summary", "anchorIds"],
+          properties: {
+            findingId: { type: "string" },
+            state: { type: "string", enum: ["still-applies", "appears-addressed", "recheck", "superseded"] },
+            summary: { type: "string" },
+            anchorIds: anchorArray(0, 8),
+          },
         },
       },
     },
-    findingRevisions: {
-      type: "array",
-      maxItems: 24,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["findingId", "state", "summary", "anchorIds"],
-        properties: {
-          findingId: { type: "string" },
-          state: { type: "string", enum: ["still-applies", "appears-addressed", "recheck", "superseded"] },
-          summary: { type: "string" },
-          anchorIds: stringArray(0, 8),
-        },
-      },
-    },
-  },
-} as const;
+  } as const;
+}
 
 export function buildTourRequestPrompt(input: TourGenerationInput): string {
   return `${buildTourPrompt(input)}\n\nCreate the guided review tour. Use null for finding when the evidence does not support a concrete issue.`;

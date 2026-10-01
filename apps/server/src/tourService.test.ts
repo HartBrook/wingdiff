@@ -74,7 +74,9 @@ describe("session tour generation", () => {
       async *streamInvestigation() { yield ""; },
     };
 
-    await expect(generateSessionTour(session, selection, provider, store)).rejects.toThrow("unknown evidence anchor");
+    await expect(generateSessionTour(session, selection, provider, store)).rejects.toThrow(
+      "invalid evidence reference, so Wingdiff discarded the tour",
+    );
     expect(store.getTour(session.id)).toBeUndefined();
     store.close();
   });

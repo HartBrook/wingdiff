@@ -5,7 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { ChangedFileEvidence, PullRequestEvidence } from "./diff.js";
 import type { ReviewSession, SessionStore, TourScope } from "./sessions.js";
-import { buildTourGenerationInput, buildTourPrompt, type PriorTourFinding, type TourGenerationInput } from "./tour.js";
+import { buildTourGenerationInput, buildTourPrompt, prepareModelTourInput, type PriorTourFinding, type TourGenerationInput } from "./tour.js";
 
 const INSTRUCTION_PATHS = ["AGENTS.md", "CONTRIBUTING.md", ".github/CONTRIBUTING.md"];
 const MAX_INSTRUCTION_CHARACTERS = 20_000;
@@ -70,7 +70,7 @@ export async function buildSessionGenerationContext(
     priorFindings,
     instructions.map(({ path, content }) => ({ path, content })),
   );
-  const promptPreview = buildTourPrompt(input);
+  const promptPreview = buildTourPrompt(prepareModelTourInput(input).input);
   const includedFiles = files.filter((file) => file.included).length;
   const warnings = contextWarnings(files, instructions, promptPreview.length);
   return {

@@ -3,8 +3,8 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildInvestigationPrompt, INVESTIGATION_INSTRUCTIONS } from "./prompt.js";
-import { buildTourRequestPrompt, parseStructuredJson, TOUR_INSTRUCTIONS, TOUR_JSON_SCHEMA } from "./tourPrompt.js";
-import type { TourGenerationInput } from "../tour.js";
+import { buildTourRequestPrompt, parseStructuredJson, TOUR_INSTRUCTIONS, tourJsonSchema } from "./tourPrompt.js";
+import { prepareModelTourInput, type TourGenerationInput } from "../tour.js";
 import type { InvestigationContext, ModelSelection, TextProvider } from "./types.js";
 
 const DEFAULT_TOUR_TIMEOUT_MS = 600_000;
@@ -43,8 +43,9 @@ export class CodexCliProvider implements TextProvider {
     const workingDirectory = await mkdtemp(path.join(tmpdir(), "wingdiff-codex-"));
     const schemaPath = path.join(workingDirectory, "tour-schema.json");
     const outputPath = path.join(workingDirectory, "tour-output.json");
-    await writeFile(schemaPath, JSON.stringify(TOUR_JSON_SCHEMA), "utf8");
-    const prompt = `${TOUR_INSTRUCTIONS}\n\nDo not use tools, inspect the filesystem, or execute commands. Answer only from the review evidence below.\n\n${buildTourRequestPrompt(input)}`;
+    const model = prepareModelTourInput(input);
+    await writeFile(schemaPath, JSON.stringify(tourJsonSchema(model.input)), "utf8");
+    const prompt = `${TOUR_INSTRUCTIONS}\n\nDo not use tools, inspect the filesystem, or execute commands. Answer only from the review evidence below.\n\n${buildTourRequestPrompt(model.input)}`;
 
     try {
       await runCodex(this.executable, this.environment, workingDirectory, [
@@ -67,7 +68,7 @@ export class CodexCliProvider implements TextProvider {
         outputPath,
         "-",
       ], prompt, this.generationTimeoutMs, signal);
-      return parseStructuredJson(await readFile(outputPath, "utf8"));
+      return model.restoreAnchors(parseStructuredJson(await readFile(outputPath, "utf8")));
     } finally {
       await rm(workingDirectory, { recursive: true, force: true });
     }

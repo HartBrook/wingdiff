@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PullRequestEvidence } from "./diff.js";
 import type { PullRequestMetadata } from "./github.js";
-import { buildTourGenerationInput, buildTourPrompt, validateGeneratedTour } from "./tour.js";
+import { buildTourGenerationInput, buildTourPrompt, prepareModelTourInput, validateGeneratedTour } from "./tour.js";
 
 const metadata = {
   number: 42, repository: "openai/codex", url: "https://github.com/openai/codex/pull/42", title: "Atomic counter", body: "Fix concurrent updates.",
@@ -41,6 +41,23 @@ describe("generated tour contract", () => {
     expect(input.pullRequest.baseSha).toBe("c".repeat(40));
     expect(input.pullRequest.headSha).toBe(metadata.head.sha);
     expect(input.pullRequest.baseRef).toBe("comparison-base");
+  });
+
+  it("uses compact model aliases and restores immutable anchor IDs throughout the response", () => {
+    const input = buildTourGenerationInput(metadata, evidence);
+    const model = prepareModelTourInput(input);
+    const raw = validTour(model.input.fileAnchorIds, "a3", "a5");
+
+    expect(model.input.anchors.map((anchor) => anchor.id)).toEqual(["a1", "a2", "a3", "a4", "a5"]);
+    expect(buildTourPrompt(model.input)).not.toContain("line_new-counter");
+
+    const restored = model.restoreAnchors(raw) as ReturnType<typeof validTour>;
+    expect(restored.stops[0]?.anchorIds).toEqual([input.fileAnchorIds[0], "line_new-counter"]);
+    expect(restored.stops[0]?.claims[0]?.anchorIds).toEqual(["line_new-counter"]);
+    expect(restored.stops[0]?.finding?.anchorIds).toEqual(["line_new-counter"]);
+    expect(restored.stops[1]?.claims[0]?.anchorIds).toEqual(["line_test-counter"]);
+    expect(validateGeneratedTour(restored, input).stops).toHaveLength(2);
+    expect(model.restoreAnchors({ anchorIds: ["a999"] })).toEqual({ anchorIds: ["a999"] });
   });
 
   it("accepts concise, fully grounded stops", () => {
@@ -110,22 +127,22 @@ describe("generated tour contract", () => {
   });
 });
 
-function validTour(fileAnchors: string[]) {
+function validTour(fileAnchors: string[], counterAnchor = "line_new-counter", testAnchor = "line_test-counter") {
   return {
     summary: "The counter update moves into Redis and gains direct coverage.",
     findingRevisions: [] as Array<{ findingId: string; state: string; summary: string; anchorIds: string[] }>,
     stops: [
       {
         id: "atomic-counter", title: "Counter updates move into Redis", summary: "The write is now atomic.", purpose: "Verify concurrent behavior.",
-        anchorIds: [fileAnchors[0]!, "line_new-counter"],
-        claims: [{ text: "The new path calls Redis INCR.", kind: "fact", confidence: "high", anchorIds: ["line_new-counter"] }],
+        anchorIds: [fileAnchors[0]!, counterAnchor],
+        claims: [{ text: "The new path calls Redis INCR.", kind: "fact", confidence: "high", anchorIds: [counterAnchor] }],
         prompts: ["Does the production client preserve this atomicity?"],
-        finding: { title: "TTL behavior is unclear", body: "The shown change does not preserve expiry.", severity: "high", category: "Correctness", anchorIds: ["line_new-counter"], suggestedComment: "How is the counter expiry preserved after this change?" },
+        finding: { title: "TTL behavior is unclear", body: "The shown change does not preserve expiry.", severity: "high", category: "Correctness", anchorIds: [counterAnchor], suggestedComment: "How is the counter expiry preserved after this change?" },
       },
       {
         id: "counter-test", title: "A direct counter test is added", summary: "The test covers one increment.", purpose: "Check regression coverage.",
-        anchorIds: [fileAnchors[1]!, "line_test-counter"],
-        claims: [{ text: "The test asserts the first increment.", kind: "fact", confidence: "high", anchorIds: ["line_test-counter"] }],
+        anchorIds: [fileAnchors[1]!, testAnchor],
+        claims: [{ text: "The test asserts the first increment.", kind: "fact", confidence: "high", anchorIds: [testAnchor] }],
         prompts: [],
       },
     ],
