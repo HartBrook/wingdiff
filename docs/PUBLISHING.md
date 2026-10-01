@@ -15,7 +15,8 @@ is public even though the GitHub repository is private, so inspect it before
 releasing; it contains the compiled server and browser application, source
 maps, README, and license.
 
-1. Update the version in `package.json` and `package-lock.json`.
+1. Update the version in the root and workspace `package.json` files and in
+   `package-lock.json`.
 2. Run the **Publish npm package** workflow in dry-run mode and inspect its
    package-content output.
 3. Create a GitHub release tagged `v<version>` from the intended commit. Mark it
@@ -28,8 +29,9 @@ maps, README, and license.
 
 The release job rejects a tag that does not exactly match `package.json`. Do
 not publish from a developer checkout; release publication belongs to the
-audited GitHub Actions workflow. Version `0.2.0` is deprecated; `latest` and
-`next` currently point to the verified `0.2.1` corrective release.
+audited GitHub Actions workflow. Version `0.2.0` is deprecated. After a release,
+verify the intended `latest` and `next` assignments with
+`npm view wingdiff dist-tags`.
 
 When the repository becomes public, configure the package's npm trusted
 publisher for this workflow, remove `NPM_TOKEN`, grant `id-token: write`, and
