@@ -7,38 +7,38 @@ Repository visibility is not changed by the project scripts or workflows.
 
 The `wingdiff` name is configured as the public package in the repository root.
 While the GitHub repository is private, releases publish the public npm package
-under the `next` tag using the granular npm token stored in the `NPM_TOKEN`
-repository secret. Provenance is intentionally disabled because npm cannot
-generate provenance for a package built from a private repository. The package
-tarball is public even though the GitHub repository is private, so inspect it
-before releasing; it contains the compiled server and browser application,
-source maps, README, and license.
+using the granular npm token stored in the `NPM_TOKEN` repository secret.
+Stable GitHub releases publish under `latest`; GitHub prereleases publish under
+`next`. Provenance is intentionally disabled because npm cannot generate
+provenance for a package built from a private repository. The package tarball
+is public even though the GitHub repository is private, so inspect it before
+releasing; it contains the compiled server and browser application, source
+maps, README, and license.
 
 1. Update the version in `package.json` and `package-lock.json`.
 2. Run the **Publish npm package** workflow in dry-run mode and inspect its
    package-content output.
-3. Create a GitHub release tagged `v<version>` from the intended commit.
-4. Confirm the workflow tests, builds, and publishes the package under `next`.
-5. Test `npx wingdiff@next --version` from a clean temporary directory.
+3. Create a GitHub release tagged `v<version>` from the intended commit. Mark it
+   as a prerelease only when it should publish to the `next` channel.
+4. Confirm the workflow tests, builds, and publishes the package under `latest`
+   for a stable release or `next` for a prerelease.
+5. Test `npx wingdiff --version` for a stable release or
+   `npx wingdiff@next --version` for a prerelease from a clean temporary
+   directory.
 
 The release job rejects a tag that does not exactly match `package.json`. Do
 not publish from a developer checkout; release publication belongs to the
-audited GitHub Actions workflow. Version `0.2.0` is deprecated and `next`
-points to the verified `0.2.1` corrective release. npm rejected dist-tag
-changes made with the granular publishing token, so an npm account session
-with tag-management permission must repair the default tag separately:
-
-```bash
-npm dist-tag add wingdiff@0.2.1 latest
-```
+audited GitHub Actions workflow. Version `0.2.0` is deprecated; `latest` and
+`next` currently point to the verified `0.2.1` corrective release.
 
 When the repository becomes public, configure the package's npm trusted
 publisher for this workflow, remove `NPM_TOKEN`, grant `id-token: write`, and
-publish with `--provenance`. When a release is ready to become the default npm
-version, promote it without rebuilding:
+publish with `--provenance`. If a preview is later promoted without rebuilding,
+move the existing version to the stable channel with an npm account that has
+tag-management permission:
 
 ```bash
-npm dist-tag add wingdiff@1.0.0 latest
+npm dist-tag add wingdiff@<version> latest
 ```
 
 ## Before changing visibility

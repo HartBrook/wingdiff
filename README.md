@@ -40,7 +40,7 @@ default and is not intended to be deployed as a public web service.
 ### Quick start
 
 ```bash
-npx wingdiff@next https://github.com/owner/repository/pull/123
+npx wingdiff https://github.com/owner/repository/pull/123
 ```
 
 Wingdiff starts on a loopback address and opens an authenticated local URL. It
@@ -49,18 +49,17 @@ bare repository cache when it does not. Inside a matching checkout, a pull
 request number is enough:
 
 ```bash
-npx wingdiff@next 123
-npx wingdiff@next demo
+npx wingdiff 123
+npx wingdiff demo
 ```
 
-The `next` tag is the supported moving channel during the pre-1.0
-private-repository pilot. Always include `@next`: npm's `latest` tag currently
-identifies deprecated `0.2.0` and is not supported.
+The default npm release is the supported stable channel. Preview releases, when
+available, use `npx wingdiff@next`.
 
 Install the command permanently if you use it regularly:
 
 ```bash
-npm install --global wingdiff@next
+npm install --global wingdiff
 wingdiff 123
 ```
 
@@ -103,7 +102,7 @@ For a real pull request, use an authenticated GitHub CLI:
 
 ```bash
 gh auth status
-npx wingdiff@next https://github.com/owner/repository/pull/123
+npx wingdiff https://github.com/owner/repository/pull/123
 ```
 
 Wingdiff reads metadata through `gh`, fetches missing objects into private `refs/wingdiff/pull/...` references, and builds the full PR diff from the exact pinned merge-base/head pair GitHub compares. When no matching checkout is available, it keeps a private bare repository cache beside its application data. Update reviews use the exact reviewed-head/current-head pair. It does not checkout the PR, modify the worktree or index, or execute pull-request code. Acquired metadata, evidence, generated tours, and review checkpoints are stored in a local SQLite database. Set `WINGDIFF_DATA_DIR` to choose its location.
