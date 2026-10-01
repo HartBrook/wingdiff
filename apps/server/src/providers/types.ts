@@ -58,6 +58,7 @@ export interface InvestigationContext {
 
 export interface TextProvider {
   readonly id: ProviderId;
+  readonly generationTimeoutMs?: number;
   generateTour(
     selection: ModelSelection,
     input: TourGenerationInput,

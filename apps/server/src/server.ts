@@ -55,7 +55,10 @@ export async function startWingdiffServer(options: WingdiffServerOptions = {}): 
       candidate.once("listening", () => resolve(candidate));
       candidate.once("error", reject);
     });
-    server.once("close", () => sessionStore.close());
+    server.once("close", () => {
+      app.locals.cancelTourGenerations?.();
+      sessionStore.close();
+    });
     const address = server.address() as AddressInfo;
     return { server, url: `http://${formatHost(host)}:${address.port}`, authToken };
   } catch (error) {

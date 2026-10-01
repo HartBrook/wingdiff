@@ -5,7 +5,7 @@ import { validateDraftComment } from "./comments.js";
 import { buildSessionGenerationContext } from "./context.js";
 import { buildSessionInvestigationContext } from "./investigation.js";
 import { createProviders, publicProviders, validateSelection } from "./providers/index.js";
-import type { ProviderId, TextProvider } from "./providers/types.js";
+import type { ModelSelection, ProviderId, TextProvider } from "./providers/types.js";
 import { SessionStore } from "./sessions.js";
 import type { InvestigationEntry, ReviewDraft, ReviewProgressStatus, TourScope } from "./sessions.js";
 import { parsePullRequestTarget } from "./targets.js";
@@ -25,11 +25,30 @@ export interface AppOptions {
   authToken?: string;
 }
 
+type TourGenerationState = "running" | "succeeded" | "failed";
+
+interface TourGenerationJob {
+  state: TourGenerationState;
+  scope: TourScope;
+  selection: ModelSelection;
+  startedAt: number;
+  finishedAt?: number;
+  timeoutMs?: number;
+  error?: string;
+  abortController: AbortController;
+}
+
 export function createApp(environment: NodeJS.ProcessEnv = process.env, options: AppOptions = {}) {
   const app = express();
   const providers = options.providers ?? createProviders(environment);
   const cwd = options.cwd ?? process.cwd();
   const sessionStore = options.sessionStore ?? new SessionStore();
+  const tourGenerations = new Map<string, TourGenerationJob>();
+  app.locals.cancelTourGenerations = () => {
+    for (const job of tourGenerations.values()) {
+      if (job.state === "running") job.abortController.abort();
+    }
+  };
   const repositoryPathFor = (session: { target: ReturnType<typeof parsePullRequestTarget>; repositoryPath?: string }) => (
     session.repositoryPath
       ? Promise.resolve(session.repositoryPath)
@@ -441,7 +460,16 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
     }
   });
 
-  app.post("/api/sessions/:id/tour", async (request, response) => {
+  app.get("/api/sessions/:id/tour-status", (request, response) => {
+    const session = sessionStore.getSession(request.params.id);
+    if (!session) {
+      response.status(404).json({ error: "Review session not found." });
+      return;
+    }
+    response.json({ generation: publicTourGenerationStatus(tourGenerations.get(session.id)) });
+  });
+
+  app.post("/api/sessions/:id/tour", (request, response) => {
     try {
       const session = sessionStore.getSession(request.params.id);
       if (!session) {
@@ -461,18 +489,48 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
         return;
       }
 
-      const abortController = new AbortController();
-      response.on("close", () => abortController.abort());
-      const generated = await generateSessionTour(
-        session,
-        selection,
-        provider,
-        sessionStore,
+      const active = tourGenerations.get(session.id);
+      if (active?.state === "running") {
+        if (active.scope !== scope || !sameSelection(active.selection, selection)) {
+          response.status(409).json({
+            error: `A ${active.scope} guided tour is already being generated for this review.`,
+            generation: publicTourGenerationStatus(active),
+          });
+          return;
+        }
+        response.status(202).json({ generation: publicTourGenerationStatus(active) });
+        return;
+      }
+
+      const job: TourGenerationJob = {
+        state: "running",
         scope,
-        abortController.signal,
-        await repositoryPathFor(session),
-      );
-      response.status(201).json({ generated });
+        selection,
+        startedAt: Date.now(),
+        abortController: new AbortController(),
+        ...(provider.generationTimeoutMs ? { timeoutMs: provider.generationTimeoutMs } : {}),
+      };
+      tourGenerations.set(session.id, job);
+      void (async () => {
+        try {
+          await generateSessionTour(
+            session,
+            selection,
+            provider,
+            sessionStore,
+            scope,
+            job.abortController.signal,
+            await repositoryPathFor(session),
+          );
+          job.state = "succeeded";
+        } catch (error) {
+          job.state = "failed";
+          job.error = error instanceof Error ? error.message : "Wingdiff could not generate this tour.";
+        } finally {
+          job.finishedAt = Date.now();
+        }
+      })();
+      response.status(202).json({ generation: publicTourGenerationStatus(job) });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Wingdiff could not generate this tour.";
       response.status(400).json({ error: message });
@@ -527,6 +585,26 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
   });
 
   return app;
+}
+
+function publicTourGenerationStatus(job: TourGenerationJob | undefined) {
+  if (!job) return { state: "idle", elapsedMs: 0 } as const;
+  const endedAt = job.finishedAt ?? Date.now();
+  return {
+    state: job.state,
+    scope: job.scope,
+    startedAt: new Date(job.startedAt).toISOString(),
+    ...(job.finishedAt ? { finishedAt: new Date(job.finishedAt).toISOString() } : {}),
+    elapsedMs: Math.max(0, endedAt - job.startedAt),
+    ...(job.timeoutMs ? { timeoutMs: job.timeoutMs } : {}),
+    ...(job.error ? { error: job.error } : {}),
+  };
+}
+
+function sameSelection(left: ModelSelection, right: ModelSelection): boolean {
+  return left.provider === right.provider
+    && left.model === right.model
+    && left.reasoningEffort === right.reasoningEffort;
 }
 
 async function streamInvestigationResponse(

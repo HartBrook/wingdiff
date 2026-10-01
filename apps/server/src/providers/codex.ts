@@ -7,7 +7,8 @@ import { buildTourRequestPrompt, parseStructuredJson, TOUR_INSTRUCTIONS, TOUR_JS
 import type { TourGenerationInput } from "../tour.js";
 import type { InvestigationContext, ModelSelection, TextProvider } from "./types.js";
 
-const DEFAULT_TIMEOUT_MS = 180_000;
+const DEFAULT_TOUR_TIMEOUT_MS = 600_000;
+const DEFAULT_INVESTIGATION_TIMEOUT_MS = 180_000;
 const MAX_ERROR_LENGTH = 1_200;
 
 export function codexCliReady(
@@ -25,11 +26,14 @@ export function codexCliReady(
 
 export class CodexCliProvider implements TextProvider {
   readonly id = "codex" as const;
+  readonly generationTimeoutMs: number;
 
   constructor(
     private readonly executable = "codex",
     private readonly environment: NodeJS.ProcessEnv = process.env,
-  ) {}
+  ) {
+    this.generationTimeoutMs = codexTourTimeoutMs(environment);
+  }
 
   async generateTour(
     selection: ModelSelection,
@@ -62,7 +66,7 @@ export class CodexCliProvider implements TextProvider {
         "--output-last-message",
         outputPath,
         "-",
-      ], prompt, signal);
+      ], prompt, this.generationTimeoutMs, signal);
       return parseStructuredJson(await readFile(outputPath, "utf8"));
     } finally {
       await rm(workingDirectory, { recursive: true, force: true });
@@ -75,7 +79,7 @@ export class CodexCliProvider implements TextProvider {
     signal?: AbortSignal,
   ): AsyncIterable<string> {
     const workingDirectory = await mkdtemp(path.join(tmpdir(), "wingdiff-codex-"));
-    const timeoutMs = parseTimeout(this.environment.WINGDIFF_CODEX_TIMEOUT_MS);
+    const timeoutMs = codexInvestigationTimeoutMs(this.environment);
     const prompt = `${INVESTIGATION_INSTRUCTIONS}\n\nDo not use tools, inspect the filesystem, or execute commands. Answer only from the review evidence below.\n\n${buildInvestigationPrompt(context)}`;
     const child = spawn(this.executable, [
       "exec",
@@ -144,6 +148,7 @@ async function runCodex(
   workingDirectory: string,
   arguments_: string[],
   prompt: string,
+  timeoutMs: number,
   signal?: AbortSignal,
 ): Promise<void> {
   const child = spawn(executable, arguments_, {
@@ -159,7 +164,6 @@ async function runCodex(
   let stderr = "";
   let timedOut = false;
   const abort = () => child.kill("SIGTERM");
-  const timeoutMs = parseTimeout(environment.WINGDIFF_CODEX_TIMEOUT_MS);
   const timeout = setTimeout(() => {
     timedOut = true;
     child.kill("SIGTERM");
@@ -183,9 +187,23 @@ async function runCodex(
   }
 }
 
-function parseTimeout(value: string | undefined): number {
+export function codexTourTimeoutMs(environment: NodeJS.ProcessEnv): number {
+  return parseTimeout(
+    environment.WINGDIFF_CODEX_TOUR_TIMEOUT_MS ?? environment.WINGDIFF_CODEX_TIMEOUT_MS,
+    DEFAULT_TOUR_TIMEOUT_MS,
+  );
+}
+
+export function codexInvestigationTimeoutMs(environment: NodeJS.ProcessEnv): number {
+  return parseTimeout(
+    environment.WINGDIFF_CODEX_INVESTIGATION_TIMEOUT_MS ?? environment.WINGDIFF_CODEX_TIMEOUT_MS,
+    DEFAULT_INVESTIGATION_TIMEOUT_MS,
+  );
+}
+
+function parseTimeout(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 1_000 ? parsed : DEFAULT_TIMEOUT_MS;
+  return Number.isFinite(parsed) && parsed >= 1_000 ? parsed : fallback;
 }
 
 function cleanCliError(stderr: string): string {

@@ -15,6 +15,7 @@ test("reviews a real-session fixture from privacy preview through an anchored dr
   await expect(contextDialog.getByText("return redis.incr(key)")).toBeVisible();
   await contextDialog.getByRole("button", { name: "Generate with this context" }).click();
 
+  await expect(page.getByText(/elapsed · 10m 0s limit · status checked every second/)).toBeVisible();
   await expect(page.getByText("No findings currently block approval")).toBeVisible();
   await expect(page.locator(".summary-context li")).toHaveText(["Preserve expiry", "Add regression coverage"]);
   await page.getByRole("button", { name: "Start review" }).click();
@@ -84,6 +85,8 @@ test("publishes on the first click after editing and keeps failures actionable",
 
 async function mockReviewApi(page: Page, options: { failFirstPublish?: boolean } = {}) {
   let tourReady = false;
+  let generationStarted = false;
+  let generationPolls = 0;
   let investigationId = "investigation-1";
   let publishAttempts = 0;
   await page.route("**/api/**", async (route) => {
@@ -132,10 +135,19 @@ async function mockReviewApi(page: Page, options: { failFirstPublish?: boolean }
     if (path === "/api/sessions/pilot-session/review-publication") return json(route, { publication: null });
     if (path === "/api/sessions/pilot-session/checkpoint") return json(route, { checkpoint: null });
     if (path === "/api/sessions/pilot-session/context") return json(route, { manifest });
+    if (path === "/api/sessions/pilot-session/tour-status") {
+      if (!generationStarted) return json(route, { generation: { state: "idle", elapsedMs: 0 } });
+      generationPolls += 1;
+      if (generationPolls === 1) {
+        return json(route, { generation: { state: "running", scope: "full", startedAt: now, elapsedMs: 65_000, timeoutMs: 600_000 } });
+      }
+      tourReady = true;
+      return json(route, { generation: { state: "succeeded", scope: "full", startedAt: now, finishedAt: now, elapsedMs: 1_250, timeoutMs: 600_000 } });
+    }
     if (path === "/api/sessions/pilot-session/tour") {
       if (method === "POST") {
-        tourReady = true;
-        return json(route, { generated: tour }, 201);
+        generationStarted = true;
+        return json(route, { generation: { state: "running", scope: "full", startedAt: now, elapsedMs: 0, timeoutMs: 600_000 } }, 202);
       }
       if (url.searchParams.get("scope") === "update" || !tourReady) return json(route, { error: "This revision does not have a generated tour yet." }, 404);
       return json(route, { generated: tour });

@@ -45,15 +45,18 @@ import {
   fetchSessionTour,
   fetchSessionContext,
   fetchSessionUpdate,
+  fetchTourGenerationStatus,
+  formatElapsedTime,
   generatedTourStops,
-  generateSessionTour,
   refreshReviewSession,
   publishReview,
   revisionStopIndex,
   saveReviewDraft,
   saveReviewProgress,
   saveSessionContext,
+  startSessionTourGeneration,
   updateInvestigationEntry,
+  waitForSessionTourGeneration,
   type AcquiredReviewSession,
   type FindingCheckpoint,
   type GeneratedSessionTour,
@@ -63,6 +66,7 @@ import {
   type StoredReviewSubmission,
   type StoredReviewPublication,
   type StoredReviewUpdate,
+  type TourGenerationStatus,
 } from "./session";
 
 interface Selection {
@@ -235,7 +239,8 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   const [baselineCheckpoint, setBaselineCheckpoint] = useState<ReviewCheckpoint | null>(null);
   const [checkpoints, setCheckpoints] = useState<Record<AcquiredScope, ReviewCheckpoint | null>>({ full: null, update: null });
   const [tourLoading, setTourLoading] = useState(true);
-  const [generating, setGenerating] = useState(false);
+  const [generationStarting, setGenerationStarting] = useState(false);
+  const [generationStatus, setGenerationStatus] = useState<TourGenerationStatus | null>(null);
   const [completing, setCompleting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -264,6 +269,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   const [question, setQuestion] = useState("");
   const [answering, setAnswering] = useState(false);
   const investigationAbort = useRef<AbortController | null>(null);
+  const generationAbort = useRef<AbortController | null>(null);
   const [composer, setComposer] = useState<ComposerState | null>(null);
   const [reviewSummary, setReviewSummary] = useState("");
   const [disposition, setDisposition] = useState<ReviewDisposition>("COMMENT");
@@ -285,6 +291,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   const activeProvider = providers.find((provider) => provider.id === modelSelection.provider);
   const activeModel = selectedModel(providers, modelSelection);
   const activeModelLabel = activeProvider ? `${activeProvider.name} · ${activeModel.name}` : activeModel.name;
+  const generating = generationStarting || generationStatus?.state === "running";
   const activeFindingRevisions = generated?.tour.findingRevisions.flatMap((revision) => {
     const prior = baselineCheckpoint?.findingRevisions.find((finding) => finding.findingId === revision.findingId);
     return prior && revisionStopIndex(generated, revision.anchorIds) === activeIndex ? [{ prior, revision }] : [];
@@ -321,11 +328,12 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       fetchReviewDraft(session.id, controller.signal),
       fetchReviewSubmission(session.id, controller.signal),
       fetchReviewPublication(session.id, controller.signal),
+      fetchTourGenerationStatus(session.id, controller.signal),
       fetchProviders(controller.signal).then((availableProviders) => {
         setProviders(availableProviders);
         setModelSelection((current) => preferredAvailableSelection(availableProviders, current));
       }),
-    ]).then(([fullTour, updateTour, updateContext, fullCheckpoint, updateCheckpoint, storedProgress, storedComments, storedNotebook, storedReviewDraft, storedSubmission, storedPublication]) => {
+    ]).then(([fullTour, updateTour, updateContext, fullCheckpoint, updateCheckpoint, storedProgress, storedComments, storedNotebook, storedReviewDraft, storedSubmission, storedPublication, storedGeneration]) => {
       setTours({ full: fullTour, update: updateTour });
       setUpdate(updateContext?.update ?? null);
       setBaselineCheckpoint(updateContext?.baselineCheckpoint ?? null);
@@ -338,6 +346,12 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       setSubmission(storedSubmission);
       setPublication(storedPublication);
       setPublicationError(storedPublication?.error ?? null);
+      setGenerationStatus(storedGeneration.state === "idle" ? null : storedGeneration);
+      if (storedGeneration.state === "running" || storedGeneration.state === "succeeded") {
+        void monitorTourGeneration(storedGeneration);
+      } else if (storedGeneration.state === "failed") {
+        setError(storedGeneration.error ?? "Wingdiff could not generate this guided tour.");
+      }
       const restoredScope = storedProgress.activeScope === "update" && !updateContext
         ? "full"
         : storedProgress.activeScope ?? (updateContext ? "update" : "full");
@@ -350,7 +364,10 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       if (caught instanceof DOMException && caught.name === "AbortError") return;
       setError(caught instanceof Error ? caught.message : "Wingdiff could not prepare this review.");
     }).finally(() => setTourLoading(false));
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      generationAbort.current?.abort();
+    };
   }, [session.id]);
 
   useEffect(() => {
@@ -367,17 +384,41 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       setModelPickerOpen(true);
       return;
     }
-    setGenerating(true);
+    setGenerationStarting(true);
     setError(null);
     try {
-      const result = await generateSessionTour(session.id, modelSelection, reviewScope);
-      setTours((current) => ({ ...current, [reviewScope]: result }));
-      setActiveIndex(0);
-      if (result.tour.stops[0]) void persistProgress(reviewScope, result.tour.stops[0].id);
+      const status = await startSessionTourGeneration(session.id, modelSelection, reviewScope);
+      setGenerationStatus(status);
+      void monitorTourGeneration(status);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Wingdiff could not generate this guided tour.");
     } finally {
-      setGenerating(false);
+      setGenerationStarting(false);
+    }
+  }
+
+  async function monitorTourGeneration(initial: TourGenerationStatus) {
+    generationAbort.current?.abort();
+    const controller = new AbortController();
+    generationAbort.current = controller;
+    try {
+      const { generation, tour } = await waitForSessionTourGeneration(
+        session.id,
+        initial,
+        setGenerationStatus,
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      setGenerationStatus(generation);
+      setTours((current) => ({ ...current, [tour.scope]: tour }));
+      setActiveIndex(0);
+      if (tour.tour.stops[0]) void persistProgress(tour.scope, tour.tour.stops[0].id);
+    } catch (caught) {
+      if (caught instanceof DOMException && caught.name === "AbortError") return;
+      const detail = caught instanceof Error || caught instanceof DOMException ? caught.message : String(caught ?? "Unknown error");
+      setError(`Wingdiff could not generate this guided tour: ${detail}`);
+    } finally {
+      if (generationAbort.current === controller) generationAbort.current = null;
     }
   }
 
@@ -748,7 +789,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       <AcquiredTourRail activeIndex={activeIndex} inheritedStopIds={inheritedStopIds} onBrowse={() => { setView("browse"); setMobileRouteOpen(false); }} onReview={() => { setView("review"); setMobileRouteOpen(false); }} onSelect={(index) => { selectStop(index); setMobileRouteOpen(false); }} onSummary={() => { setView("summary"); setMobileRouteOpen(false); }} statuses={statuses} stops={stops} />
       <main className="main-canvas" ref={tourCanvasRef}><AcquiredTourView activeEvidence={activeEvidence} activeEvidenceId={activeEvidenceId} activeFindingRevisions={activeFindingRevisions} activeIndex={activeIndex} comments={comments.filter((comment) => comment.stopId === activeStop.id).length} headSha={metadata.head.sha} onAsk={(prompt) => { setDrawerOpen(true); if (prompt) void askQuestion(prompt); }} onComment={() => openComment(false)} onEvidence={setActiveEvidenceId} onFindingComment={() => openComment(true)} onFlag={toggleFlag} onNavigate={navigateStop} onSelectLine={selectLine} onUnderstood={markUnderstood} selection={selection} status={statuses[activeStop.id] ?? "unseen"} stop={activeStop} totalStops={stops.length} /></main>
     </div> : <main className="main-canvas acquired-canvas">
-      {view === "summary" ? <AcquiredSummary activeModel={activeModelLabel} baselineCheckpoint={baselineCheckpoint} checkpoint={checkpoint} completing={completing} error={error} generated={generated} generating={generating || contextLoading} modelReady={Boolean(activeProvider?.configured)} notice={notice} onBegin={() => { selectStop(activeIndex); setView("tour"); }} onBrowse={() => setView("browse")} onCheckUpdates={() => void checkForUpdates()} onComplete={() => void completeReview()} onGenerate={() => void previewGenerationContext()} onScope={selectScope} onSelectStop={(index) => { selectStop(index); setView("tour"); }} refreshing={refreshing} reviewScope={reviewScope} scopedEvidence={scopedEvidence} session={session} statuses={statuses} stops={stops} tourLoading={tourLoading} update={update} /> : view === "browse" ? <AcquiredBrowse blocks={blocks} onSummary={() => setView("summary")} scope={reviewScope} session={session} /> : <AcquiredReviewDesk comments={comments} disposition={disposition} error={error} failedChecks={metadata.checks.failed} headSha={metadata.head.sha} highFindingCount={unresolvedHighFindingCount} onAllowRetry={() => void allowPublicationRetry()} onBack={() => setView(generated ? "tour" : "summary")} onDisposition={(event) => { setDisposition(event); void persistReviewDraft(reviewSummary, event); }} onPublish={(acknowledged) => void publishReviewToGitHub(acknowledged)} onRemoveComment={(id) => void removeComment(id)} onSave={() => void persistReviewDraft()} onSummary={setReviewSummary} publication={publication} publishError={publicationError} publishing={publishingReview} saving={savingReview} statuses={statuses} stops={stops} submission={submission} summary={reviewSummary} />}
+      {view === "summary" ? <AcquiredSummary activeModel={activeModelLabel} baselineCheckpoint={baselineCheckpoint} checkpoint={checkpoint} completing={completing} error={error} generated={generated} generating={generating || contextLoading} generationStatus={generationStatus} modelReady={Boolean(activeProvider?.configured)} notice={notice} onBegin={() => { selectStop(activeIndex); setView("tour"); }} onBrowse={() => setView("browse")} onCheckUpdates={() => void checkForUpdates()} onComplete={() => void completeReview()} onGenerate={() => void previewGenerationContext()} onScope={selectScope} onSelectStop={(index) => { selectStop(index); setView("tour"); }} refreshing={refreshing} reviewScope={reviewScope} scopedEvidence={scopedEvidence} session={session} statuses={statuses} stops={stops} tourLoading={tourLoading} update={update} /> : view === "browse" ? <AcquiredBrowse blocks={blocks} onSummary={() => setView("summary")} scope={reviewScope} session={session} /> : <AcquiredReviewDesk comments={comments} disposition={disposition} error={error} failedChecks={metadata.checks.failed} headSha={metadata.head.sha} highFindingCount={unresolvedHighFindingCount} onAllowRetry={() => void allowPublicationRetry()} onBack={() => setView(generated ? "tour" : "summary")} onDisposition={(event) => { setDisposition(event); void persistReviewDraft(reviewSummary, event); }} onPublish={(acknowledged) => void publishReviewToGitHub(acknowledged)} onRemoveComment={(id) => void removeComment(id)} onSave={() => void persistReviewDraft()} onSummary={setReviewSummary} publication={publication} publishError={publicationError} publishing={publishingReview} saving={savingReview} statuses={statuses} stops={stops} submission={submission} summary={reviewSummary} />}
     </main>}
     {modelPickerOpen && <ModelPicker onClose={() => setModelPickerOpen(false)} onSelection={setModelSelection} providers={providers} selection={modelSelection} />}
     {contextPreviewOpen && contextManifest && activeProvider && <ContextPreview error={error} exclusions={exclusionText} manifest={contextManifest} modelName={activeModel.name} onCancel={() => setContextPreviewOpen(false)} onConfirm={() => void confirmGenerationContext()} onExclusions={setExclusionText} provider={activeProvider} saving={contextSaving} />}
@@ -757,7 +798,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   </div>;
 }
 
-function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completing, error, generated, generating, modelReady, notice, onBegin, onBrowse, onCheckUpdates, onComplete, onGenerate, onScope, onSelectStop, refreshing, reviewScope, scopedEvidence, session, statuses, stops, tourLoading, update }: {
+function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completing, error, generated, generating, generationStatus, modelReady, notice, onBegin, onBrowse, onCheckUpdates, onComplete, onGenerate, onScope, onSelectStop, refreshing, reviewScope, scopedEvidence, session, statuses, stops, tourLoading, update }: {
   activeModel: string;
   baselineCheckpoint: ReviewCheckpoint | null;
   checkpoint: ReviewCheckpoint | null;
@@ -765,6 +806,7 @@ function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completi
   error: string | null;
   generated: GeneratedSessionTour | null;
   generating: boolean;
+  generationStatus: TourGenerationStatus | null;
   modelReady: boolean;
   notice: string | null;
   onBegin: () => void;
@@ -817,7 +859,7 @@ function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completi
       <section className="summary-findings acquired-evidence-ready"><header><div><div className="eyebrow">Evidence ready</div><h2>The pull request is pinned and ready for a guided review</h2></div><span className="summary-verdict"><Icon name="code" size={14} />{tourLoading ? "Checking" : "Not analyzed"}</span></header><div className="summary-clear"><Icon name="check" size={18} /><div><strong>{session.evidence.files.length} changed file{session.evidence.files.length === 1 ? "" : "s"} passed anchor validation.</strong><span>Generate a semantic route with {activeModel}, or inspect the diff directly.</span></div></div></section>
       {metadata.body && <section className="summary-context acquired-description"><div><span>Author description</span><AuthorMarkdown source={metadata.body} /></div></section>}
       {error && <div className="target-error acquired-generation-error" role="alert"><Icon name="flag" size={14} />{error}</div>}
-      <section className="begin-card"><div><strong>{modelReady ? activeModel : "Choose a configured model"}</strong><span>Analysis stays inside the local Wingdiff process</span></div><div className="acquired-start-actions"><button className="button button--quiet" onClick={onBrowse} type="button">Browse diff</button><button className="button button--hero" disabled={tourLoading || generating} onClick={onGenerate} type="button">{generating ? "Building tour…" : modelReady ? "Generate guided review" : "Choose model"} <Icon name="arrow-right" /></button></div></section>
+      <section className="begin-card"><div><strong>{generating ? `Building ${generationStatus?.scope === "update" ? "update" : "guided"} tour` : modelReady ? activeModel : "Choose a configured model"}</strong><span>{generating && generationStatus?.state === "running" ? `${formatElapsedTime(generationStatus.elapsedMs)} elapsed${generationStatus.timeoutMs ? ` · ${formatElapsedTime(generationStatus.timeoutMs)} limit` : ""} · status checked every second` : "Analysis stays inside the local Wingdiff process"}</span></div><div className="acquired-start-actions"><button className="button button--quiet" onClick={onBrowse} type="button">Browse diff</button><button className="button button--hero" disabled={tourLoading || generating} onClick={onGenerate} type="button">{generating ? generationStatus?.state === "running" ? `Building · ${formatElapsedTime(generationStatus.elapsedMs)}` : "Preparing…" : modelReady ? "Generate guided review" : "Choose model"} <Icon name="arrow-right" /></button></div></section>
     </>}
     {notice && <div className="review-notice" role="status"><Icon name="check" size={14} />{notice}</div>}
     {generated && error && <div className="target-error acquired-generation-error" role="alert"><Icon name="flag" size={14} />{error}</div>}

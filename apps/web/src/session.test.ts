@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   evidenceBlocks,
+  formatElapsedTime,
   generatedTourStops,
   revisionStopIndex,
   type AcquiredReviewSession,
@@ -8,6 +9,12 @@ import {
 } from "./session";
 
 describe("acquired session evidence", () => {
+  it("formats generation elapsed time for polling feedback", () => {
+    expect(formatElapsedTime(999)).toBe("0s");
+    expect(formatElapsedTime(65_900)).toBe("1m 5s");
+    expect(formatElapsedTime(600_000)).toBe("10m 0s");
+  });
+
   it("adapts pinned evidence to the existing diff renderer", () => {
     const blocks = evidenceBlocks(session());
     expect(blocks).toMatchObject([{

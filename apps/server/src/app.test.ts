@@ -79,15 +79,15 @@ describe("generated tour API", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" } }),
     });
-    const createdBody = await created.json() as { generated: { headSha: string; anchors: Array<{ id: string }> } };
-    expect(created.status).toBe(201);
-    expect(createdBody.generated.headSha).toBe(metadata.head.sha);
-    expect(createdBody.generated.anchors.map((anchor) => anchor.id)).toContain("line_new-counter");
+    expect(created.status).toBe(202);
+    expect(await created.json()).toMatchObject({ generation: { state: "running", scope: "full" } });
+    await waitForGeneration(url, "succeeded");
 
     const resumed = await fetch(url);
-    const resumedBody = await resumed.json();
+    const resumedBody = await resumed.json() as { generated: { headSha: string; anchors: Array<{ id: string }> } };
     expect(resumed.status).toBe(200);
-    expect(resumedBody).toEqual(createdBody);
+    expect(resumedBody.generated.headSha).toBe(metadata.head.sha);
+    expect(resumedBody.generated.anchors.map((anchor) => anchor.id)).toContain("line_new-counter");
 
     const investigated = await fetch(`${url.replace(/\/tour$/, "")}/investigate`, {
       method: "POST",
@@ -105,6 +105,64 @@ describe("generated tour API", () => {
     expect(investigationContext?.stop.title).toBe("Counter update");
     expect(investigationContext?.stop.evidence.flatMap((item) => item.lines).map((line) => line.content))
       .toContain("return redis.incr(key)");
+  });
+
+  it("polls elapsed generation status and coalesces duplicate starts", async () => {
+    store = new SessionStore(":memory:");
+    const session = store.upsertReadySession(target, metadata, evidence, process.cwd());
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let generationCalls = 0;
+    const provider: TextProvider = {
+      id: "codex",
+      generationTimeoutMs: 600_000,
+      async generateTour(_selection, input) {
+        generationCalls += 1;
+        await gate;
+        return {
+          summary: "The counter update is atomic.",
+          stops: [{
+            id: "atomic-counter", title: "Counter update", summary: "Redis performs the increment.", purpose: "Verify behavior.",
+            anchorIds: [input.fileAnchorIds[0]!, "line_new-counter"],
+            claims: [{ text: "The new path calls INCR.", kind: "fact", confidence: "high", anchorIds: ["line_new-counter"] }],
+            prompts: [], finding: null,
+          }],
+        };
+      },
+      async *streamInvestigation() { yield ""; },
+    };
+    const app = createApp({}, { sessionStore: store, providers: new Map([["codex", provider]]) });
+    server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => server!.once("listening", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const url = `http://127.0.0.1:${port}/api/sessions/${session.id}/tour`;
+    const input = { selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" } };
+
+    const started = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+    });
+    expect(started.status).toBe(202);
+    expect(await started.json()).toMatchObject({ generation: { state: "running", scope: "full", timeoutMs: 600_000 } });
+
+    const status = await (await fetch(`${url}-status`)).json() as { generation: { state: string; elapsedMs: number; timeoutMs: number } };
+    expect(status.generation).toMatchObject({ state: "running", timeoutMs: 600_000 });
+    expect(status.generation.elapsedMs).toBeGreaterThanOrEqual(0);
+
+    const duplicate = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+    });
+    expect(duplicate.status).toBe(202);
+
+    const conflicting = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ selection: { ...input.selection, reasoningEffort: "high" } }),
+    });
+    expect(conflicting.status).toBe(409);
+
+    release();
+    const completed = await waitForGeneration(url, "succeeded");
+    expect(completed).toMatchObject({ state: "succeeded", scope: "full", timeoutMs: 600_000 });
+    expect(generationCalls).toBe(1);
   });
 
   it("invalidates a persisted tour when repository instructions change", async () => {
@@ -137,7 +195,8 @@ describe("generated tour API", () => {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" } }),
     });
-    expect(created.status).toBe(201);
+    expect(created.status).toBe(202);
+    await waitForGeneration(url, "succeeded");
 
     await writeFile(path.join(root, "AGENTS.md"), "Review failure handling carefully.\n", "utf8");
     const stale = await fetch(url);
@@ -311,6 +370,17 @@ describe("generated tour API", () => {
     expect(await saved.json()).toMatchObject({ manifest: { includedFiles: 0, excludedFiles: 1 } });
   });
 });
+
+async function waitForGeneration(url: string, state: "succeeded" | "failed") {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const response = await fetch(`${url}-status`);
+    const body = await response.json() as { generation: { state: string; error?: string } };
+    if (body.generation.state === state) return body.generation;
+    if (body.generation.state === "failed") throw new Error(body.generation.error ?? "Generation failed.");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Generation did not reach ${state}.`);
+}
 
 const target = parsePullRequestTarget("https://github.com/openai/codex/pull/42");
 const metadata = {

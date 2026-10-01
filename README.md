@@ -111,6 +111,10 @@ From the real-PR Summary, choose a configured model and select **Generate guided
 
 Before generation, Wingdiff shows the exact model context, provider transport, changed files, repository instructions, exclusions, size, and content fingerprint. The immutable manifest, fingerprint, and evidence-anchor snapshot are stored with the tour; a changed manifest invalidates the resumable tour. Potentially sensitive, generated, and vendor files are marked; common key and environment-file patterns are excluded by default. Exclusions are editable local globs. `AGENTS.md`, `CONTRIBUTING.md`, and `.github/CONTRIBUTING.md` are included when present, capped at 20,000 characters each. Context over 750,000 characters is blocked until reduced.
 
+Guided-tour generation runs as a local background job. The browser polls its
+status once per second, shows elapsed time and the configured deadline, and can
+reconnect to an in-progress generation after a page refresh.
+
 Investigation requests identify a persisted session and stop rather than sending authoritative evidence from the browser. The server reconstructs the stop, adds bounded base/head source windows and related symbol references from the pinned Git objects, and sends that grounded context to the selected provider.
 
 Comments drafted from a real tour are also pinned to the acquired diff. Wingdiff records the GitHub side and exact line range, verifies the terminal line fingerprint against the canonical pull-request diff, and stores accepted drafts in the local SQLite session. A stale, cross-hunk, wrong-side, or non-diff anchor is rejected before it can enter the review queue.
@@ -172,7 +176,9 @@ resolved path. Source checkouts continue to support the repository-root `.env`.
 | `OPENAI_API_KEY` | Enable direct OpenAI API access |
 | `ANTHROPIC_API_KEY` | Enable direct Anthropic API access |
 | `WINGDIFF_CODEX_BIN` | Override the Codex CLI executable |
-| `WINGDIFF_CODEX_TIMEOUT_MS` | Override the Codex request timeout |
+| `WINGDIFF_CODEX_TOUR_TIMEOUT_MS` | Override the Codex guided-tour timeout (default: 10 minutes) |
+| `WINGDIFF_CODEX_INVESTIGATION_TIMEOUT_MS` | Override the Codex investigation timeout (default: 3 minutes) |
+| `WINGDIFF_CODEX_TIMEOUT_MS` | Legacy override applied to both Codex request types |
 | `WINGDIFF_DATA_DIR` | Choose the directory containing `wingdiff.sqlite3` |
 | `WINGDIFF_CONFIG` | Read configuration from a specific environment file |
 | `WINGDIFF_HOST` | Override the loopback host |

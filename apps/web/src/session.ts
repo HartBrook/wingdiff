@@ -111,6 +111,16 @@ export interface GeneratedSessionTour {
   updatedAt: string;
 }
 
+export interface TourGenerationStatus {
+  state: "idle" | "running" | "succeeded" | "failed";
+  scope?: "full" | "update";
+  startedAt?: string;
+  finishedAt?: string;
+  elapsedMs: number;
+  timeoutMs?: number;
+  error?: string;
+}
+
 export interface ReviewCheckpoint {
   reviewedHeadSha: string;
   completedAt: string;
@@ -254,21 +264,72 @@ export async function fetchSessionTour(id: string, scope: "full" | "update" = "f
   return body.generated;
 }
 
-export async function generateSessionTour(
+export async function startSessionTourGeneration(
   id: string,
   selection: ModelSelection,
   scope: "full" | "update" = "full",
   signal?: AbortSignal,
-): Promise<GeneratedSessionTour> {
+): Promise<TourGenerationStatus> {
   const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/tour`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ selection, scope }),
     signal,
   });
-  const body = await response.json() as { generated?: GeneratedSessionTour; error?: string };
-  if (!response.ok || !body.generated) throw new Error(body.error ?? "Wingdiff could not generate this guided tour.");
-  return body.generated;
+  const body = await response.json() as { generation?: TourGenerationStatus; error?: string };
+  if (!response.ok || !body.generation) throw new Error(body.error ?? "Wingdiff could not start this guided tour.");
+  return body.generation;
+}
+
+export async function fetchTourGenerationStatus(id: string, signal?: AbortSignal): Promise<TourGenerationStatus> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/tour-status`, { signal });
+  const body = await response.json() as { generation?: TourGenerationStatus; error?: string };
+  if (!response.ok || !body.generation) throw new Error(body.error ?? "Wingdiff could not check guided-tour progress.");
+  return body.generation;
+}
+
+export async function waitForSessionTourGeneration(
+  id: string,
+  initial: TourGenerationStatus,
+  onStatus: (status: TourGenerationStatus) => void,
+  signal?: AbortSignal,
+  pollIntervalMs = 1_000,
+): Promise<{ generation: TourGenerationStatus; tour: GeneratedSessionTour }> {
+  let generation = initial;
+  while (true) {
+    onStatus(generation);
+    if (generation.state === "failed") throw new Error(generation.error ?? "Wingdiff could not generate this guided tour.");
+    if (generation.state === "idle" || !generation.scope) throw new Error("Guided-tour generation is no longer running.");
+    if (generation.state === "succeeded") {
+      const tour = await fetchSessionTour(id, generation.scope, signal);
+      if (!tour) throw new Error("Guided-tour generation completed without a saved tour.");
+      return { generation, tour };
+    }
+    await pollingDelay(pollIntervalMs, signal);
+    generation = await fetchTourGenerationStatus(id, signal);
+  }
+}
+
+export function formatElapsedTime(milliseconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1_000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes ? `${minutes}m ${seconds}s` : `${seconds}s`;
+}
+
+function pollingDelay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, milliseconds);
+    const abort = () => {
+      window.clearTimeout(timeout);
+      reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 export async function fetchSessionContext(
