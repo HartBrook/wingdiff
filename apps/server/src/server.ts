@@ -35,6 +35,7 @@ export async function startWingdiffServer(options: WingdiffServerOptions = {}): 
   const app = createApp(environment, {
     sessionStore,
     authToken,
+    development,
     ...(options.cwd ? { cwd: options.cwd } : {}),
   });
 

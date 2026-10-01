@@ -17,6 +17,7 @@ import { prepareRepositoryTarget, resolveRepositoryTarget, type RepositoryResolu
 
 export interface AppOptions {
   cwd?: string;
+  development?: boolean;
   sessionStore?: SessionStore;
   providers?: Map<ProviderId, TextProvider>;
   acquisitionDependencies?: AcquisitionDependencies;
@@ -56,6 +57,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
   );
 
   app.disable("x-powered-by");
+  app.use(securityHeaders(options.development ?? environment.NODE_ENV === "development"));
   app.use(express.json({ limit: "256kb" }));
   if (options.authToken) app.use(localAuthentication(options.authToken));
 
@@ -673,11 +675,41 @@ function localAuthentication(authToken: string): express.RequestHandler {
     if (!bearerAuthorized && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
       const origin = request.get("origin");
       const expectedOrigin = `${request.protocol}://${request.get("host")}`;
-      if (origin && origin !== expectedOrigin) {
+      if (origin !== expectedOrigin) {
         response.status(403).json({ error: "Cross-origin Wingdiff requests are not allowed." });
         return;
       }
     }
+    next();
+  };
+}
+
+function securityHeaders(development: boolean): express.RequestHandler {
+  const scriptSources = development ? "'self' 'unsafe-inline'" : "'self'";
+  const connectSources = development ? "'self' ws: wss:" : "'self'";
+  const contentSecurityPolicy = [
+    "default-src 'self'",
+    "base-uri 'none'",
+    `connect-src ${connectSources}`,
+    "font-src 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    "img-src 'self' data:",
+    "object-src 'none'",
+    `script-src ${scriptSources}`,
+    "style-src 'self' 'unsafe-inline'",
+    "worker-src 'self'",
+  ].join("; ");
+
+  return (request, response, next) => {
+    response.setHeader("Content-Security-Policy", contentSecurityPolicy);
+    response.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+    response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+    response.setHeader("Permissions-Policy", "camera=(), geolocation=(), microphone=(), payment=(), usb=()");
+    response.setHeader("Referrer-Policy", "no-referrer");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    response.setHeader("X-Frame-Options", "DENY");
+    if (request.path.startsWith("/api/")) response.setHeader("Cache-Control", "no-store");
     next();
   };
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { browserInvocation, diagnoseEnvironment, inferPullRequestTarget, isDirectCliInvocation, launchUrl, parseCliArguments, resolveWorkingDirectory } from "./cli.js";
+import { browserInvocation, diagnoseEnvironment, inferPullRequestTarget, isDirectCliInvocation, launchUrl, launchUrlForDisplay, parseCliArguments, resolveWorkingDirectory } from "./cli.js";
 
 describe("wingdiff CLI", () => {
   it("recognizes npm's symlinked executable as the CLI entrypoint", () => {
@@ -80,6 +80,12 @@ describe("wingdiff CLI", () => {
   it("includes a one-time local authentication token", () => {
     const url = launchUrl("http://127.0.0.1:4173", { demo: false, authToken: "local-secret" });
     expect(new URL(url).searchParams.get("wingdiff_token")).toBe("local-secret");
+  });
+
+  it("redacts the launch token from normal terminal output", () => {
+    const url = "http://127.0.0.1:4173/?target=acme%2Frepo%231&wingdiff_token=local-secret";
+    expect(launchUrlForDisplay(url, true)).toBe("http://127.0.0.1:4173/?target=acme%2Frepo%231");
+    expect(launchUrlForDisplay(url, false)).toBe(url);
   });
 
   it("uses platform-native browser launchers without a shell", () => {

@@ -38,6 +38,7 @@ describe("local review sessions", () => {
     store.close();
 
     expect((await stat(databasePath)).isFile()).toBe(true);
+    if (process.platform !== "win32") expect((await stat(databasePath)).mode & 0o777).toBe(0o600);
     expect((await readFile(databasePath)).subarray(0, 15).toString()).toBe("SQLite format 3");
   });
 

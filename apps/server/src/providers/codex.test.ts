@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { codexInvestigationTimeoutMs, codexTourTimeoutMs } from "./codex.js";
+import { CODEX_SECURITY_OVERRIDES, codexInvestigationTimeoutMs, codexTourTimeoutMs } from "./codex.js";
+
+describe("Codex CLI isolation", () => {
+  it("prevents model-invoked tools from inheriting secrets or browsing", () => {
+    expect(CODEX_SECURITY_OVERRIDES).toEqual([
+      "-c",
+      'shell_environment_policy.inherit="none"',
+      "-c",
+      "tools.web_search=false",
+    ]);
+  });
+});
 
 describe("Codex CLI timeouts", () => {
   it("allows ten minutes for tours and three minutes for investigations by default", () => {

@@ -96,6 +96,13 @@ export function launchUrl(baseUrl: string, options: { demo: boolean; target?: Pu
   return url.toString();
 }
 
+export function launchUrlForDisplay(url: string, browserWillOpen: boolean): string {
+  if (!browserWillOpen) return url;
+  const displayUrl = new URL(url);
+  displayUrl.searchParams.delete("wingdiff_token");
+  return displayUrl.toString();
+}
+
 export function browserInvocation(platform: NodeJS.Platform, url: string): { command: string; arguments: string[] } {
   if (platform === "darwin") return { command: "open", arguments: [url] };
   if (platform === "win32") return { command: "cmd", arguments: ["/c", "start", "", url] };
@@ -208,7 +215,7 @@ async function run() {
   const existing = await readServerDiscovery(discoveryPath);
   if (existing && await isWingdiffRunning(existing.url, existing.authToken)) {
     const destination = launchUrl(existing.url, { demo: options.demo, target, authToken: existing.authToken });
-    process.stdout.write(`Reusing Wingdiff at ${destination}\n`);
+    process.stdout.write(`Reusing Wingdiff at ${launchUrlForDisplay(destination, options.openBrowser)}\n`);
     if (options.openBrowser) openBrowser(destination);
     return;
   }
@@ -222,7 +229,7 @@ async function run() {
   });
   running.server.once("close", () => void removeServerDiscovery(discoveryPath, running.authToken));
   const runningDestination = launchUrl(running.url, { demo: options.demo, target, authToken: running.authToken });
-  process.stdout.write(`Wingdiff is ready at ${runningDestination}\n`);
+  process.stdout.write(`Wingdiff is ready at ${launchUrlForDisplay(runningDestination, options.openBrowser)}\n`);
   process.stdout.write("Press Ctrl+C to stop the local server.\n");
   if (options.openBrowser) openBrowser(runningDestination);
 }

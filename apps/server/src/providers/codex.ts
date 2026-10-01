@@ -11,6 +11,13 @@ const DEFAULT_TOUR_TIMEOUT_MS = 600_000;
 const DEFAULT_INVESTIGATION_TIMEOUT_MS = 180_000;
 const MAX_ERROR_LENGTH = 1_200;
 
+export const CODEX_SECURITY_OVERRIDES = [
+  "-c",
+  'shell_environment_policy.inherit="none"',
+  "-c",
+  "tools.web_search=false",
+] as const;
+
 export function codexCliReady(
   executable: string,
   environment: NodeJS.ProcessEnv,
@@ -56,6 +63,7 @@ export class CodexCliProvider implements TextProvider {
         "--skip-git-repo-check",
         "--sandbox",
         "read-only",
+        ...CODEX_SECURITY_OVERRIDES,
         "--color",
         "never",
         "--model",
@@ -90,6 +98,7 @@ export class CodexCliProvider implements TextProvider {
       "--skip-git-repo-check",
       "--sandbox",
       "read-only",
+      ...CODEX_SECURITY_OVERRIDES,
       "--color",
       "never",
       "--model",

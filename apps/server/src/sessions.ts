@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { chmodSync, closeSync, mkdirSync, openSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -154,7 +154,7 @@ export class SessionStore {
   readonly database: DatabaseSync;
 
   constructor(databasePath = defaultDatabasePath(), private readonly now: () => Date = () => new Date()) {
-    if (databasePath !== ":memory:") mkdirSync(path.dirname(databasePath), { recursive: true, mode: 0o700 });
+    if (databasePath !== ":memory:") preparePrivateDatabaseFile(databasePath);
     this.database = new DatabaseSync(databasePath);
     this.database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;");
     migrate(this.database);
@@ -687,6 +687,12 @@ export class SessionStore {
       throw new Error(`Review session ${id} does not exist.`);
     }
   }
+}
+
+function preparePrivateDatabaseFile(databasePath: string) {
+  mkdirSync(path.dirname(databasePath), { recursive: true, mode: 0o700 });
+  closeSync(openSync(databasePath, "a", 0o600));
+  chmodSync(databasePath, 0o600);
 }
 
 export function defaultDatabasePath(environment: NodeJS.ProcessEnv = process.env, platform = process.platform): string {

@@ -36,9 +36,19 @@ describe("generated tour API", () => {
     const exchange = await fetch(`${baseUrl}/?demo=1&wingdiff_token=${"a".repeat(43)}`, { redirect: "manual" });
     expect(exchange.status).toBe(302);
     expect(exchange.headers.get("location")).toBe("/?demo=1");
+    expect(exchange.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(exchange.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
     const cookie = exchange.headers.get("set-cookie")!;
     expect(cookie).toContain("HttpOnly");
-    expect((await fetch(`${baseUrl}/api/health`, { headers: { Cookie: cookie } })).status).toBe(200);
+    expect(cookie).toContain("SameSite=Strict");
+    const health = await fetch(`${baseUrl}/api/health`, { headers: { Cookie: cookie } });
+    expect(health.status).toBe(200);
+    expect(health.headers.get("cache-control")).toBe("no-store");
+    expect((await fetch(`${baseUrl}/api/targets/parse`, {
+      method: "POST",
+      headers: { Cookie: cookie, "Content-Type": "application/json" },
+      body: JSON.stringify({ input: target.canonicalUrl }),
+    })).status).toBe(403);
     expect((await fetch(`${baseUrl}/api/targets/parse`, {
       method: "POST",
       headers: { Cookie: cookie, "Content-Type": "application/json", Origin: "https://attacker.example" },
