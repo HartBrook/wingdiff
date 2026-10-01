@@ -7,12 +7,13 @@
 Wingdiff is a guided, evidence-backed tour of a pull request. It helps an engineer understand a change by behavior, data flow, and risk; investigate the exact supporting code; and publish a thoughtful review to GitHub.
 
 > [!NOTE]
-> Wingdiff is pre-1.0 software under active pilot testing. Review the generated
-> evidence and final GitHub payload before publishing.
+> Wingdiff is pre-1.0 software. Review the generated evidence and final GitHub
+> payload before publishing.
 
 ![Wingdiff guided review interface](./docs/images/wingdiff-demo.png)
 
-This repository contains the local-first review foundation described in the [product plan](./PRODUCT_PLAN.md), plus a realistic cross-file fixture for exercising the complete review loop:
+This repository contains a local-first review application plus a realistic
+cross-file fixture for exercising the complete review loop:
 
 - A default **Since your review** route that isolates the two areas changed after the reviewed head
 - An **Entire PR** backstop that keeps reviewed-but-unchanged areas visible
@@ -200,8 +201,6 @@ npm run test:e2e
 
 The tests enforce the product's grounding contract: claims must resolve to real evidence, generated tours must cover every included changed file, diff ranges must be internally consistent, revision coverage must partition the full fixture tour, findings must remain attached to known stops, and staged comments must match the pinned GitHub diff side and line fingerprint. The browser suite drives a mocked real-PR session through context approval, generation, investigation, visible-code comment drafting, persistence, and navigation home.
 
-See [PILOT.md](./PILOT.md) for the first-user runbook and feedback checklist.
-
 ## Keyboard shortcuts
 
 | Key | Action |
@@ -219,8 +218,7 @@ See [PILOT.md](./PILOT.md) for the first-user runbook and feedback checklist.
 Contributions are welcome. Read [CONTRIBUTING.md](./CONTRIBUTING.md) before
 opening a pull request, use [GitHub Discussions](https://github.com/HartBrook/wingdiff/discussions)
 for questions and ideas, and use [GitHub Issues](https://github.com/HartBrook/wingdiff/issues)
-for reproducible defects. The [product plan](./PRODUCT_PLAN.md) is retained as a
-historical design brief rather than a live roadmap.
+for reproducible defects.
 
 Please report vulnerabilities privately according to [SECURITY.md](./SECURITY.md)
 and follow the [Code of Conduct](./CODE_OF_CONDUCT.md) in all project spaces.

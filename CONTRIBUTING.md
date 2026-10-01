@@ -35,7 +35,6 @@ source, or a local Wingdiff database.
   provider, and GitHub-review code.
 - `apps/web` contains the React review interface and fixture experience.
 - `e2e` contains Playwright coverage for the end-to-end review flow.
-- `PRODUCT_PLAN.md` is a historical design brief, not a live issue tracker.
 
 ## Validate a change
 
@@ -64,5 +63,5 @@ Maintainers may ask for a smaller change, additional evidence, or a design
 discussion before merging. Contributions are licensed under the repository's
 MIT License.
 
-Maintainers preparing a visibility change should follow
+Maintainers publishing a release should follow
 [docs/PUBLISHING.md](./docs/PUBLISHING.md).

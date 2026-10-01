@@ -3,8 +3,11 @@ dist/
 .DS_Store
 *.local
 *.log
+*.tgz
+coverage/
 test-results/
 playwright-report/
 .env
 .env.*
 !.env.example
+.npmrc
