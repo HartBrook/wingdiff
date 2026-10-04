@@ -28,6 +28,7 @@
   --code-add: rgba(57, 156, 101, 0.12);
   --code-add-strong: rgba(57, 156, 101, 0.22);
   --code-delete: rgba(207, 90, 86, 0.13);
+  --code-delete-strong: rgba(207, 90, 86, 0.24);
   --selection: rgba(169, 156, 255, 0.18);
   --shadow: 0 22px 70px rgba(0, 0, 0, 0.38);
   --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -67,6 +68,7 @@
   --code-add: rgba(36, 135, 79, 0.09);
   --code-add-strong: rgba(36, 135, 79, 0.16);
   --code-delete: rgba(185, 69, 56, 0.09);
+  --code-delete-strong: rgba(185, 69, 56, 0.16);
   --selection: rgba(98, 85, 199, 0.14);
   --shadow: 0 22px 65px rgba(47, 46, 41, 0.14);
 }
@@ -352,7 +354,9 @@ code, kbd { font-family: var(--mono); }
 .diff-line { display: grid; min-width: 630px; min-height: 24px; grid-template-columns: 45px 20px minmax(max-content, 1fr); align-items: center; color: var(--text-2); font-family: var(--mono); font-size: 10px; line-height: 24px; }
 .diff-line--addition { background: var(--code-add); }
 .diff-line--deletion { background: var(--code-delete); }
-.diff-line.is-emphasized { background: var(--code-add-strong); }
+.diff-line.is-emphasized { background: var(--accent-soft); }
+.diff-line--addition.is-emphasized { background: var(--code-add-strong); }
+.diff-line--deletion.is-emphasized { background: var(--code-delete-strong); }
 .diff-line.is-selected { background: var(--selection); box-shadow: inset 2px 0 var(--accent); }
 .diff-line__number { height: 100%; padding: 0 10px 0 4px; color: var(--text-4); border: 0; border-right: 1px solid var(--border-soft); background: transparent; cursor: pointer; font-family: var(--mono); font-size: 8px; text-align: right; }
 .diff-line__number:hover:not(:disabled) { color: var(--accent); background: var(--accent-soft); }
