@@ -52,7 +52,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.129.0",
+    "@anthropic-ai/sdk": "^0.131.0",
     "express": "^5.2.1",
     "openai": "^7.23.0"
   },
