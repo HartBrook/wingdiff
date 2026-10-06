@@ -22,8 +22,6 @@ export interface RepositoryIdentity {
 }
 
 const REPOSITORY_SEGMENT = /^[A-Za-z0-9._-]+$/;
-const GITHUB_SHORTHAND = /^([^#!\s]+\/[^#!\s]+)#([1-9]\d*)$/;
-const GITLAB_SHORTHAND = /^([^#!\s]+\/[^#!\s]+)!([1-9]\d*)$/;
 const NUMBER_PATTERN = /^#?([1-9]\d*)$/;
 
 export function parsePullRequestTarget(input: unknown, checkoutRepository?: string): PullRequestTarget {
@@ -35,18 +33,18 @@ export function parsePullRequestTarget(input: unknown, checkoutRepository?: stri
   const urlTarget = parseCodeHostUrl(value);
   if (urlTarget) return target(urlTarget, "url");
 
-  const gitLabShorthand = GITLAB_SHORTHAND.exec(value);
+  const gitLabShorthand = parseShorthand(value, "!");
   if (gitLabShorthand) {
-    const repository = parseRepositoryPath(gitLabShorthand[1]!);
+    const repository = parseRepositoryPath(gitLabShorthand.repositoryPath);
     if (!repository) throw new Error("That GitLab merge request shorthand is not valid.");
-    return target({ platform: "gitlab", host: "gitlab.com", ...repository, number: positiveInteger(gitLabShorthand[2]!) }, "shorthand");
+    return target({ platform: "gitlab", host: "gitlab.com", ...repository, number: positiveInteger(gitLabShorthand.number) }, "shorthand");
   }
 
-  const gitHubShorthand = GITHUB_SHORTHAND.exec(value);
+  const gitHubShorthand = parseShorthand(value, "#");
   if (gitHubShorthand) {
-    const repository = parseRepositoryPath(gitHubShorthand[1]!);
+    const repository = parseRepositoryPath(gitHubShorthand.repositoryPath);
     if (!repository || repository.owner.includes("/")) throw new Error("That GitHub pull request shorthand is not valid.");
-    return target({ platform: "github", host: "github.com", ...repository, number: positiveInteger(gitHubShorthand[2]!) }, "shorthand");
+    return target({ platform: "github", host: "github.com", ...repository, number: positiveInteger(gitHubShorthand.number) }, "shorthand");
   }
 
   const number = NUMBER_PATTERN.exec(value);
@@ -183,6 +181,14 @@ function parseRepositoryPath(value: string | undefined): { owner: string; reposi
   const repository = parts.at(-1)!;
   const owner = parts.slice(0, -1).join("/");
   return { owner, repository, path: `${owner}/${repository}` };
+}
+
+function parseShorthand(value: string, marker: "#" | "!"): { repositoryPath: string; number: string } | undefined {
+  const markerIndex = value.lastIndexOf(marker);
+  if (markerIndex <= 0) return undefined;
+  const number = value.slice(markerIndex + 1);
+  if (!/^[1-9]\d*$/.test(number)) return undefined;
+  return { repositoryPath: value.slice(0, markerIndex), number };
 }
 
 function positiveInteger(value: string): number {

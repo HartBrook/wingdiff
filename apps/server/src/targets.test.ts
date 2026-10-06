@@ -25,6 +25,12 @@ describe("pull request targets", () => {
     expect(parsePullRequestTarget("42", "openai/codex")).toMatchObject({ number: 42, source: "checkout" });
   });
 
+  it("rejects slash-heavy malformed shorthand without expensive backtracking", () => {
+    const slashHeavyPath = "group/".repeat(10_000);
+    expect(() => parsePullRequestTarget(`${slashHeavyPath}repo#not-a-number`)).toThrow(/Use a GitHub pull request URL/);
+    expect(() => parsePullRequestTarget(`${slashHeavyPath}repo!not-a-number`)).toThrow(/Use a GitHub pull request URL/);
+  });
+
   it("normalizes GitLab merge requests with nested groups", () => {
     expect(parsePullRequestTarget("https://gitlab.com/acme/platform/service/-/merge_requests/42/diffs#note_1")).toEqual({
       platform: "gitlab",

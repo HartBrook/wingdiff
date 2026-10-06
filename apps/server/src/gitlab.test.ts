@@ -46,7 +46,10 @@ describe("GitLab merge request integration", () => {
 
     expect(calls).toHaveLength(5);
     expect(calls[2]).toEqual(expect.arrayContaining(["--paginate", "--output", "ndjson"]));
-    expect(calls.every((call) => call.includes("--hostname") && call.includes("gitlab.com"))).toBe(true);
+    expect(calls.every((call) => {
+      const hostnameIndex = call.indexOf("--hostname");
+      return hostnameIndex >= 0 && call[hostnameIndex + 1] === "gitlab.com";
+    })).toBe(true);
     expect(calls[1]).toContain("projects/acme%2Fplatform%2Fservice/merge_requests/42");
     expect(metadata).toMatchObject({
       number: 42,
