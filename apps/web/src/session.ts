@@ -178,6 +178,8 @@ export interface StoredReviewDraft {
 export interface StoredReviewSubmission {
   sessionId: string;
   headSha: string;
+  reviewId?: number;
+  /** Legacy compatibility field used by sessions created before multi-host support. */
   githubReviewId: number;
   url: string;
   event: StoredReviewDraft["event"];
@@ -515,7 +517,7 @@ export async function clearUncertainReviewPublication(id: string): Promise<void>
   const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/review-publication`, {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ verifiedGitHub: true }),
+    body: JSON.stringify({ verifiedCodeHost: true }),
   });
   if (response.ok) return;
   const body = await response.json() as { error?: string };

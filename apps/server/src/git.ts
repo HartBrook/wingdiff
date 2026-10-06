@@ -10,10 +10,10 @@ export type GitCommandRunner = (arguments_: string[], cwd: string) => Promise<st
 
 export interface PinnedRevisions {
   repositoryRoot: string;
-  /** The current target branch tip reported by GitHub. */
+  /** The current target branch tip reported by the code host. */
   base: { sha: string; ref: string };
   head: { sha: string; ref: string };
-  /** The merge base GitHub uses for the full pull-request comparison. */
+  /** The merge base used for the full change-request comparison. */
   comparisonBase?: { sha: string; ref: string };
 }
 
@@ -24,7 +24,7 @@ export async function acquirePinnedRevisions(
   runCommand: GitCommandRunner = defaultGitCommandRunner,
 ): Promise<PinnedRevisions> {
   const repositoryRoot = path.resolve(checkoutPath);
-  const namespace = `refs/wingdiff/pull/${target.number}`;
+  const namespace = `refs/wingdiff/${target.platform === "gitlab" ? "merge-request" : "pull"}/${target.number}`;
   const baseRef = `${namespace}/revisions/${metadata.base.sha}`;
   const headRef = `${namespace}/revisions/${metadata.head.sha}`;
 
@@ -40,7 +40,7 @@ export async function acquirePinnedRevisions(
     metadata.head.sha,
   ], repositoryRoot)).trim();
   if (!/^[a-f0-9]{40}$/i.test(comparisonBaseSha)) {
-    throw new Error("Git could not determine the pull request merge base.");
+    throw new Error("Git could not determine the review request merge base.");
   }
   const comparisonBaseRef = `${namespace}/revisions/${comparisonBaseSha}`;
   await runCommand(["update-ref", comparisonBaseRef, comparisonBaseSha], repositoryRoot);
@@ -86,16 +86,19 @@ async function ensureHeadRevision(
 ) {
   if (await objectExists(metadata.head.sha, cwd, runCommand)) return;
 
+  const sourceRef = target.platform === "gitlab"
+    ? `refs/merge-requests/${target.number}/head`
+    : `refs/pull/${target.number}/head`;
   await runCommand([
     "fetch",
     "--no-tags",
     "--quiet",
     "origin",
-    `+refs/pull/${target.number}/head:${headRef}`,
+    `+${sourceRef}:${headRef}`,
   ], cwd);
   const fetchedHead = (await runCommand(["rev-parse", headRef], cwd)).trim();
   if (fetchedHead.toLowerCase() !== metadata.head.sha.toLowerCase()) {
-    throw new Error(`Pull request #${target.number} moved during acquisition. Refresh and try again.`);
+    throw new Error(`${target.platform === "gitlab" ? "Merge" : "Pull"} request ${target.label} moved during acquisition. Refresh and try again.`);
   }
 }
 

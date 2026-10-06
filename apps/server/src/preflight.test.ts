@@ -14,7 +14,7 @@ describe("local target preflight", () => {
 
     await expect(inspectLocalTarget(target, "/work/codex", runner)).resolves.toEqual({
       checkout: { status: "matched", path: "/work/codex", repository: "openai/codex" },
-      githubCli: { installed: true, authenticated: true },
+      hostingCli: { provider: "github", command: "gh", installed: true, supported: true, authenticated: true },
       networkChecked: false,
     });
   });
@@ -27,9 +27,43 @@ describe("local target preflight", () => {
       return "git@github.com:openai/codex.git\n";
     };
 
-    expect((await inspectLocalTarget(target, "/work/codex", runner)).githubCli).toEqual({
+    expect((await inspectLocalTarget(target, "/work/codex", runner)).hostingCli).toEqual({
+      provider: "github",
+      command: "gh",
       installed: true,
+      supported: true,
       authenticated: false,
+    });
+  });
+
+  it("uses glab and recognizes nested GitLab checkout remotes", async () => {
+    const gitLabTarget = parsePullRequestTarget("https://gitlab.com/acme/platform/service/-/merge_requests/42");
+    const calls: Array<[string, string[]]> = [];
+    const runner: CommandRunner = async (command, arguments_) => {
+      calls.push([command, arguments_]);
+      if (command === "glab") return "glab 1.100.0 (abc123)";
+      if (arguments_[0] === "rev-parse") return "/work/service\n";
+      return "git@gitlab.com:acme/platform/service.git\n";
+    };
+    const result = await inspectLocalTarget(gitLabTarget, "/work/service", runner);
+    expect(result.checkout).toEqual({ status: "matched", path: "/work/service", repository: "acme/platform/service" });
+    expect(result.hostingCli).toEqual({
+      provider: "gitlab", command: "glab", installed: true, supported: true, version: "1.100.0", authenticated: true,
+    });
+    expect(calls).toContainEqual(["glab", ["auth", "status", "--hostname", "gitlab.com"]]);
+  });
+
+  it("reports an installed GitLab CLI below the supported minimum", async () => {
+    const gitLabTarget = parsePullRequestTarget("https://gitlab.com/acme/service/-/merge_requests/42");
+    const runner: CommandRunner = async (command, arguments_) => {
+      if (command === "glab" && arguments_[0] === "--version") return "glab 1.99.0";
+      if (command === "glab") return "authenticated";
+      if (arguments_[0] === "rev-parse") return "/work/service\n";
+      return "git@gitlab.com:acme/service.git\n";
+    };
+
+    expect((await inspectLocalTarget(gitLabTarget, "/work/service", runner)).hostingCli).toEqual({
+      provider: "gitlab", command: "glab", installed: true, supported: false, version: "1.99.0", authenticated: true,
     });
   });
 

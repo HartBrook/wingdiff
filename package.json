@@ -1,11 +1,12 @@
 {
   "name": "wingdiff",
   "version": "0.2.3",
-  "description": "Understand a pull request before you approve it. A local, open source guided review tour where every claim links to the diff and you publish the review.",
+  "description": "Understand a pull or merge request before you approve it. A local, open source guided review tour where every claim links to the diff.",
   "keywords": [
     "code-review",
     "pull-request",
     "github",
+    "gitlab",
     "review",
     "ai",
     "local-first",

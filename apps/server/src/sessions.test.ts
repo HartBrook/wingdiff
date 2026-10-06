@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PullRequestEvidence } from "./diff.js";
 import type { PullRequestMetadata } from "./github.js";
 import { defaultDatabasePath, SessionStore } from "./sessions.js";
@@ -11,10 +11,21 @@ const temporaryDirectories: string[] = [];
 const target = parsePullRequestTarget("https://github.com/openai/codex/pull/42");
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
 describe("local review sessions", () => {
+  it("explains why a saved review for a no-longer-trusted GitLab host cannot be reopened", () => {
+    vi.stubEnv("WINGDIFF_GITLAB_HOSTS", "gitlab.example.com");
+    const store = new SessionStore(":memory:");
+    const gitLabTarget = parsePullRequestTarget("https://gitlab.example.com/acme/service/-/merge_requests/7");
+    const session = store.upsertReadySession(gitLabTarget, metadata(), evidence());
+    expect(store.getSession(session.id)?.target.host).toBe("gitlab.example.com");
+    vi.stubEnv("WINGDIFF_GITLAB_HOSTS", "");
+    expect(() => store.getSession(session.id)).toThrow(/gitlab\.example\.com, which is not listed in WINGDIFF_GITLAB_HOSTS/);
+  });
+
   it("persists and resumes acquired evidence by pinned head", async () => {
     const directory = await temporaryDirectory();
     const databasePath = path.join(directory, "nested", "wingdiff.sqlite3");
