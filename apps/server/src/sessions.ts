@@ -9,7 +9,7 @@ import type { ModelSelection } from "./providers/types.js";
 import type { GeneratedTour } from "./tour.js";
 import type { TourEvidenceAnchor } from "./tour.js";
 import type { SessionContextManifest } from "./context.js";
-import { parsePullRequestTarget, type PullRequestTarget } from "./targets.js";
+import { isTrustedGitLabHost, parsePullRequestTarget, targetRepositoryKey, type PullRequestTarget } from "./targets.js";
 
 export type SessionStatus = "acquiring" | "ready" | "failed";
 export type TourScope = "full" | "update";
@@ -110,6 +110,8 @@ export interface ReviewDraft {
 export interface SubmittedReview {
   sessionId: string;
   headSha: string;
+  reviewId: number;
+  /** @deprecated Use reviewId. Kept for compatibility with existing local clients. */
   githubReviewId: number;
   url: string;
   event: ReviewDraft["event"];
@@ -167,10 +169,11 @@ export class SessionStore {
     evidence: PullRequestEvidence,
     repositoryPath?: string,
   ): ReviewSession {
+    const repositoryKey = targetRepositoryKey(target);
     const existing = this.database.prepare(`
       SELECT id, created_at FROM review_sessions
       WHERE repository = ? AND pr_number = ? AND head_sha = ?
-    `).get(metadata.repository, metadata.number, metadata.head.sha);
+    `).get(repositoryKey, metadata.number, metadata.head.sha);
     const timestamp = this.now().toISOString();
     const id = existing ? String(existing.id) : randomUUID();
     const createdAt = existing ? String(existing.created_at) : timestamp;
@@ -191,7 +194,7 @@ export class SessionStore {
         updated_at = excluded.updated_at
     `).run(
       id,
-      metadata.repository,
+      repositoryKey,
       metadata.number,
       target.canonicalUrl,
       metadata.base.sha,
@@ -533,6 +536,7 @@ export class SessionStore {
     return {
       sessionId: String(row.session_id),
       headSha: String(row.head_sha),
+      reviewId: Number(row.github_review_id),
       githubReviewId: Number(row.github_review_id),
       url: String(row.url),
       event: String(row.event) as ReviewDraft["event"],
@@ -590,7 +594,7 @@ export class SessionStore {
     if (existing) {
       throw new Error(existing.state === "publishing"
         ? "A review publication is already in progress for this pinned head."
-        : "A previous publication has an uncertain outcome. Verify GitHub before allowing a retry.");
+        : "A previous publication has an uncertain outcome. Verify the code host before allowing a retry.");
     }
     const timestamp = this.now().toISOString();
     this.database.prepare(`
@@ -994,7 +998,7 @@ function migrate(database: DatabaseSync) {
 function rowToSession(row: Record<string, unknown>): ReviewSession {
   return {
     id: String(row.id),
-    target: parsePullRequestTarget(String(row.canonical_url)),
+    target: storedTarget(String(row.canonical_url)),
     metadata: JSON.parse(String(row.metadata_json)) as PullRequestMetadata,
     evidence: JSON.parse(String(row.evidence_json)) as PullRequestEvidence,
     status: String(row.status) as SessionStatus,
@@ -1002,6 +1006,15 @@ function rowToSession(row: Record<string, unknown>): ReviewSession {
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
+}
+
+function storedTarget(canonicalUrl: string): PullRequestTarget {
+  // Saved reviews still pass the host trust check, so removing a host from WINGDIFF_GITLAB_HOSTS revokes it.
+  const host = new URL(canonicalUrl).hostname;
+  if (host !== "github.com" && !isTrustedGitLabHost(host)) {
+    throw new Error(`This saved review is for ${host}, which is not listed in WINGDIFF_GITLAB_HOSTS. Add it to reopen the review.`);
+  }
+  return parsePullRequestTarget(canonicalUrl);
 }
 
 function rowToDraftComment(row: Record<string, unknown>): DraftReviewComment {

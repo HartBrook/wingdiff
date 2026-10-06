@@ -1,4 +1,6 @@
 export interface PullRequestTarget {
+  platform: "github" | "gitlab";
+  host: string;
   owner: string;
   repository: string;
   number: number;
@@ -21,7 +23,14 @@ export interface TargetPreparation {
       path?: string;
       repository?: string;
     };
-    githubCli: { installed: boolean; authenticated: boolean };
+    hostingCli: {
+      provider: "github" | "gitlab";
+      command: "gh" | "glab";
+      installed: boolean;
+      supported: boolean;
+      version?: string;
+      authenticated: boolean;
+    };
     networkChecked: false;
   };
 }
@@ -45,14 +54,16 @@ export async function preparePullRequestTarget(input: string, signal?: AbortSign
     signal,
   });
   const body = await response.json() as Partial<TargetPreparation> & { error?: string };
-  if (!response.ok || !body.target || !body.environment) throw new Error(body.error ?? "Wingdiff could not read that pull request target.");
+  if (!response.ok || !body.target || !body.environment) throw new Error(body.error ?? "Wingdiff could not read that review target.");
   return { target: body.target, environment: body.environment };
 }
 
 export function acquisitionBlocker(preparation: TargetPreparation): string | undefined {
-  const { githubCli } = preparation.environment;
-  if (!githubCli.installed) return "Install the GitHub CLI, then run: gh auth login";
-  if (!githubCli.authenticated) return "GitHub CLI is not authenticated. Run: gh auth login";
+  const { hostingCli } = preparation.environment;
+  const hostName = preparation.target.platform === "gitlab" ? "GitLab" : "GitHub";
+  if (!hostingCli.installed) return `Install the ${hostName} CLI (${hostingCli.command}), then run: ${hostingCli.command} auth login`;
+  if (!hostingCli.supported) return `GitLab CLI 1.100.0 or later is required.${hostingCli.version ? ` Found ${hostingCli.version}.` : ""} Upgrade glab and try again.`;
+  if (!hostingCli.authenticated) return `${hostName} CLI is not authenticated. Run: ${hostingCli.command} auth login${preparation.target.host === "github.com" || preparation.target.host === "gitlab.com" ? "" : ` --hostname ${preparation.target.host}`}`;
   return undefined;
 }
 

@@ -103,6 +103,28 @@ describe("pinned Git revisions", () => {
 
     await expect(acquirePinnedRevisions(target, metadata, "/work/codex", runner)).rejects.toThrow(/moved during acquisition/);
   });
+
+  it("fetches GitLab merge request heads into an isolated namespace", async () => {
+    const gitLabTarget = parsePullRequestTarget("https://gitlab.com/acme/platform/service/-/merge_requests/42");
+    const metadata = metadataFor(gitLabTarget.canonicalUrl, "a".repeat(40), "b".repeat(40));
+    metadata.repository = "acme/platform/service";
+    const calls: string[][] = [];
+    const runner: GitCommandRunner = async (arguments_) => {
+      calls.push(arguments_);
+      if (arguments_[0] === "cat-file" && arguments_[2]?.startsWith("a")) return "";
+      if (arguments_[0] === "cat-file") throw new Error("missing");
+      if (arguments_[0] === "rev-parse") return `${metadata.head.sha}\n`;
+      if (arguments_[0] === "merge-base") return `${metadata.base.sha}\n`;
+      return "";
+    };
+
+    const pinned = await acquirePinnedRevisions(gitLabTarget, metadata, "/work/service", runner);
+    expect(calls).toContainEqual([
+      "fetch", "--no-tags", "--quiet", "origin",
+      `+refs/merge-requests/42/head:refs/wingdiff/merge-request/42/revisions/${metadata.head.sha}`,
+    ]);
+    expect(pinned.head.ref).toBe(`refs/wingdiff/merge-request/42/revisions/${metadata.head.sha}`);
+  });
 });
 
 async function createRepository() {
