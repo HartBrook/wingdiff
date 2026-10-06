@@ -142,7 +142,8 @@ describe("wingdiff CLI", () => {
 
   it("checks each trusted GitLab host separately so one stale login does not hide another", async () => {
     const checks = await diagnoseEnvironment("/work/codex", { WINGDIFF_GITLAB_HOSTS: "gitlab.example.com" }, async (command, arguments_) => {
-      if (command === "glab" && arguments_[0] === "auth" && !arguments_.includes("gitlab.example.com")) throw new Error("stale");
+      const hostnameIndex = arguments_.indexOf("--hostname");
+      if (command === "glab" && arguments_[0] === "auth" && arguments_[hostnameIndex + 1] !== "gitlab.example.com") throw new Error("stale");
       if (command === "glab" && arguments_[0] === "--version") return "glab 1.100.0";
       if (command === "gh" && arguments_[0] === "auth") throw new Error("logged out");
       return "ok";
