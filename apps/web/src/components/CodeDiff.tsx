@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, memo } from "react";
 import type { DiffLine, EvidenceBlock } from "../types";
 import { Icon } from "./Icon";
 
@@ -18,7 +18,7 @@ interface CodeDiffProps {
   minimal?: boolean;
 }
 
-export function CodeDiff({
+export const CodeDiff = memo(function CodeDiff({
   evidence,
   selection,
   onSelectLine,
@@ -104,7 +104,7 @@ export function CodeDiff({
       )}
     </section>
   );
-}
+});
 
 function fileName(path: string) {
   return path.split("/").at(-1) ?? path;
