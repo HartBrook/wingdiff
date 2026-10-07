@@ -174,12 +174,12 @@ Direct API access is an optional fallback. Copy the example environment file and
 cp .env.example .env
 ```
 
-Available Codex/OpenAI models:
+Codex CLI uses the default model selected for the signed-in ChatGPT account. Wingdiff does not pass an API model ID to Codex, because API availability and ChatGPT-plan availability can differ. Codex CLI reviews offer low, medium, or high reasoning effort; if the account's default model does not accept the chosen effort, Codex reports the error and Wingdiff shows it. Named models are available through the direct OpenAI API provider:
 
 - `gpt-6-sol` — default balance of review quality, speed, and cost
 - `gpt-6-astra` — highest-capability option for difficult reviews
 - `gpt-6-luna` — fast, cost-efficient investigations
-- `gpt-5.3-codex` — Codex-tuned coding model
+- `gpt-5.3-codex` — deprecated Codex-tuned model available only through the direct OpenAI API provider
 
 Claude Sonnet 4.6 and Opus 4.6 remain available through the same provider interface. Select Codex CLI, OpenAI API, or Anthropic API plus the model and supported reasoning effort from the model control in the top bar.
 
