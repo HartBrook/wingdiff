@@ -106,7 +106,28 @@ export function tourJsonSchema(input: TourGenerationInput) {
 }
 
 export function buildTourRequestPrompt(input: TourGenerationInput): string {
-  return `${buildTourPrompt(input)}\n\nCreate the guided review tour. Use null for finding when the evidence does not support a concrete issue.`;
+  return `${buildTourPrompt(input)}\n\n${coverageChecklist(input)}\n\nCreate the guided review tour. Before returning JSON, verify that every required-coverage row is represented in at least one stop.anchorIds array. Use null for finding when the evidence does not support a concrete issue.`;
+}
+
+function coverageChecklist(input: TourGenerationInput): string {
+  const anchorsByPath = new Map<string, TourGenerationInput["anchors"]>();
+  for (const anchor of input.anchors) {
+    const current = anchorsByPath.get(anchor.path) ?? [];
+    current.push(anchor);
+    anchorsByPath.set(anchor.path, current);
+  }
+
+  const rows = input.fileAnchorIds.map((fileAnchorId) => {
+    const file = input.anchors.find((anchor) => anchor.id === fileAnchorId);
+    if (!file) throw new Error(`File anchor ${fileAnchorId} is missing from the tour input.`);
+    const changedLineIds = (anchorsByPath.get(file.path) ?? [])
+      .filter((anchor) => anchor.kind === "addition" || anchor.kind === "deletion")
+      .map((anchor) => anchor.id);
+    const required = changedLineIds.length ? changedLineIds : [fileAnchorId];
+    return `- ${file.path}: include at least one of [${required.join(", ")}] in a stop.anchorIds array`;
+  });
+
+  return `<required_coverage>\n${rows.join("\n")}\n</required_coverage>`;
 }
 
 export function parseStructuredJson(text: string): unknown {

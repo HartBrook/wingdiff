@@ -59,6 +59,7 @@ import {
   startSessionTourGeneration,
   updateInvestigationEntry,
   TourGenerationFailedError,
+  generationErrorNeedsModelSetup,
   waitForSessionTourGeneration,
   type AcquiredReviewSession,
   type FindingCheckpoint,
@@ -388,9 +389,9 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     setGenerationFailed(false);
   }
 
-  function setGenerationError(message: string) {
+  function setGenerationError(message: string, modelSetupRecommended = generationErrorNeedsModelSetup(message)) {
     setErrorMessage(message);
-    setGenerationFailed(true);
+    setGenerationFailed(modelSetupRecommended);
   }
 
   async function generateTour() {
@@ -405,7 +406,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       setGenerationStatus(status);
       void monitorTourGeneration(status);
     } catch (caught) {
-      if (caught instanceof TourGenerationFailedError) setGenerationError(caught.message);
+      if (caught instanceof TourGenerationFailedError) setGenerationError(caught.message, caught.modelSetupRecommended);
       else setError(`Wingdiff could not start this guided tour: ${caught instanceof Error ? caught.message : "Unknown error"}`);
     } finally {
       setGenerationStarting(false);
@@ -431,7 +432,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") return;
       const detail = caught instanceof Error || caught instanceof DOMException ? caught.message : String(caught ?? "Unknown error");
-      if (caught instanceof TourGenerationFailedError) setGenerationError(detail);
+      if (caught instanceof TourGenerationFailedError) setGenerationError(detail, caught.modelSetupRecommended);
       else setError(`Wingdiff could not generate this guided tour: ${detail}`);
     } finally {
       if (generationAbort.current === controller) generationAbort.current = null;

@@ -289,10 +289,17 @@ export async function fetchTourGenerationStatus(id: string, signal?: AbortSignal
 }
 
 export class TourGenerationFailedError extends Error {
+  readonly modelSetupRecommended: boolean;
+
   constructor(message: string) {
     super(message);
     this.name = "TourGenerationFailedError";
+    this.modelSetupRecommended = generationErrorNeedsModelSetup(message);
   }
+}
+
+export function generationErrorNeedsModelSetup(message: string): boolean {
+  return /(?:authentication is (?:missing|expired)|not (?:configured|available) with (?:this|the current) (?:ChatGPT account|Codex sign-in)|not supported when using Codex with a ChatGPT account|\bcodex login\b|\b(?:OPENAI|ANTHROPIC)_API_KEY\b)/i.test(message);
 }
 
 export async function waitForSessionTourGeneration(
