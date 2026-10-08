@@ -233,13 +233,15 @@ The tests enforce the product's grounding contract: claims must resolve to real 
 
 | Key | Action |
 |---|---|
-| `j` / `k` | Next / previous tour stop |
+| `j` / `k` | Next / previous tour stop, or changed file in Browse mode |
 | `a` | Investigate the active evidence |
 | `c` | Draft a comment |
 | `f` | Flag the current stop |
 | `d` | Toggle tour and Browse mode |
 | `r` | Open the review desk |
-| `Escape` | Close the active overlay |
+| `Escape` | Close the active overlay, otherwise return to the summary |
+
+The open view, tour stop, and file live in the URL, so browser Back and Forward move within the review and a reload returns to the same place. Stepping between stops or files does not add history entries: one Back returns to wherever you opened them from.
 
 ## Contributing and support
 

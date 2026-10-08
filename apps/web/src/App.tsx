@@ -25,6 +25,7 @@ import type {
 import { CodeDiff } from "./components/CodeDiff";
 import { Icon } from "./components/Icon";
 import { acquisitionBlocker, addRecentTarget, parseLaunchRoute, preparePullRequestTarget, type LaunchRoute, type PullRequestTarget, type TargetPreparation } from "./launcher";
+import { parseReviewLocation, replaceReviewLocation, shortcutKey, useReviewLocation, useScrollMemory, type NavigationMode, type ReviewView } from "./navigation";
 import { claimKindLabel, compareSeverity } from "./reviewPresentation";
 import {
   createReviewSession,
@@ -227,14 +228,13 @@ function SessionLoader({ id, onHome, onSession }: { id: string; onHome: () => vo
 
   if (error) return <div className="session-state"><span className="card-icon"><Icon name="flag" /></span><h1>Couldn’t open this review.</h1><p>{error}</p><button className="button button--primary" onClick={onHome} type="button">New review</button></div>;
   if (!session) return <div className="session-state"><span className="card-icon card-icon--spark"><Icon name="spark" /></span><h1>Opening local evidence…</h1><p>Reading the pinned review session from this device.</p></div>;
-  return <AcquiredReviewApp onHome={onHome} onSession={onSession} session={session} />;
+  return <AcquiredReviewApp key={session.id} onHome={onHome} onSession={onSession} session={session} />;
 }
 
 function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void; onSession: (id: string) => void; session: AcquiredReviewSession }) {
-  const [view, setView] = useState<"summary" | "tour" | "browse" | "review">("summary");
+  const { location, navigate, back } = useReviewLocation();
   const [theme, setTheme] = usePersistentState<"dark" | "light">("wingdiff:theme", "dark");
   const [tours, setTours] = useState<Record<AcquiredScope, GeneratedSessionTour | null>>({ full: null, update: null });
-  const [reviewScope, setReviewScope] = useState<AcquiredScope>("full");
   const [update, setUpdate] = useState<StoredReviewUpdate | null>(null);
   const [baselineCheckpoint, setBaselineCheckpoint] = useState<ReviewCheckpoint | null>(null);
   const [checkpoints, setCheckpoints] = useState<Record<AcquiredScope, ReviewCheckpoint | null>>({ full: null, update: null });
@@ -254,9 +254,8 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   const [contextSaving, setContextSaving] = useState(false);
   const [exclusionText, setExclusionText] = useState("");
   const [mobileRouteOpen, setMobileRouteOpen] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(0);
   const [activeEvidenceId, setActiveEvidenceId] = useState<string | null>(null);
-  const tourCanvasRef = useRef<HTMLElement>(null);
+  const canvasRef = useRef<HTMLElement>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [progress, setProgress] = useState<ReviewProgressSnapshot>({
     activeScope: null,
@@ -278,6 +277,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   const [submission, setSubmission] = useState<StoredReviewSubmission | null>(null);
   const [publication, setPublication] = useState<StoredReviewPublication | null>(null);
   const [publicationError, setPublicationError] = useState<string | null>(null);
+  const reviewScope: AcquiredScope = location.scope === "update" && update ? "update" : "full";
   const generated = tours[reviewScope];
   const checkpoint = checkpoints[reviewScope];
   const statuses = progress.scopes[reviewScope];
@@ -285,6 +285,9 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   const blocks = useMemo(() => evidenceBlocksFor(scopedEvidence), [scopedEvidence]);
   const stops = useMemo(() => generated ? generatedTourStops(session, generated, scopedEvidence) : [], [generated, scopedEvidence, session]);
   const metadata = session.metadata;
+  const view: ReviewView = location.view === "tour" && !stops.length ? "summary" : location.view;
+  const activeStopId = (location.view === "tour" ? location.stop : undefined) ?? progress.activeStopIds[reviewScope];
+  const activeIndex = Math.max(0, stops.findIndex((stop) => stop.id === activeStopId));
   const activeStop = stops[activeIndex];
   const activeEvidence = activeStop?.evidence.find((item) => item.id === activeEvidenceId) ?? activeStop?.evidence[0];
   const stopNotebook = activeStop ? notebook.filter((entry) => entry.stopId === activeStop.id) : [];
@@ -355,11 +358,9 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       const restoredScope = storedProgress.activeScope === "update" && !updateContext
         ? "full"
         : storedProgress.activeScope ?? (updateContext ? "update" : "full");
-      setReviewScope(restoredScope);
-      const restoredTour = restoredScope === "update" ? updateTour : fullTour;
-      const restoredStopId = storedProgress.activeStopIds[restoredScope];
-      const restoredIndex = restoredTour?.tour.stops.findIndex((stop) => stop.id === restoredStopId) ?? -1;
-      setActiveIndex(restoredIndex >= 0 ? restoredIndex : 0);
+      // A link that already names a scope wins over the scope restored from saved progress.
+      const opened = parseReviewLocation(window.location.search);
+      if (updateContext && !opened.scope) navigate({ ...opened, scope: restoredScope }, "replace");
     }).catch((caught) => {
       if (caught instanceof DOMException && caught.name === "AbortError") return;
       setError(caught instanceof Error ? caught.message : "Wingdiff could not prepare this review.");
@@ -375,9 +376,22 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     setSelection(null);
   }, [activeStop]);
 
-  useEffect(() => {
-    if (view === "tour") tourCanvasRef.current?.scrollTo({ top: 0 });
-  }, [activeIndex, reviewScope, view]);
+  useScrollMemory(canvasRef, view, view === "tour" ? `${reviewScope}:${activeStop?.id ?? ""}` : reviewScope);
+
+  function scoped(target: ReviewView, detail: { stop?: string; file?: string } = {}) {
+    // Until the update has loaded, keep the scope the link asked for rather than dropping it.
+    const scope = update ? reviewScope : tourLoading ? location.scope : undefined;
+    return { view: target, ...(scope ? { scope } : {}), ...detail };
+  }
+
+  function openView(next: ReviewView, mode?: NavigationMode) {
+    setMobileRouteOpen(false);
+    navigate(scoped(next, next === "tour" ? { stop: activeStop?.id } : {}), mode);
+  }
+
+  function rememberActiveStop(scope: AcquiredScope, stopId: string) {
+    setProgress((current) => ({ ...current, activeScope: scope, activeStopIds: { ...current.activeStopIds, [scope]: stopId } }));
+  }
 
   async function generateTour() {
     if (!activeProvider?.configured) {
@@ -411,8 +425,10 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       if (controller.signal.aborted) return;
       setGenerationStatus(generation);
       setTours((current) => ({ ...current, [tour.scope]: tour }));
-      setActiveIndex(0);
-      if (tour.tour.stops[0]) void persistProgress(tour.scope, tour.tour.stops[0].id);
+      if (tour.tour.stops[0]) {
+        rememberActiveStop(tour.scope, tour.tour.stops[0].id);
+        void persistProgress(tour.scope, tour.tour.stops[0].id);
+      }
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") return;
       const detail = caught instanceof Error || caught instanceof DOMException ? caught.message : String(caught ?? "Unknown error");
@@ -503,12 +519,10 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   }
 
   function selectScope(scope: AcquiredScope) {
-    setReviewScope(scope);
     const scopeStops = tours[scope]?.tour.stops ?? [];
     const restoredIndex = scopeStops.findIndex((stop) => stop.id === progress.activeStopIds[scope]);
     const nextIndex = restoredIndex >= 0 ? restoredIndex : 0;
-    setActiveIndex(nextIndex);
-    setView("summary");
+    navigate({ view: "summary", scope }, "replace");
     setError(null);
     if (scopeStops[nextIndex]) void persistProgress(scope, scopeStops[nextIndex].id);
   }
@@ -528,7 +542,10 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   function selectStop(index: number) {
     const next = stops[index];
     if (!next) return;
-    setActiveIndex(index);
+    setMobileRouteOpen(false);
+    rememberActiveStop(reviewScope, next.id);
+    // Stepping between stops replaces the entry, so Back leaves the tour in one press.
+    navigate(scoped("tour", { stop: next.id }), view === "tour" ? "replace" : "push");
     void persistProgress(reviewScope, next.id);
   }
 
@@ -556,7 +573,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   function openComment(useFinding = false, initialBody = "", preferredEvidenceId?: string) {
     if (submission) {
       setError("This review has already been published to GitHub.");
-      setView("review");
+      openView("review");
       return;
     }
     if (!activeStop || !activeEvidence) return;
@@ -740,8 +757,8 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     if (!activeStop) return;
     const next = stops[activeIndex + 1];
     setStopStatus(activeStop.id, "understood", next?.id ?? activeStop.id);
-    if (next) setActiveIndex(activeIndex + 1);
-    else setView("summary");
+    if (next) navigate(scoped("tour", { stop: next.id }), "replace");
+    else openView("summary");
   }
 
   function toggleFlag() {
@@ -751,22 +768,25 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      const target = event.target as HTMLElement;
-      if (target.matches("input, textarea, [contenteditable='true']")) return;
-      if (event.key === "j" && view === "tour") navigateStop(1);
-      if (event.key === "k" && view === "tour") navigateStop(-1);
-      if (event.key === "a" && view === "tour") setDrawerOpen(true);
-      if (event.key === "c" && view === "tour") openComment();
-      if (event.key === "f" && view === "tour") toggleFlag();
-      if (event.key === "d") setView((current) => current === "browse" ? (generated ? "tour" : "summary") : "browse");
-      if (event.key === "r") setView("review");
-      if (event.key === "Escape") {
+      const key = shortcutKey(event);
+      if (key === "Escape" && (drawerOpen || composer || mobileRouteOpen || modelPickerOpen || contextPreviewOpen)) {
         closeInvestigation();
         setComposer(null);
         setMobileRouteOpen(false);
         setModelPickerOpen(false);
         setContextPreviewOpen(false);
+        return;
       }
+      if (key === "j" && view === "tour") navigateStop(1);
+      if (key === "k" && view === "tour") navigateStop(-1);
+      // Only stepping repeats while a key is held.
+      if (event.repeat) return;
+      if (key === "a" && view === "tour") setDrawerOpen(true);
+      if (key === "c" && view === "tour") openComment();
+      if (key === "f" && view === "tour") toggleFlag();
+      if (key === "d") openView(view === "browse" ? (generated ? "tour" : "summary") : "browse");
+      if (key === "r") openView("review");
+      if (key === "Escape" && view !== "summary") openView("summary");
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
@@ -777,19 +797,20 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       <button aria-label="Open review route" className="icon-button mobile-menu" onClick={() => setMobileRouteOpen((open) => !open)} type="button"><Icon name="menu" /></button>
       <div className="brand"><span className="brand__mark"><Icon name="route" size={19} /></span><span>wingdiff</span></div>
       <div className="topbar__divider" />
-      <button className="home-button" onClick={onHome} type="button"><Icon name="arrow-left" size={14} /><span>New review</span></button>
+      {view !== "summary" && <button className="home-button" onClick={() => openView("summary")} title="Back to summary (Esc)" type="button"><Icon name="arrow-left" size={14} /><span>Summary</span></button>}
+      <button className="home-button" onClick={onHome} type="button"><Icon name="git-pull" size={14} /><span>New review</span></button>
       <div className="pr-identity"><span>{metadata.repository}</span><strong>#{metadata.number}</strong><span className="pr-identity__title">{metadata.title}</span></div>
       <div className="topbar__spacer" />
       <button className="model-button" onClick={() => setModelPickerOpen(true)} type="button"><span className="model-button__spark"><Icon name="spark" size={13} /></span><span><small>{activeProvider?.configured ? "Review model" : "Model setup"}</small><strong>{activeModelLabel}</strong></span><Icon name="chevron-right" size={13} /></button>
       <a className="button button--quiet acquired-github-link" href={metadata.url} rel="noreferrer" target="_blank">GitHub <Icon name="external" size={14} /></a>
-      <button className="button button--primary topbar__review" onClick={() => setView("review")} type="button">Review {comments.length > 0 && <span>{comments.length}</span>}</button>
+      <button className="button button--primary topbar__review" onClick={() => openView("review")} type="button">Review {comments.length > 0 && <span>{comments.length}</span>}</button>
       <button aria-label={`Use ${theme === "dark" ? "light" : "dark"} theme`} className="icon-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} type="button"><Icon name={theme === "dark" ? "sun" : "moon"} size={17} /></button>
     </header>
     {view === "tour" && generated && activeStop && activeEvidence ? <div className={`workspace acquired-workspace ${mobileRouteOpen ? "is-mobile-open" : ""}`}>
-      <AcquiredTourRail activeIndex={activeIndex} inheritedStopIds={inheritedStopIds} onBrowse={() => { setView("browse"); setMobileRouteOpen(false); }} onReview={() => { setView("review"); setMobileRouteOpen(false); }} onSelect={(index) => { selectStop(index); setMobileRouteOpen(false); }} onSummary={() => { setView("summary"); setMobileRouteOpen(false); }} statuses={statuses} stops={stops} />
-      <main className="main-canvas" ref={tourCanvasRef}><AcquiredTourView activeEvidence={activeEvidence} activeEvidenceId={activeEvidenceId} activeFindingRevisions={activeFindingRevisions} activeIndex={activeIndex} comments={comments.filter((comment) => comment.stopId === activeStop.id).length} headSha={metadata.head.sha} onAsk={(prompt) => { setDrawerOpen(true); if (prompt) void askQuestion(prompt); }} onComment={() => openComment(false)} onEvidence={setActiveEvidenceId} onFindingComment={() => openComment(true)} onFlag={toggleFlag} onNavigate={navigateStop} onSelectLine={selectLine} onUnderstood={markUnderstood} selection={selection} status={statuses[activeStop.id] ?? "unseen"} stop={activeStop} totalStops={stops.length} /></main>
-    </div> : <main className="main-canvas acquired-canvas">
-      {view === "summary" ? <AcquiredSummary activeModel={activeModelLabel} baselineCheckpoint={baselineCheckpoint} checkpoint={checkpoint} completing={completing} error={error} generated={generated} generating={generating || contextLoading} generationStatus={generationStatus} modelReady={Boolean(activeProvider?.configured)} notice={notice} onBegin={() => { selectStop(activeIndex); setView("tour"); }} onBrowse={() => setView("browse")} onCheckUpdates={() => void checkForUpdates()} onComplete={() => void completeReview()} onGenerate={() => void previewGenerationContext()} onScope={selectScope} onSelectStop={(index) => { selectStop(index); setView("tour"); }} refreshing={refreshing} reviewScope={reviewScope} scopedEvidence={scopedEvidence} session={session} statuses={statuses} stops={stops} tourLoading={tourLoading} update={update} /> : view === "browse" ? <AcquiredBrowse blocks={blocks} onSummary={() => setView("summary")} scope={reviewScope} session={session} /> : <AcquiredReviewDesk comments={comments} disposition={disposition} error={error} failedChecks={metadata.checks.failed} headSha={metadata.head.sha} highFindingCount={unresolvedHighFindingCount} onAllowRetry={() => void allowPublicationRetry()} onBack={() => setView(generated ? "tour" : "summary")} onDisposition={(event) => { setDisposition(event); void persistReviewDraft(reviewSummary, event); }} onPublish={(acknowledged) => void publishReviewToGitHub(acknowledged)} onRemoveComment={(id) => void removeComment(id)} onSave={() => void persistReviewDraft()} onSummary={setReviewSummary} publication={publication} publishError={publicationError} publishing={publishingReview} saving={savingReview} statuses={statuses} stops={stops} submission={submission} summary={reviewSummary} />}
+      <AcquiredTourRail activeIndex={activeIndex} inheritedStopIds={inheritedStopIds} onBrowse={() => openView("browse")} onReview={() => openView("review")} onSelect={selectStop} onSummary={() => openView("summary")} statuses={statuses} stops={stops} />
+      <main className="main-canvas" ref={canvasRef}><AcquiredTourView activeEvidence={activeEvidence} activeEvidenceId={activeEvidenceId} activeFindingRevisions={activeFindingRevisions} activeIndex={activeIndex} comments={comments.filter((comment) => comment.stopId === activeStop.id).length} headSha={metadata.head.sha} onAsk={(prompt) => { setDrawerOpen(true); if (prompt) void askQuestion(prompt); }} onComment={() => openComment(false)} onEvidence={setActiveEvidenceId} onFindingComment={() => openComment(true)} onFlag={toggleFlag} onNavigate={navigateStop} onSelectLine={selectLine} onUnderstood={markUnderstood} selection={selection} status={statuses[activeStop.id] ?? "unseen"} stop={activeStop} totalStops={stops.length} /></main>
+    </div> : <main className="main-canvas acquired-canvas" ref={canvasRef}>
+      {view === "summary" ? <AcquiredSummary activeModel={activeModelLabel} baselineCheckpoint={baselineCheckpoint} checkpoint={checkpoint} completing={completing} error={error} generated={generated} generating={generating || contextLoading} generationStatus={generationStatus} modelReady={Boolean(activeProvider?.configured)} notice={notice} onBegin={() => selectStop(activeIndex)} onBrowse={() => openView("browse")} onCheckUpdates={() => void checkForUpdates()} onComplete={() => void completeReview()} onGenerate={() => void previewGenerationContext()} onScope={selectScope} onSelectStop={selectStop} refreshing={refreshing} reviewScope={reviewScope} scopedEvidence={scopedEvidence} session={session} statuses={statuses} stops={stops} tourLoading={tourLoading} update={update} /> : view === "browse" ? tourLoading ? null : <AcquiredBrowse blocks={blocks} initialFile={location.file} onFile={(file) => replaceReviewLocation(scoped("browse", { file }))} key={reviewScope} onSummary={() => openView("summary")} scope={reviewScope} session={session} /> : <AcquiredReviewDesk comments={comments} disposition={disposition} error={error} failedChecks={metadata.checks.failed} headSha={metadata.head.sha} highFindingCount={unresolvedHighFindingCount} onAllowRetry={() => void allowPublicationRetry()} onBack={() => back(scoped(generated ? "tour" : "summary", { stop: activeStop?.id }))} onDisposition={(event) => { setDisposition(event); void persistReviewDraft(reviewSummary, event); }} onPublish={(acknowledged) => void publishReviewToGitHub(acknowledged)} onRemoveComment={(id) => void removeComment(id)} onSave={() => void persistReviewDraft()} onSummary={setReviewSummary} publication={publication} publishError={publicationError} publishing={publishingReview} saving={savingReview} statuses={statuses} stops={stops} submission={submission} summary={reviewSummary} />}
     </main>}
     {modelPickerOpen && <ModelPicker onClose={() => setModelPickerOpen(false)} onSelection={setModelSelection} providers={providers} selection={modelSelection} />}
     {contextPreviewOpen && contextManifest && activeProvider && <ContextPreview error={error} exclusions={exclusionText} manifest={contextManifest} modelName={activeModel.name} onCancel={() => setContextPreviewOpen(false)} onConfirm={() => void confirmGenerationContext()} onExclusions={setExclusionText} provider={activeProvider} saving={contextSaving} />}
@@ -869,7 +890,7 @@ function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completi
 function AcquiredTourRail({ activeIndex, inheritedStopIds, onBrowse, onReview, onSelect, onSummary, statuses, stops }: { activeIndex: number; inheritedStopIds: Set<string>; onBrowse: () => void; onReview: () => void; onSelect: (index: number) => void; onSummary: () => void; statuses: Record<string, StopStatus>; stops: TourStop[] }) {
   const completed = stops.filter((stop) => statuses[stop.id] !== undefined && statuses[stop.id] !== "unseen").length;
   const progress = Math.round((completed / stops.length) * 100);
-  return <aside className="tour-rail"><div className="tour-rail__heading"><span>Review route</span><span>{stops.reduce((total, stop) => total + stop.minutes, 0)} min</span></div><nav aria-label="Review route" className="route-list"><button className="route-item route-item--brief" onClick={onSummary} type="button"><span className="route-item__marker"><Icon name="layers" size={14} /></span><span><strong>Summary</strong><small>Findings and intent</small></span></button><div className="route-list__line" />{stops.map((stop, index) => { const status = statuses[stop.id] ?? "unseen"; return <button className={`route-item ${activeIndex === index ? "is-active" : ""} is-${status}`} key={stop.id} onClick={() => onSelect(index)} type="button"><span className="route-item__marker">{status === "understood" ? <Icon name="check" size={13} /> : status === "flagged" ? <Icon name="flag" size={12} /> : index + 1}</span><span><strong>{stop.eyebrow}</strong><small>{shortTitle(stop.title)}</small></span>{stop.finding ? <i className={`severity-dot severity-dot--${stop.finding.severity}`} /> : status === "unseen" && inheritedStopIds.has(stop.id) ? <span className="coverage-mark">reviewed unchanged</span> : null}</button>; })}<div className="route-list__line route-list__line--last" /><button className="route-item" onClick={onBrowse} type="button"><span className="route-item__marker"><Icon name="code" size={14} /></span><span><strong>Changed files</strong><small>Browse full diff</small></span></button><button className="route-item route-item--review" onClick={onReview} type="button"><span className="route-item__marker"><Icon name="shield" size={14} /></span><span><strong>Review desk</strong><small>Prepare your decision</small></span></button></nav><div className="rail-progress"><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><span>{progress}%</span></div><div><strong>{completed} of {stops.length}</strong><span>stops reviewed</span></div></div></aside>;
+  return <aside className="tour-rail"><div className="tour-rail__heading"><span>Review route</span><span>{stops.reduce((total, stop) => total + stop.minutes, 0)} min</span></div><nav aria-label="Review route" className="route-list"><button className="route-item route-item--brief" onClick={onSummary} type="button"><span className="route-item__marker"><Icon name="layers" size={14} /></span><span><strong>Summary</strong><small>Findings and intent</small></span></button><div className="route-list__line" />{stops.map((stop, index) => { const status = statuses[stop.id] ?? "unseen"; return <button className={`route-item ${activeIndex === index ? "is-active" : ""} is-${status}`} key={stop.id} onClick={() => onSelect(index)} type="button"><span className="route-item__marker">{status === "understood" ? <Icon name="check" size={13} /> : status === "flagged" ? <Icon name="flag" size={12} /> : index + 1}</span><span><strong>{stop.eyebrow}</strong><small>{shortTitle(stop.title)}</small></span>{stop.finding ? <i className={`severity-dot severity-dot--${stop.finding.severity}`} /> : status === "unseen" && inheritedStopIds.has(stop.id) ? <span className="coverage-mark">reviewed unchanged</span> : null}</button>; })}<div className="route-list__line route-list__line--last" /><button className="route-item" onClick={onBrowse} type="button"><span className="route-item__marker"><Icon name="code" size={14} /></span><span><strong>Changed files</strong><small>Browse full diff</small></span></button><button className="route-item route-item--review" onClick={onReview} type="button"><span className="route-item__marker"><Icon name="shield" size={14} /></span><span><strong>Review desk</strong><small>Prepare your decision</small></span></button></nav><div className="rail-progress"><div className="progress-ring" style={{ "--progress": `${progress * 3.6}deg` } as React.CSSProperties}><span>{progress}%</span></div><div><strong>{completed} of {stops.length}</strong><span>stops reviewed</span></div></div><div className="rail-shortcuts"><kbd>J</kbd><kbd>K</kbd><span>next / previous</span><kbd className="rail-shortcuts__wide">Esc</kbd><span>summary</span></div></aside>;
 }
 
 function AcquiredTourView({ activeEvidence, activeEvidenceId, activeFindingRevisions, activeIndex, comments, headSha, onAsk, onComment, onEvidence, onFindingComment, onFlag, onNavigate, onSelectLine, onUnderstood, selection, status, stop, totalStops }: {
@@ -906,12 +927,65 @@ function AcquiredTourView({ activeEvidence, activeEvidenceId, activeFindingRevis
         {stop.prompts.length > 0 && <section className="insight-section review-prompts"><div className="section-label"><span>Questions to verify</span></div>{stop.prompts.map((prompt, index) => <button className="acquired-prompt" key={prompt} onClick={() => onAsk(prompt)} type="button"><span>{String(index + 1).padStart(2, "0")}</span>{prompt}</button>)}</section>}
       </aside>
     </div>
-    <footer className="stop-footer"><button aria-label="Previous stop" className="button button--quiet" disabled={activeIndex === 0} onClick={() => onNavigate(-1)} type="button"><Icon name="arrow-left" size={16} /> Previous</button><span>{status === "understood" ? "Marked understood" : status === "flagged" ? "Flagged for review" : "Ready for your judgment"}</span><button className="button button--complete" onClick={onUnderstood} type="button"><Icon name="check" size={16} />{activeIndex === totalStops - 1 ? "Mark understood & finish" : "Mark understood"}<Icon name="arrow-right" size={16} /></button></footer>
+    <footer className="stop-footer"><div className="stop-footer__steps"><button aria-label="Previous stop" className="button button--quiet" disabled={activeIndex === 0} onClick={() => onNavigate(-1)} title="Previous stop (K)" type="button"><Icon name="arrow-left" size={16} /> Previous</button><button aria-label="Next stop" className="button button--quiet" disabled={activeIndex === totalStops - 1} onClick={() => onNavigate(1)} title="Next stop (J)" type="button">Next <Icon name="arrow-right" size={16} /></button></div><span>{status === "understood" ? "Marked understood" : status === "flagged" ? "Flagged for review" : "Ready for your judgment"}</span><button className="button button--complete" onClick={onUnderstood} type="button"><Icon name="check" size={16} />{activeIndex === totalStops - 1 ? "Mark understood & finish" : "Mark understood"}<Icon name="arrow-right" size={16} /></button></footer>
   </div>;
 }
 
-function AcquiredBrowse({ blocks, onSummary, scope, session }: { blocks: EvidenceBlock[]; onSummary: () => void; scope: AcquiredScope; session: AcquiredReviewSession }) {
-  return <div className="page page--browse"><header className="browse-header"><div><div className="eyebrow">{scope === "update" ? "Since your review" : "Entire PR"} · {session.metadata.head.sha.slice(0, 7)}</div><h1>Changed files</h1><p>{scope === "update" ? "Only code changed after your explicit review checkpoint." : "The full pull request diff remains available as a backstop."}</p></div><button className="button button--secondary" onClick={onSummary} type="button"><Icon name="arrow-left" size={16} /> Back to summary</button></header><div className="browse-layout"><aside className="file-index"><div className="section-label"><span>Changed files</span><b>{blocks.length}</b></div>{blocks.map((block) => <a href={`#${block.id}`} key={block.id}><Icon name="code" size={14} /><span>{fileName(block.path)}<small>{directoryName(block.path)}</small></span><Icon name="chevron-right" size={13} /></a>)}</aside><div className="browse-diffs">{blocks.map((block) => <div className="browse-file" id={block.id} key={block.id}><CodeDiff evidence={block} minimal /></div>)}</div></div></div>;
+function AcquiredBrowse({ blocks, initialFile, onFile, onSummary, scope, session }: { blocks: EvidenceBlock[]; initialFile?: string; onFile: (id: string) => void; onSummary: () => void; scope: AcquiredScope; session: AcquiredReviewSession }) {
+  const [activeFile, setActiveFile] = useState(() => blocks.some((block) => block.id === initialFile) ? initialFile : blocks[0]?.id);
+  const diffsRef = useRef<HTMLDivElement>(null);
+  const pendingJump = useRef<string | null>(null);
+
+  function showFile(id: string) {
+    setActiveFile(id);
+    onFile(id);
+  }
+
+  function jumpToFile(id: string) {
+    // Jumps are instant; ignore the scroll they cause so the file asked for stays current.
+    // The observer reports that scroll after the next frame, so the jump is settled one frame later.
+    pendingJump.current = id;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (pendingJump.current === id) pendingJump.current = null;
+    }));
+    const file = document.getElementById(id);
+    file?.scrollIntoView({ block: "start" });
+    // Move focus with the jump so Tab continues from the file, as a fragment link would.
+    file?.focus({ preventScroll: true });
+    showFile(id);
+  }
+
+  useEffect(() => {
+    const canvas = diffsRef.current?.closest(".main-canvas");
+    if (!canvas) return;
+    // A restored scroll offset already shows the right place; only a fresh link needs the jump.
+    if (initialFile && activeFile === initialFile && canvas.scrollTop === 0 && initialFile !== blocks[0]?.id) jumpToFile(initialFile);
+    const files = [...(diffsRef.current?.children ?? [])];
+    const observer = new IntersectionObserver(() => {
+      if (pendingJump.current) return;
+      // The current file is the last one to start above the reading line, however short it is.
+      const bounds = canvas.getBoundingClientRect();
+      const line = bounds.top + bounds.height * 0.2;
+      const current = files.filter((file) => file.getBoundingClientRect().top <= line).at(-1) ?? files[0];
+      if (current) showFile(current.id);
+    }, { root: canvas, rootMargin: "-8% 0px -80% 0px" });
+    for (const file of files) observer.observe(file);
+    return () => observer.disconnect();
+  }, [blocks]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const key = shortcutKey(event);
+      if (key !== "j" && key !== "k") return;
+      const index = blocks.findIndex((block) => block.id === activeFile);
+      const next = blocks[index + (key === "j" ? 1 : -1)];
+      if (next) jumpToFile(next.id);
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  });
+
+  return <div className="page page--browse"><header className="browse-header"><div><div className="eyebrow">{scope === "update" ? "Since your review" : "Entire PR"} · {session.metadata.head.sha.slice(0, 7)}</div><h1>Changed files</h1><p>{scope === "update" ? "Only code changed after your explicit review checkpoint." : "The full pull request diff remains available as a backstop."}</p></div><button className="button button--secondary" onClick={onSummary} type="button"><Icon name="arrow-left" size={16} /> Back to summary <kbd>Esc</kbd></button></header><div className="browse-layout"><nav aria-label="Changed files" className="file-index"><div className="section-label"><span>Changed files</span><b>{blocks.length}</b></div>{blocks.map((block) => <button aria-current={block.id === activeFile ? "true" : undefined} className={block.id === activeFile ? "is-active" : ""} key={block.id} onClick={() => jumpToFile(block.id)} type="button"><Icon name="code" size={14} /><span>{fileName(block.path)}<small>{directoryName(block.path)}</small></span><Icon name="chevron-right" size={13} /></button>)}<div className="file-index__muted"><kbd>J</kbd> <kbd>K</kbd> next / previous file</div></nav><div className="browse-diffs" ref={diffsRef}>{blocks.map((block) => <div className="browse-file" id={block.id} key={block.id} tabIndex={-1}><CodeDiff evidence={block} minimal /></div>)}</div></div></div>;
 }
 
 function AcquiredReviewDesk({ comments, disposition, error, failedChecks, headSha, highFindingCount, onAllowRetry, onBack, onDisposition, onPublish, onRemoveComment, onSave, onSummary, publication, publishError, publishing, saving, statuses, stops, submission, summary }: {
@@ -960,9 +1034,9 @@ function AcquiredReviewDesk({ comments, disposition, error, failedChecks, headSh
 }
 
 function ReviewApp({ onHome }: { onHome: () => void }) {
-  const [view, setView] = useState<View>("brief");
-  const [reviewMode, setReviewMode] = useState<ReviewMode>("update");
-  const [activeIndex, setActiveIndex] = useState(0);
+  const { location, navigate, back } = useReviewLocation();
+  const view: View = location.view === "summary" ? "brief" : location.view;
+  const reviewMode: ReviewMode = location.scope ?? "update";
   const [statuses, setStatuses] = usePersistentState(`wingdiff:statuses:${pullRequest.headSha}`, initialStatuses);
   const [comments, setComments] = usePersistentState<DraftComment[]>(`wingdiff:comments:${pullRequest.headSha}`, []);
   const [notebook, setNotebook] = usePersistentState<NotebookEntry[]>(`wingdiff:notebook:${pullRequest.headSha}`, []);
@@ -970,7 +1044,7 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [activeEvidenceId, setActiveEvidenceId] = useState<string | null>(null);
-  const tourCanvasRef = useRef<HTMLElement>(null);
+  const canvasRef = useRef<HTMLElement>(null);
   const [composer, setComposer] = useState<ComposerState | null>(null);
   const [question, setQuestion] = useState("");
   const [answering, setAnswering] = useState(false);
@@ -983,8 +1057,12 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
   );
   const [disposition, setDisposition] = useState<ReviewDisposition>("COMMENT");
   const [toast, setToast] = useState<string | null>(null);
+  // The URL only names a stop inside the tour; other views return to the one last shown.
+  const lastStopIds = useRef<Partial<Record<ReviewMode, string>>>({});
 
   const activeStops = reviewMode === "update" ? updateStops : tourStops;
+  const activeStopId = (location.view === "tour" ? location.stop : undefined) ?? lastStopIds.current[reviewMode];
+  const activeIndex = Math.max(0, activeStops.findIndex((stop) => stop.id === activeStopId));
   const activeStop = activeStops[activeIndex]!;
   const completedCount = activeStops.filter((stop) => statuses[stop.id] !== "unseen").length;
   const understoodCount = tourStops.filter((stop) => statuses[stop.id] === "understood").length;
@@ -1021,59 +1099,70 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
   }, [activeStop]);
 
   useEffect(() => {
-    if (view === "tour") tourCanvasRef.current?.scrollTo({ top: 0 });
-  }, [activeIndex, reviewMode, view]);
+    if (view === "tour") lastStopIds.current[reviewMode] = activeStop.id;
+  }, [activeStop.id, reviewMode, view]);
+
+  useScrollMemory(canvasRef, view, view === "tour" ? `${reviewMode}:${activeStop.id}` : reviewMode);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      const target = event.target as HTMLElement;
-      if (target.matches("input, textarea, [contenteditable='true']")) return;
-
-      if (event.key === "j" && view === "tour") navigateStop(1);
-      if (event.key === "k" && view === "tour") navigateStop(-1);
-      if (event.key === "a" && view === "tour") setDrawerOpen(true);
-      if (event.key === "c" && view === "tour") openComment();
-      if (event.key === "f" && view === "tour") toggleFlag();
-      if (event.key === "d") setView((current) => current === "browse" ? "tour" : "browse");
-      if (event.key === "r") setView("review");
-      if (event.key === "Escape") {
+      const key = shortcutKey(event);
+      if (key === "Escape" && (drawerOpen || composer || mobileNavOpen || modelPickerOpen)) {
         setDrawerOpen(false);
         setComposer(null);
         setMobileNavOpen(false);
         setModelPickerOpen(false);
+        return;
       }
+      if (key === "j" && view === "tour") navigateStop(1);
+      if (key === "k" && view === "tour") navigateStop(-1);
+      // Only stepping repeats while a key is held.
+      if (event.repeat) return;
+      if (key === "a" && view === "tour") setDrawerOpen(true);
+      if (key === "c" && view === "tour") openComment();
+      if (key === "f" && view === "tour") toggleFlag();
+      if (key === "d") openView(view === "browse" ? "tour" : "browse");
+      if (key === "r") openView("review");
+      if (key === "Escape" && view !== "brief") openView("summary");
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   });
 
-  function selectStop(index: number) {
-    setActiveIndex(index);
-    setView("tour");
+  function openView(next: ReviewView, mode?: NavigationMode) {
     setMobileNavOpen(false);
+    navigate({ view: next, scope: reviewMode, ...(next === "tour" ? { stop: activeStop.id } : {}) }, mode);
+  }
+
+  function openStop(mode: ReviewMode, index: number) {
+    const stop = (mode === "update" ? updateStops : tourStops)[index];
+    if (!stop) return;
+    setMobileNavOpen(false);
+    // Stepping between stops replaces the entry, so Back leaves the tour in one press.
+    navigate({ view: "tour", scope: mode, stop: stop.id }, view === "tour" ? "replace" : "push");
+  }
+
+  function selectStop(index: number) {
+    openStop(reviewMode, index);
   }
 
   function selectReviewMode(mode: ReviewMode) {
-    setReviewMode(mode);
-    setActiveIndex(0);
+    navigate({ view: location.view, scope: mode }, "replace");
     setSelection(null);
   }
 
   function selectFullStop(index: number) {
-    setReviewMode("full");
-    setActiveIndex(index);
-    setView("tour");
-    setMobileNavOpen(false);
+    openStop("full", index);
   }
 
   function navigateStop(delta: number) {
-    setActiveIndex((current) => Math.max(0, Math.min(activeStops.length - 1, current + delta)));
+    selectStop(Math.max(0, Math.min(activeStops.length - 1, activeIndex + delta)));
   }
 
   function markUnderstoodAndAdvance() {
     setStatuses((current) => ({ ...current, [activeStop.id]: "understood" }));
     if (activeIndex === activeStops.length - 1) {
-      setView("review");
+      openView("review");
     } else {
       navigateStop(1);
     }
@@ -1186,8 +1275,7 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
   }
 
   function beginTour() {
-    setActiveIndex(0);
-    setView("tour");
+    selectStop(0);
   }
 
   return (
@@ -1198,7 +1286,7 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
         onHome={onHome}
         onMenu={() => setMobileNavOpen((open) => !open)}
         onModel={() => setModelPickerOpen(true)}
-        onReview={() => setView("review")}
+        onReview={() => openView("review")}
         onTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
         providerConfigured={Boolean(activeProvider?.configured)}
         theme={theme}
@@ -1210,8 +1298,8 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
           comments={comments.length}
           completed={completedCount}
           mobileOpen={mobileNavOpen}
-          onBrief={() => { setView("brief"); setMobileNavOpen(false); }}
-          onReview={() => { setView("review"); setMobileNavOpen(false); }}
+          onBrief={() => openView("summary")}
+          onReview={() => openView("review")}
           onReviewMode={selectReviewMode}
           onSelectStop={selectStop}
           reviewMode={reviewMode}
@@ -1220,7 +1308,7 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
           view={view}
         />
 
-        <main className="main-canvas" ref={tourCanvasRef}>
+        <main className="main-canvas" ref={canvasRef}>
           {view === "brief" && <Summary onBegin={beginTour} onReviewMode={selectReviewMode} onSelectStop={selectStop} reviewMode={reviewMode} />}
           {view === "tour" && (
             <TourView
@@ -1247,7 +1335,7 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
           {view === "browse" && (
             <BrowseView
               onAsk={(index) => { selectFullStop(index); setDrawerOpen(true); }}
-              onReturn={() => setView("tour")}
+              onReturn={() => openView("tour")}
               onSelectStop={selectFullStop}
             />
           )}
@@ -1255,7 +1343,7 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
             <ReviewDesk
               comments={comments}
               disposition={disposition}
-              onBack={() => setView("tour")}
+              onBack={() => back({ view: "tour", scope: reviewMode, stop: activeStop.id })}
               onDisposition={setDisposition}
               onPublish={() => {
                 setToast(`Review ready to publish as ${labelDisposition(disposition)}`);
@@ -1318,7 +1406,7 @@ function TopBar({ activeModel, comments, onHome, onMenu, onModel, onReview, onTh
       <button aria-label="Open navigation" className="icon-button mobile-menu" onClick={onMenu} type="button"><Icon name="menu" /></button>
       <div className="brand"><span className="brand__mark"><Icon name="route" size={19} /></span><span>wingdiff</span></div>
       <div className="topbar__divider" />
-      <button className="home-button" onClick={onHome} type="button"><Icon name="arrow-left" size={14} /><span>New review</span></button>
+      <button className="home-button" onClick={onHome} type="button"><Icon name="git-pull" size={14} /><span>New review</span></button>
       <div className="pr-identity"><span>{pullRequest.repository}</span><strong>#{pullRequest.number}</strong><span className="pr-identity__title">{pullRequest.title}</span></div>
       <div className="topbar__spacer" />
       <button className="model-button" onClick={onModel} type="button">
