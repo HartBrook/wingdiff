@@ -65,6 +65,74 @@ test("returns to the top when marking a stop understood", async ({ page }) => {
   await expect.poll(() => canvas.evaluate((element) => element.scrollTop)).toBe(0);
 });
 
+test("keeps browser history inside a real review session", async ({ page }) => {
+  await mockReviewApi(page, { tourReady: true });
+  await page.goto("/");
+  await page.goto("/?session=pilot-session");
+
+  const summary = page.getByText("No findings currently block approval");
+  const stop = page.getByRole("heading", { name: "Counter updates become atomic" });
+  const files = page.getByRole("heading", { name: "Changed files" });
+  await expect(summary).toBeVisible();
+
+  await page.getByRole("button", { name: "Start review" }).click();
+  await expect(stop).toBeVisible();
+  await expect(page).toHaveURL(/session=pilot-session&view=tour&stop=atomic-counter/);
+
+  await page.goBack();
+  await expect(summary).toBeVisible();
+  await expect(page).toHaveURL(/\?session=pilot-session$/);
+  await page.goForward();
+  await expect(stop).toBeVisible();
+
+  await page.reload();
+  await expect(stop).toBeVisible();
+
+  // Jumping between files must not stack entries: one Back leaves the file view.
+  await page.keyboard.press("d");
+  await expect(files).toBeVisible();
+  await page.getByRole("navigation", { name: "Changed files" }).getByRole("button", { name: /counter\.ts/ }).click();
+  await expect(page).toHaveURL(/view=browse&file=/);
+  await page.goBack();
+  await expect(stop).toBeVisible();
+
+  // In-app returns pop the entry they came from instead of growing the stack.
+  await page.keyboard.press("r");
+  await expect(page.getByRole("heading", { name: "Prepare your decision." })).toBeVisible();
+  await page.getByRole("button", { name: "Back to review" }).click();
+  await expect(stop).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(summary).toBeVisible();
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "Choose a pull request." })).toBeVisible();
+});
+
+test("steps between demo stops without burying the summary in history", async ({ page }) => {
+  await page.goto("/?demo=1");
+  await page.getByRole("button", { name: "Review updates" }).click();
+  const title = page.locator(".stop-header h1");
+  const firstTitle = await title.textContent();
+
+  await page.getByRole("button", { name: "Entire PR" }).click();
+  await page.keyboard.press("j");
+  await page.keyboard.press("j");
+  await expect(title).not.toHaveText(firstTitle ?? "");
+  const thirdTitle = await title.textContent();
+
+  // Leaving the tour and coming back keeps the stop, and pops rather than pushing.
+  await page.keyboard.press("d");
+  await expect(page.getByRole("heading", { name: "The complete evidence set" })).toBeVisible();
+  await page.keyboard.press("d");
+  await expect(title).toHaveText(thirdTitle ?? "");
+
+  await page.reload();
+  await expect(title).toHaveText(thirdTitle ?? "");
+
+  await page.goBack();
+  await expect(page.getByRole("button", { name: /Review (updates|entire PR)/ })).toBeVisible();
+  await expect(page).toHaveURL(/demo=1/);
+});
+
 test("publishes on the first click after editing and keeps failures actionable", async ({ page }) => {
   await mockReviewApi(page, { failFirstPublish: true });
   await page.goto("/?session=pilot-session");
@@ -83,8 +151,8 @@ test("publishes on the first click after editing and keeps failures actionable",
   await expect(page.getByRole("link", { name: "Open on GitHub" })).toBeVisible();
 });
 
-async function mockReviewApi(page: Page, options: { failFirstPublish?: boolean } = {}) {
-  let tourReady = false;
+async function mockReviewApi(page: Page, options: { failFirstPublish?: boolean; tourReady?: boolean } = {}) {
+  let tourReady = options.tourReady ?? false;
   let generationStarted = false;
   let generationPolls = 0;
   let investigationId = "investigation-1";
