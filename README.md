@@ -229,6 +229,30 @@ npm run test:e2e
 
 The tests enforce the product's grounding contract: claims must resolve to real evidence, generated tours must cover every included changed file, diff ranges must be internally consistent, revision coverage must partition the full fixture tour, findings must remain attached to known stops, and staged comments must match the pinned GitHub diff side and line fingerprint. The browser suite drives a mocked real-PR session through context approval, generation, investigation, visible-code comment drafting, persistence, and navigation home.
 
+### Local live smoke tests
+
+The opt-in live suite exercises the production build with your existing `gh` and
+`codex` logins. It is separate from `npm run test:e2e`, refuses to run in CI,
+uses an isolated temporary database, and never opens the publish flow.
+
+```bash
+# Fast GitHub acquisition and rendering check; infers the PR for this branch.
+npm run test:e2e:live:acquire
+
+# Full acquisition plus real Codex guided-review generation.
+npm run test:e2e:live
+
+# Target another PR or checkout explicitly.
+WINGDIFF_LIVE_PR=https://github.com/owner/repository/pull/123 npm run test:e2e:live
+WINGDIFF_LIVE_CHECKOUT=/path/to/checkout WINGDIFF_LIVE_PR=owner/repository#123 npm run test:e2e:live
+```
+
+Run `gh auth status --hostname github.com` and `codex login status` if the
+preflight fails. Set `WINGDIFF_LIVE_KEEP_DATA=1` to retain the temporary
+database for debugging; otherwise it is deleted even after a failure. Failure
+traces and screenshots stay under `test-results/live/` and may contain source
+from the tested pull request, so keep those artifacts local.
+
 ## Keyboard shortcuts
 
 | Key | Action |
