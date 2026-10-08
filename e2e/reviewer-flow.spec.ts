@@ -9,7 +9,7 @@ test("reviews a real-session fixture from privacy preview through an anchored dr
 
   const contextDialog = page.getByRole("dialog", { name: "Model context preview" });
   await expect(contextDialog).toBeVisible();
-  await expect(contextDialog.getByText("Codex CLI · GPT-6 Sol", { exact: true })).toBeVisible();
+  await expect(contextDialog.getByText("Codex CLI · Account default", { exact: true })).toBeVisible();
   await expect(contextDialog.getByText("1 sent · 0 excluded")).toBeVisible();
   await contextDialog.getByText("Exact context preview").click();
   await expect(contextDialog.getByText("return redis.incr(key)")).toBeVisible();
@@ -65,6 +65,74 @@ test("returns to the top when marking a stop understood", async ({ page }) => {
   await expect.poll(() => canvas.evaluate((element) => element.scrollTop)).toBe(0);
 });
 
+test("keeps browser history inside a real review session", async ({ page }) => {
+  await mockReviewApi(page, { tourReady: true });
+  await page.goto("/");
+  await page.goto("/?session=pilot-session");
+
+  const summary = page.getByText("No findings currently block approval");
+  const stop = page.getByRole("heading", { name: "Counter updates become atomic" });
+  const files = page.getByRole("heading", { name: "Changed files" });
+  await expect(summary).toBeVisible();
+
+  await page.getByRole("button", { name: "Start review" }).click();
+  await expect(stop).toBeVisible();
+  await expect(page).toHaveURL(/session=pilot-session&view=tour&stop=atomic-counter/);
+
+  await page.goBack();
+  await expect(summary).toBeVisible();
+  await expect(page).toHaveURL(/\?session=pilot-session$/);
+  await page.goForward();
+  await expect(stop).toBeVisible();
+
+  await page.reload();
+  await expect(stop).toBeVisible();
+
+  // Jumping between files must not stack entries: one Back leaves the file view.
+  await page.keyboard.press("d");
+  await expect(files).toBeVisible();
+  await page.getByRole("navigation", { name: "Changed files" }).getByRole("button", { name: /counter\.ts/ }).click();
+  await expect(page).toHaveURL(/view=browse&file=/);
+  await page.goBack();
+  await expect(stop).toBeVisible();
+
+  // In-app returns pop the entry they came from instead of growing the stack.
+  await page.keyboard.press("r");
+  await expect(page.getByRole("heading", { name: "Prepare your decision." })).toBeVisible();
+  await page.getByRole("button", { name: "Back to review" }).click();
+  await expect(stop).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(summary).toBeVisible();
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "Choose a pull or merge request." })).toBeVisible();
+});
+
+test("steps between demo stops without burying the summary in history", async ({ page }) => {
+  await page.goto("/?demo=1");
+  await page.getByRole("button", { name: "Review updates" }).click();
+  const title = page.locator(".stop-header h1");
+  const firstTitle = await title.textContent();
+
+  await page.getByRole("button", { name: "Entire change" }).click();
+  await page.keyboard.press("j");
+  await page.keyboard.press("j");
+  await expect(title).not.toHaveText(firstTitle ?? "");
+  const thirdTitle = await title.textContent();
+
+  // Leaving the tour and coming back keeps the stop, and pops rather than pushing.
+  await page.keyboard.press("d");
+  await expect(page.getByRole("heading", { name: "The complete evidence set" })).toBeVisible();
+  await page.keyboard.press("d");
+  await expect(title).toHaveText(thirdTitle ?? "");
+
+  await page.reload();
+  await expect(title).toHaveText(thirdTitle ?? "");
+
+  await page.goBack();
+  await expect(page.getByRole("button", { name: /Review (updates|entire PR)/ })).toBeVisible();
+  await expect(page).toHaveURL(/demo=1/);
+});
+
 test("publishes on the first click after editing and keeps failures actionable", async ({ page }) => {
   await mockReviewApi(page, { failFirstPublish: true });
   await page.goto("/?session=pilot-session");
@@ -95,9 +163,9 @@ test("presents and publishes a GitLab merge request with host-native labels", as
   await expect(page.getByRole("link", { name: "Open on GitLab" })).toBeVisible();
 });
 
-async function mockReviewApi(page: Page, options: { failFirstPublish?: boolean; session?: typeof session } = {}) {
+async function mockReviewApi(page: Page, options: { failFirstPublish?: boolean; session?: typeof session; tourReady?: boolean } = {}) {
   const reviewSession = options.session ?? session;
-  let tourReady = false;
+  let tourReady = options.tourReady ?? false;
   let generationStarted = false;
   let generationPolls = 0;
   let investigationId = "investigation-1";
@@ -169,7 +237,7 @@ async function mockReviewApi(page: Page, options: { failFirstPublish?: boolean; 
       return route.fulfill({
         status: 200,
         contentType: "text/event-stream",
-        body: `data: ${JSON.stringify({ type: "delta", delta: "Redis INCR is atomic for concurrent callers." })}\n\ndata: ${JSON.stringify({ type: "done", provider: "codex", model: "gpt-6-sol" })}\n\n`,
+        body: `data: ${JSON.stringify({ type: "delta", delta: "Redis INCR is atomic for concurrent callers." })}\n\ndata: ${JSON.stringify({ type: "done", provider: "codex", model: "codex-default" })}\n\n`,
       });
     }
     return json(route, { error: `Unhandled test route: ${method} ${path}` }, 500);
@@ -211,7 +279,7 @@ const gitLabSession = {
   },
 };
 const tour = {
-  sessionId: session.id, scope: "full", selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" }, baseSha, headSha, createdAt: now, updatedAt: now,
+  sessionId: session.id, scope: "full", selection: { provider: "codex", model: "codex-default", reasoningEffort: "medium" }, baseSha, headSha, createdAt: now, updatedAt: now,
   tour: { summary: "The counter now uses one atomic Redis operation.", findingRevisions: [], stops: [{ id: "atomic-counter", title: "Counter updates become atomic", summary: "One Redis operation replaces the read/write pair.", purpose: "Verify concurrent behavior.", anchorIds: ["file-counter", "line_new-counter"], claims: [{ text: "The new path calls Redis INCR.", kind: "fact", confidence: "high", anchorIds: ["line_new-counter"] }], prompts: ["Can concurrent callers lose increments?"] }] },
   anchors: [{ id: "file-counter", path: "src/counter.ts", kind: "file" }, ...diffLines.map((line) => ({ id: `line_${line.fingerprint}`, path: "src/counter.ts", kind: line.kind, content: line.content, ...(line.oldLine ? { oldLine: line.oldLine } : {}), ...(line.newLine ? { newLine: line.newLine } : {}) }))],
 };
@@ -224,5 +292,5 @@ const manifest = {
 };
 const providers = [{
   id: "codex", name: "Codex CLI", configured: true, transport: "cli", setupCommand: "codex login", setupDescription: "Sign in.",
-  models: [{ id: "gpt-6-sol", provider: "codex", name: "GPT-6 Sol", family: "OpenAI", description: "Balanced review.", badge: "Recommended", reasoningEfforts: ["medium"], defaultEffort: "medium" }],
+  models: [{ id: "codex-default", provider: "codex", name: "Account default", family: "Codex", description: "Uses the signed-in account default.", badge: "Recommended", reasoningEfforts: ["medium"], defaultEffort: "medium" }],
 }];

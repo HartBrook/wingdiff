@@ -279,7 +279,7 @@ export async function startSessionTourGeneration(
     signal,
   });
   const body = await response.json() as { generation?: TourGenerationStatus; error?: string };
-  if (!response.ok || !body.generation) throw new Error(body.error ?? "Wingdiff could not start this guided tour.");
+  if (!response.ok || !body.generation) throw new TourGenerationFailedError(body.error ?? "Wingdiff could not start this guided tour.");
   return body.generation;
 }
 
@@ -288,6 +288,20 @@ export async function fetchTourGenerationStatus(id: string, signal?: AbortSignal
   const body = await response.json() as { generation?: TourGenerationStatus; error?: string };
   if (!response.ok || !body.generation) throw new Error(body.error ?? "Wingdiff could not check guided-tour progress.");
   return body.generation;
+}
+
+export class TourGenerationFailedError extends Error {
+  readonly modelSetupRecommended: boolean;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "TourGenerationFailedError";
+    this.modelSetupRecommended = generationErrorNeedsModelSetup(message);
+  }
+}
+
+export function generationErrorNeedsModelSetup(message: string): boolean {
+  return /(?:authentication is (?:missing|expired)|not (?:configured|available) with (?:this|the current) (?:ChatGPT account|Codex sign-in)|not supported when using Codex with a ChatGPT account|\bcodex login\b|\b(?:OPENAI|ANTHROPIC)_API_KEY\b)/i.test(message);
 }
 
 export async function waitForSessionTourGeneration(
@@ -300,7 +314,7 @@ export async function waitForSessionTourGeneration(
   let generation = initial;
   while (true) {
     onStatus(generation);
-    if (generation.state === "failed") throw new Error(generation.error ?? "Wingdiff could not generate this guided tour.");
+    if (generation.state === "failed") throw new TourGenerationFailedError(generation.error ?? "Wingdiff could not generate this guided tour.");
     if (generation.state === "idle" || !generation.scope) throw new Error("Guided-tour generation is no longer running.");
     if (generation.state === "succeeded") {
       const tour = await fetchSessionTour(id, generation.scope, signal);

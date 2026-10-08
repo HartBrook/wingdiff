@@ -8,18 +8,31 @@ import type {
 
 const CODEX_MODELS: ModelDefinition[] = [
   {
-    id: "gpt-6-sol",
+    id: "codex-default",
     provider: "codex",
+    name: "Account default",
+    family: "Codex",
+    description: "Let Codex choose the default model supported by your signed-in account.",
+    badge: "Recommended",
+    reasoningEfforts: ["low", "medium", "high"],
+    defaultEffort: "medium",
+  },
+];
+
+const OPENAI_MODELS: ModelDefinition[] = [
+  {
+    id: "gpt-6-sol",
+    provider: "openai",
     name: "GPT-6 Sol",
     family: "OpenAI",
     description: "Balanced reasoning, latency, and cost for everyday code review.",
-    badge: "Recommended",
+    badge: "API",
     reasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
     defaultEffort: "medium",
   },
   {
     id: "gpt-6-astra",
-    provider: "codex",
+    provider: "openai",
     name: "GPT-6 Astra",
     family: "OpenAI",
     description: "Highest capability for architectural and high-risk reviews.",
@@ -29,7 +42,7 @@ const CODEX_MODELS: ModelDefinition[] = [
   },
   {
     id: "gpt-6-luna",
-    provider: "codex",
+    provider: "openai",
     name: "GPT-6 Luna",
     family: "OpenAI",
     description: "Fast, cost-efficient investigation for routine questions.",
@@ -39,22 +52,15 @@ const CODEX_MODELS: ModelDefinition[] = [
   },
   {
     id: "gpt-5.3-codex",
-    provider: "codex",
+    provider: "openai",
     name: "GPT-5.3-Codex",
-    family: "Codex",
-    description: "Codex-tuned model for agentic coding and code investigation.",
-    badge: "Codex",
+    family: "OpenAI API",
+    description: "Deprecated Codex model available through direct API authentication only.",
+    badge: "Deprecated",
     reasoningEfforts: ["low", "medium", "high", "xhigh"],
     defaultEffort: "medium",
   },
 ];
-
-const OPENAI_MODELS: ModelDefinition[] = CODEX_MODELS.map((model) => ({
-  ...model,
-  provider: "openai",
-  family: model.family === "Codex" ? "OpenAI API" : model.family,
-  badge: model.id === "gpt-6-sol" ? "API" : model.badge,
-}));
 
 const ANTHROPIC_MODELS: ModelDefinition[] = [
   {
@@ -119,6 +125,9 @@ export function publicProviders(
 export function validateSelection(input: unknown): ModelSelection {
   if (!input || typeof input !== "object") throw new Error("A model selection is required.");
   const value = input as Record<string, unknown>;
+  if (value.provider === "codex" && value.model !== "codex-default") {
+    throw new Error("Codex CLI must use your account's default model. Choose Account default, or use the OpenAI API provider for a named model.");
+  }
   const model = MODEL_CATALOG.find((candidate) => (
     candidate.id === value.model && candidate.provider === value.provider
   ));

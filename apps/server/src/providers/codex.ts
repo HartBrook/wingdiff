@@ -66,8 +66,7 @@ export class CodexCliProvider implements TextProvider {
         ...CODEX_SECURITY_OVERRIDES,
         "--color",
         "never",
-        "--model",
-        selection.model,
+        ...codexModelArguments(selection.model),
         "-c",
         `model_reasoning_effort="${selection.reasoningEffort}"`,
         "--output-schema",
@@ -75,7 +74,7 @@ export class CodexCliProvider implements TextProvider {
         "--output-last-message",
         outputPath,
         "-",
-      ], prompt, this.generationTimeoutMs, signal);
+      ], selection.model, prompt, this.generationTimeoutMs, signal);
       return model.restoreAnchors(parseStructuredJson(await readFile(outputPath, "utf8")));
     } finally {
       await rm(workingDirectory, { recursive: true, force: true });
@@ -101,8 +100,7 @@ export class CodexCliProvider implements TextProvider {
       ...CODEX_SECURITY_OVERRIDES,
       "--color",
       "never",
-      "--model",
-      selection.model,
+      ...codexModelArguments(selection.model),
       "-c",
       `model_reasoning_effort="${selection.reasoningEffort}"`,
       "-",
@@ -142,7 +140,7 @@ export class CodexCliProvider implements TextProvider {
       if (signal?.aborted) throw new Error("Codex CLI investigation was canceled.");
       if (timedOut) throw new Error(`Codex CLI exceeded the ${Math.round(timeoutMs / 1_000)} second timeout.`);
       if (exitCode !== 0) {
-        throw new Error(cleanCliError(stderr) || `Codex CLI exited with status ${String(exitCode)}.`);
+        throw new Error(formatCodexCliError(stderr, selection.model) || `Codex CLI exited with status ${String(exitCode)}.`);
       }
     } finally {
       clearTimeout(timeout);
@@ -157,6 +155,7 @@ async function runCodex(
   environment: NodeJS.ProcessEnv,
   workingDirectory: string,
   arguments_: string[],
+  model: string,
   prompt: string,
   timeoutMs: number,
   signal?: AbortSignal,
@@ -190,7 +189,9 @@ async function runCodex(
     const exitCode = await completion;
     if (signal?.aborted) throw new Error("Codex CLI tour generation was canceled.");
     if (timedOut) throw new Error(`Codex CLI exceeded the ${Math.round(timeoutMs / 1_000)} second timeout.`);
-    if (exitCode !== 0) throw new Error(cleanCliError(stderr) || `Codex CLI exited with status ${String(exitCode)}.`);
+    if (exitCode !== 0) {
+      throw new Error(formatCodexCliError(stderr, model) || `Codex CLI exited with status ${String(exitCode)}.`);
+    }
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener("abort", abort);
@@ -211,6 +212,10 @@ export function codexInvestigationTimeoutMs(environment: NodeJS.ProcessEnv): num
   );
 }
 
+export function codexModelArguments(model: string): string[] {
+  return model === "codex-default" ? [] : ["--model", model];
+}
+
 function parseTimeout(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 1_000 ? parsed : fallback;
@@ -219,5 +224,46 @@ function parseTimeout(value: string | undefined, fallback: number): number {
 function cleanCliError(stderr: string): string {
   return stderr
     .replace(/WARNING: proceeding, even though we could not create PATH aliases:[^\n]*\n?/g, "")
+    .trim();
+}
+
+export function formatCodexCliError(stderr: string, model?: string): string {
+  const cleaned = cleanCliError(stderr);
+  if (!cleaned) return "";
+  // Codex streams the prompt and model prose to stderr, so only the line that reports the failure is classified.
+  const lines = cleaned.split("\n").map((candidate) => candidate.trim()).filter(Boolean).reverse();
+  const errorLine = lines.find((candidate) => CLI_ERROR_LINE.test(candidate));
+  const reported = errorLine ?? lines.find((candidate) => !CLI_WARNING_LINE.test(candidate)) ?? cleaned;
+  const modelName = model === "codex-default" ? "Codex's account-default model" : model ?? "The selected model";
+
+  if (/(?:not supported|unsupported) when using Codex with a ChatGPT account/i.test(reported)) {
+    return `${modelName} is not available with this ChatGPT account. Update Codex CLI and run \`codex login\` again, or select OpenAI API and configure OPENAI_API_KEY.`;
+  }
+  if (/(?:not logged in|log in to Codex|authentication (?:is )?(?:missing|required|expired)|status["': ]+401|\b401 Unauthorized\b)/i.test(reported)) {
+    return "Codex authentication is missing or expired. Run `codex login`, then restart Wingdiff.";
+  }
+  if (/\bmodel\b.*(?:not supported|not available|does not exist|do not have access)/i.test(reported)) {
+    return `${modelName} is not available with the current Codex sign-in. Update Codex CLI and run \`codex login\` again, or choose another provider.`;
+  }
+  return errorLine ? extractCliErrorDetail(errorLine) : cleaned;
+}
+
+const CLI_LOG_TIMESTAMP = String.raw`(?:\d{4}-\d\d-\d\dT\S+\s+)?`;
+const CLI_ERROR_LINE = new RegExp(`^${CLI_LOG_TIMESTAMP}(?:ERROR\\b|[Ee]rror:)`);
+const CLI_WARNING_LINE = new RegExp(`^${CLI_LOG_TIMESTAMP}warn(?:ing)?\\b`, "i");
+
+function extractCliErrorDetail(errorLine: string): string {
+  const fields = [...errorLine.matchAll(/"(?:message|detail)"\s*:\s*("(?:\\.|[^"\\])*")/g)];
+  const encoded = fields.at(-1)?.[1];
+  if (encoded) {
+    try {
+      return JSON.parse(encoded) as string;
+    } catch {
+      // Fall back to the error line itself below.
+    }
+  }
+  return errorLine
+    .replace(/^\d{4}-\d\d-\d\dT\S+\s+ERROR\s+[^:]+:\s*/, "")
+    .replace(/^error:\s*/i, "")
     .trim();
 }
