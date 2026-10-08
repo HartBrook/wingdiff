@@ -30,6 +30,9 @@ describe("tour generation prompt", () => {
     expect(prompt).toContain("<pull_request>");
     expect(prompt).toContain("<validated_evidence>");
     expect(prompt).toContain("a2\tnew:8");
+    expect(prompt).toContain("<required_coverage>");
+    expect(prompt).toContain("- src/store.ts: include at least one of [a2] in a stop.anchorIds array");
+    expect(prompt).toContain("verify that every required-coverage row is represented");
     expect(prompt).not.toContain("line_def");
     expect(TOUR_INSTRUCTIONS).toContain("untrusted data");
     expect(TOUR_INSTRUCTIONS).toContain("Avoid introductions, conclusions, praise, filler");

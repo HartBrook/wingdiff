@@ -4,6 +4,8 @@ import {
   DEFAULT_SELECTION,
   FALLBACK_PROVIDERS,
   fetchProviders,
+  normalizeSelection,
+  preferredAvailableSelection,
   selectedModel,
   streamInvestigation,
   streamSessionInvestigation,
@@ -57,6 +59,8 @@ import {
   saveSessionContext,
   startSessionTourGeneration,
   updateInvestigationEntry,
+  TourGenerationFailedError,
+  generationErrorNeedsModelSetup,
   waitForSessionTourGeneration,
   type AcquiredReviewSession,
   type FindingCheckpoint,
@@ -241,12 +245,13 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   const [tourLoading, setTourLoading] = useState(true);
   const [generationStarting, setGenerationStarting] = useState(false);
   const [generationStatus, setGenerationStatus] = useState<TourGenerationStatus | null>(null);
+  const [generationFailed, setGenerationFailed] = useState(false);
   const [completing, setCompleting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setErrorMessage] = useState<string | null>(null);
   const [providers, setProviders] = useState<ProviderDefinition[]>(FALLBACK_PROVIDERS);
-  const [modelSelection, setModelSelection] = usePersistentState<ModelSelection>("wingdiff:model", DEFAULT_SELECTION);
+  const [modelSelection, setModelSelection] = usePersistentState<ModelSelection>("wingdiff:model", DEFAULT_SELECTION, restoreModelSelection);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [contextManifest, setContextManifest] = useState<SessionContextManifest | null>(null);
   const [contextPreviewOpen, setContextPreviewOpen] = useState(false);
@@ -353,7 +358,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       if (storedGeneration.state === "running" || storedGeneration.state === "succeeded") {
         void monitorTourGeneration(storedGeneration);
       } else if (storedGeneration.state === "failed") {
-        setError(storedGeneration.error ?? "Wingdiff could not generate this guided tour.");
+        setGenerationError(storedGeneration.error ?? "Wingdiff could not generate this guided tour.");
       }
       const restoredScope = storedProgress.activeScope === "update" && !updateContext
         ? "full"
@@ -393,6 +398,16 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     setProgress((current) => ({ ...current, activeScope: scope, activeStopIds: { ...current.activeStopIds, [scope]: stopId } }));
   }
 
+  function setError(message: string | null) {
+    setErrorMessage(message);
+    setGenerationFailed(false);
+  }
+
+  function setGenerationError(message: string, modelSetupRecommended = generationErrorNeedsModelSetup(message)) {
+    setErrorMessage(message);
+    setGenerationFailed(modelSetupRecommended);
+  }
+
   async function generateTour() {
     if (!activeProvider?.configured) {
       setModelPickerOpen(true);
@@ -405,7 +420,8 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       setGenerationStatus(status);
       void monitorTourGeneration(status);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Wingdiff could not generate this guided tour.");
+      if (caught instanceof TourGenerationFailedError) setGenerationError(caught.message, caught.modelSetupRecommended);
+      else setError(`Wingdiff could not start this guided tour: ${caught instanceof Error ? caught.message : "Unknown error"}`);
     } finally {
       setGenerationStarting(false);
     }
@@ -432,7 +448,8 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") return;
       const detail = caught instanceof Error || caught instanceof DOMException ? caught.message : String(caught ?? "Unknown error");
-      setError(`Wingdiff could not generate this guided tour: ${detail}`);
+      if (caught instanceof TourGenerationFailedError) setGenerationError(detail, caught.modelSetupRecommended);
+      else setError(`Wingdiff could not generate this guided tour: ${detail}`);
     } finally {
       if (generationAbort.current === controller) generationAbort.current = null;
     }
@@ -810,7 +827,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       <AcquiredTourRail activeIndex={activeIndex} inheritedStopIds={inheritedStopIds} onBrowse={() => openView("browse")} onReview={() => openView("review")} onSelect={selectStop} onSummary={() => openView("summary")} statuses={statuses} stops={stops} />
       <main className="main-canvas" ref={canvasRef}><AcquiredTourView activeEvidence={activeEvidence} activeEvidenceId={activeEvidenceId} activeFindingRevisions={activeFindingRevisions} activeIndex={activeIndex} comments={comments.filter((comment) => comment.stopId === activeStop.id).length} headSha={metadata.head.sha} onAsk={(prompt) => { setDrawerOpen(true); if (prompt) void askQuestion(prompt); }} onComment={() => openComment(false)} onEvidence={setActiveEvidenceId} onFindingComment={() => openComment(true)} onFlag={toggleFlag} onNavigate={navigateStop} onSelectLine={selectLine} onUnderstood={markUnderstood} selection={selection} status={statuses[activeStop.id] ?? "unseen"} stop={activeStop} totalStops={stops.length} /></main>
     </div> : <main className="main-canvas acquired-canvas" ref={canvasRef}>
-      {view === "summary" ? <AcquiredSummary activeModel={activeModelLabel} baselineCheckpoint={baselineCheckpoint} checkpoint={checkpoint} completing={completing} error={error} generated={generated} generating={generating || contextLoading} generationStatus={generationStatus} modelReady={Boolean(activeProvider?.configured)} notice={notice} onBegin={() => selectStop(activeIndex)} onBrowse={() => openView("browse")} onCheckUpdates={() => void checkForUpdates()} onComplete={() => void completeReview()} onGenerate={() => void previewGenerationContext()} onScope={selectScope} onSelectStop={selectStop} refreshing={refreshing} reviewScope={reviewScope} scopedEvidence={scopedEvidence} session={session} statuses={statuses} stops={stops} tourLoading={tourLoading} update={update} /> : view === "browse" ? tourLoading ? null : <AcquiredBrowse blocks={blocks} initialFile={location.file} onFile={(file) => replaceReviewLocation(scoped("browse", { file }))} key={reviewScope} onSummary={() => openView("summary")} scope={reviewScope} session={session} /> : <AcquiredReviewDesk comments={comments} disposition={disposition} error={error} failedChecks={metadata.checks.failed} headSha={metadata.head.sha} highFindingCount={unresolvedHighFindingCount} onAllowRetry={() => void allowPublicationRetry()} onBack={() => back(scoped(generated ? "tour" : "summary", { stop: activeStop?.id }))} onDisposition={(event) => { setDisposition(event); void persistReviewDraft(reviewSummary, event); }} onPublish={(acknowledged) => void publishReviewToGitHub(acknowledged)} onRemoveComment={(id) => void removeComment(id)} onSave={() => void persistReviewDraft()} onSummary={setReviewSummary} publication={publication} publishError={publicationError} publishing={publishingReview} saving={savingReview} statuses={statuses} stops={stops} submission={submission} summary={reviewSummary} />}
+      {view === "summary" ? <AcquiredSummary activeModel={activeModelLabel} baselineCheckpoint={baselineCheckpoint} checkpoint={checkpoint} completing={completing} error={error} generated={generated} generating={generating || contextLoading} generationFailed={generationFailed} generationStatus={generationStatus} modelReady={Boolean(activeProvider?.configured)} notice={notice} onBegin={() => selectStop(activeIndex)} onBrowse={() => openView("browse")} onCheckUpdates={() => void checkForUpdates()} onComplete={() => void completeReview()} onGenerate={() => void previewGenerationContext()} onModel={() => setModelPickerOpen(true)} onScope={selectScope} onSelectStop={selectStop} refreshing={refreshing} reviewScope={reviewScope} scopedEvidence={scopedEvidence} session={session} statuses={statuses} stops={stops} tourLoading={tourLoading} update={update} /> : view === "browse" ? tourLoading ? null : <AcquiredBrowse blocks={blocks} initialFile={location.file} onFile={(file) => replaceReviewLocation(scoped("browse", { file }))} key={reviewScope} onSummary={() => openView("summary")} scope={reviewScope} session={session} /> : <AcquiredReviewDesk comments={comments} disposition={disposition} error={error} failedChecks={metadata.checks.failed} headSha={metadata.head.sha} highFindingCount={unresolvedHighFindingCount} onAllowRetry={() => void allowPublicationRetry()} onBack={() => back(scoped(generated ? "tour" : "summary", { stop: activeStop?.id }))} onDisposition={(event) => { setDisposition(event); void persistReviewDraft(reviewSummary, event); }} onPublish={(acknowledged) => void publishReviewToGitHub(acknowledged)} onRemoveComment={(id) => void removeComment(id)} onSave={() => void persistReviewDraft()} onSummary={setReviewSummary} publication={publication} publishError={publicationError} publishing={publishingReview} saving={savingReview} statuses={statuses} stops={stops} submission={submission} summary={reviewSummary} />}
     </main>}
     {modelPickerOpen && <ModelPicker onClose={() => setModelPickerOpen(false)} onSelection={setModelSelection} providers={providers} selection={modelSelection} />}
     {contextPreviewOpen && contextManifest && activeProvider && <ContextPreview error={error} exclusions={exclusionText} manifest={contextManifest} modelName={activeModel.name} onCancel={() => setContextPreviewOpen(false)} onConfirm={() => void confirmGenerationContext()} onExclusions={setExclusionText} provider={activeProvider} saving={contextSaving} />}
@@ -819,7 +836,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   </div>;
 }
 
-function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completing, error, generated, generating, generationStatus, modelReady, notice, onBegin, onBrowse, onCheckUpdates, onComplete, onGenerate, onScope, onSelectStop, refreshing, reviewScope, scopedEvidence, session, statuses, stops, tourLoading, update }: {
+function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completing, error, generated, generating, generationFailed, generationStatus, modelReady, notice, onBegin, onBrowse, onCheckUpdates, onComplete, onGenerate, onModel, onScope, onSelectStop, refreshing, reviewScope, scopedEvidence, session, statuses, stops, tourLoading, update }: {
   activeModel: string;
   baselineCheckpoint: ReviewCheckpoint | null;
   checkpoint: ReviewCheckpoint | null;
@@ -827,6 +844,7 @@ function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completi
   error: string | null;
   generated: GeneratedSessionTour | null;
   generating: boolean;
+  generationFailed: boolean;
   generationStatus: TourGenerationStatus | null;
   modelReady: boolean;
   notice: string | null;
@@ -835,6 +853,7 @@ function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completi
   onCheckUpdates: () => void;
   onComplete: () => void;
   onGenerate: () => void;
+  onModel: () => void;
   onScope: (scope: AcquiredScope) => void;
   onSelectStop: (index: number) => void;
   refreshing: boolean;
@@ -879,7 +898,7 @@ function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completi
     </> : <>
       <section className="summary-findings acquired-evidence-ready"><header><div><div className="eyebrow">Evidence ready</div><h2>The pull request is pinned and ready for a guided review</h2></div><span className="summary-verdict"><Icon name="code" size={14} />{tourLoading ? "Checking" : "Not analyzed"}</span></header><div className="summary-clear"><Icon name="check" size={18} /><div><strong>{session.evidence.files.length} changed file{session.evidence.files.length === 1 ? "" : "s"} passed anchor validation.</strong><span>Generate a semantic route with {activeModel}, or inspect the diff directly.</span></div></div></section>
       {metadata.body && <section className="summary-context acquired-description"><div><span>Author description</span><AuthorMarkdown source={metadata.body} /></div></section>}
-      {error && <div className="target-error acquired-generation-error" role="alert"><Icon name="flag" size={14} />{error}</div>}
+      {error && <div className="target-error acquired-generation-error" role="alert"><Icon name="flag" size={14} /><span>{error}</span>{generationFailed && <button className="button button--quiet button--small" onClick={onModel} type="button">Review model setup</button>}</div>}
       <section className="begin-card"><div><strong>{generating ? `Building ${generationStatus?.scope === "update" ? "update" : "guided"} tour` : modelReady ? activeModel : "Choose a configured model"}</strong><span>{generating && generationStatus?.state === "running" ? `${formatElapsedTime(generationStatus.elapsedMs)} elapsed${generationStatus.timeoutMs ? ` · ${formatElapsedTime(generationStatus.timeoutMs)} limit` : ""} · status checked every second` : "Analysis stays inside the local Wingdiff process"}</span></div><div className="acquired-start-actions"><button className="button button--quiet" onClick={onBrowse} type="button">Browse diff</button><button className="button button--hero" disabled={tourLoading || generating} onClick={onGenerate} type="button">{generating ? generationStatus?.state === "running" ? `Building · ${formatElapsedTime(generationStatus.elapsedMs)}` : "Preparing…" : modelReady ? "Generate guided review" : "Choose model"} <Icon name="arrow-right" /></button></div></section>
     </>}
     {notice && <div className="review-notice" role="status"><Icon name="check" size={14} />{notice}</div>}
@@ -1049,7 +1068,7 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
   const [question, setQuestion] = useState("");
   const [answering, setAnswering] = useState(false);
   const [providers, setProviders] = useState<ProviderDefinition[]>(FALLBACK_PROVIDERS);
-  const [modelSelection, setModelSelection] = usePersistentState<ModelSelection>("wingdiff:model", DEFAULT_SELECTION);
+  const [modelSelection, setModelSelection] = usePersistentState<ModelSelection>("wingdiff:model", DEFAULT_SELECTION, restoreModelSelection);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [theme, setTheme] = usePersistentState<"dark" | "light">("wingdiff:theme", "dark");
   const [reviewSummary, setReviewSummary] = useState(
@@ -1080,15 +1099,7 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
     const controller = new AbortController();
     fetchProviders(controller.signal).then((availableProviders) => {
       setProviders(availableProviders);
-      setModelSelection((current) => {
-        const currentProvider = availableProviders.find((provider) => provider.id === current.provider);
-        if (currentProvider?.configured) return current;
-        const codex = availableProviders.find((provider) => provider.id === "codex" && provider.configured);
-        const model = codex?.models.find((candidate) => candidate.id === DEFAULT_SELECTION.model) ?? codex?.models[0];
-        return codex && model
-          ? { provider: codex.id, model: model.id, reasoningEffort: model.defaultEffort }
-          : current;
-      });
+      setModelSelection((current) => preferredAvailableSelection(availableProviders, current));
     }).catch(() => undefined);
     return () => controller.abort();
   }, []);
@@ -1589,14 +1600,6 @@ function updateNotebookEntry(
   setEntries((current) => current.map((entry) => entry.id === id ? { ...entry, ...patch } : entry));
 }
 
-function preferredAvailableSelection(providers: ProviderDefinition[], current: ModelSelection): ModelSelection {
-  const currentProvider = providers.find((provider) => provider.id === current.provider);
-  if (currentProvider?.configured && currentProvider.models.some((model) => model.id === current.model)) return current;
-  const provider = providers.find((candidate) => candidate.configured);
-  const model = provider?.models[0];
-  return provider && model ? { provider: provider.id, model: model.id, reasoningEffort: model.defaultEffort } : current;
-}
-
 function checkoutMessage(preparation: TargetPreparation): string {
   const checkout = preparation.environment.checkout;
   if (checkout.status === "matched") return "Current checkout matches";
@@ -1616,8 +1619,10 @@ function AuthorMarkdown({ fallback, source }: { fallback?: string; source: strin
   return <Suspense fallback={<p className="markdown-loading">Formatting description…</p>}><MarkdownContent fallback={fallback} source={source} /></Suspense>;
 }
 
-function usePersistentState<T>(key: string, fallback: T) {
-  const [value, setValue] = useState<T>(() => { try { const stored = window.localStorage.getItem(key); return stored ? JSON.parse(stored) as T : fallback; } catch { return fallback; } });
+function restoreModelSelection(stored: ModelSelection) { return normalizeSelection(FALLBACK_PROVIDERS, stored); }
+
+function usePersistentState<T>(key: string, fallback: T, restore: (stored: T) => T = (stored) => stored) {
+  const [value, setValue] = useState<T>(() => { try { const stored = window.localStorage.getItem(key); return stored ? restore(JSON.parse(stored) as T) : fallback; } catch { return fallback; } });
   useEffect(() => { try { window.localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage can be unavailable */ } }, [key, value]);
   return [value, setValue] as const;
 }

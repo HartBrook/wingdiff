@@ -87,7 +87,7 @@ describe("generated tour API", () => {
     const created = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" } }),
+      body: JSON.stringify({ selection: { provider: "codex", model: "codex-default", reasoningEffort: "medium" } }),
     });
     expect(created.status).toBe(202);
     expect(await created.json()).toMatchObject({ generation: { state: "running", scope: "full" } });
@@ -103,7 +103,7 @@ describe("generated tour API", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
+        selection: { provider: "codex", model: "codex-default", reasoningEffort: "medium" },
         scope: "full",
         stopId: "atomic-counter",
         question: "Can concurrent calls race?",
@@ -146,7 +146,7 @@ describe("generated tour API", () => {
     await new Promise<void>((resolve) => server!.once("listening", resolve));
     const port = (server.address() as AddressInfo).port;
     const url = `http://127.0.0.1:${port}/api/sessions/${session.id}/tour`;
-    const input = { selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" } };
+    const input = { selection: { provider: "codex", model: "codex-default", reasoningEffort: "medium" } };
 
     const started = await fetch(url, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
@@ -163,11 +163,17 @@ describe("generated tour API", () => {
     });
     expect(duplicate.status).toBe(202);
 
-    const conflicting = await fetch(url, {
+    const conflictingScope = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...input, scope: "update" }),
+    });
+    expect(conflictingScope.status).toBe(409);
+
+    const conflictingSelection = await fetch(url, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ selection: { ...input.selection, reasoningEffort: "high" } }),
     });
-    expect(conflicting.status).toBe(409);
+    expect(conflictingSelection.status).toBe(409);
 
     release();
     const completed = await waitForGeneration(url, "succeeded");
@@ -203,7 +209,7 @@ describe("generated tour API", () => {
     const url = `http://127.0.0.1:${port}/api/sessions/${session.id}/tour`;
     const created = await fetch(url, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" } }),
+      body: JSON.stringify({ selection: { provider: "codex", model: "codex-default", reasoningEffort: "medium" } }),
     });
     expect(created.status).toBe(202);
     await waitForGeneration(url, "succeeded");

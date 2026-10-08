@@ -6,7 +6,7 @@ import { SessionStore } from "./sessions.js";
 import { parsePullRequestTarget } from "./targets.js";
 import { generateSessionTour, getSessionTour } from "./tourService.js";
 
-const selection: ModelSelection = { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" };
+const selection: ModelSelection = { provider: "codex", model: "codex-default", reasoningEffort: "medium" };
 
 describe("session tour generation", () => {
   it("validates, persists, and restores grounded output", async () => {

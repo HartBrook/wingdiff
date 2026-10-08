@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   evidenceBlocks,
   formatElapsedTime,
+  generationErrorNeedsModelSetup,
   generatedTourStops,
   revisionStopIndex,
   type AcquiredReviewSession,
@@ -9,6 +10,12 @@ import {
 } from "./session";
 
 describe("acquired session evidence", () => {
+  it("recommends model setup only for provider and authentication failures", () => {
+    expect(generationErrorNeedsModelSetup("Codex authentication is missing or expired. Run `codex login`, then restart Wingdiff.")).toBe(true);
+    expect(generationErrorNeedsModelSetup("Codex's account-default model is not available with this ChatGPT account.")).toBe(true);
+    expect(generationErrorNeedsModelSetup("Generated tour does not cite changed lines in src/counter.test.ts.")).toBe(false);
+  });
+
   it("formats generation elapsed time for polling feedback", () => {
     expect(formatElapsedTime(999)).toBe("0s");
     expect(formatElapsedTime(65_900)).toBe("1m 5s");

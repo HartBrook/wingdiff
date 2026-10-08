@@ -9,7 +9,7 @@ test("reviews a real-session fixture from privacy preview through an anchored dr
 
   const contextDialog = page.getByRole("dialog", { name: "Model context preview" });
   await expect(contextDialog).toBeVisible();
-  await expect(contextDialog.getByText("Codex CLI · GPT-6 Sol", { exact: true })).toBeVisible();
+  await expect(contextDialog.getByText("Codex CLI · Account default", { exact: true })).toBeVisible();
   await expect(contextDialog.getByText("1 sent · 0 excluded")).toBeVisible();
   await contextDialog.getByText("Exact context preview").click();
   await expect(contextDialog.getByText("return redis.incr(key)")).toBeVisible();
@@ -224,7 +224,7 @@ async function mockReviewApi(page: Page, options: { failFirstPublish?: boolean; 
       return route.fulfill({
         status: 200,
         contentType: "text/event-stream",
-        body: `data: ${JSON.stringify({ type: "delta", delta: "Redis INCR is atomic for concurrent callers." })}\n\ndata: ${JSON.stringify({ type: "done", provider: "codex", model: "gpt-6-sol" })}\n\n`,
+        body: `data: ${JSON.stringify({ type: "delta", delta: "Redis INCR is atomic for concurrent callers." })}\n\ndata: ${JSON.stringify({ type: "done", provider: "codex", model: "codex-default" })}\n\n`,
       });
     }
     return json(route, { error: `Unhandled test route: ${method} ${path}` }, 500);
@@ -254,7 +254,7 @@ const session = {
   status: "ready", createdAt: now, updatedAt: now,
 };
 const tour = {
-  sessionId: session.id, scope: "full", selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" }, baseSha, headSha, createdAt: now, updatedAt: now,
+  sessionId: session.id, scope: "full", selection: { provider: "codex", model: "codex-default", reasoningEffort: "medium" }, baseSha, headSha, createdAt: now, updatedAt: now,
   tour: { summary: "The counter now uses one atomic Redis operation.", findingRevisions: [], stops: [{ id: "atomic-counter", title: "Counter updates become atomic", summary: "One Redis operation replaces the read/write pair.", purpose: "Verify concurrent behavior.", anchorIds: ["file-counter", "line_new-counter"], claims: [{ text: "The new path calls Redis INCR.", kind: "fact", confidence: "high", anchorIds: ["line_new-counter"] }], prompts: ["Can concurrent callers lose increments?"] }] },
   anchors: [{ id: "file-counter", path: "src/counter.ts", kind: "file" }, ...diffLines.map((line) => ({ id: `line_${line.fingerprint}`, path: "src/counter.ts", kind: line.kind, content: line.content, ...(line.oldLine ? { oldLine: line.oldLine } : {}), ...(line.newLine ? { newLine: line.newLine } : {}) }))],
 };
@@ -267,5 +267,5 @@ const manifest = {
 };
 const providers = [{
   id: "codex", name: "Codex CLI", configured: true, transport: "cli", setupCommand: "codex login", setupDescription: "Sign in.",
-  models: [{ id: "gpt-6-sol", provider: "codex", name: "GPT-6 Sol", family: "OpenAI", description: "Balanced review.", badge: "Recommended", reasoningEfforts: ["medium"], defaultEffort: "medium" }],
+  models: [{ id: "codex-default", provider: "codex", name: "Account default", family: "Codex", description: "Uses the signed-in account default.", badge: "Recommended", reasoningEfforts: ["medium"], defaultEffort: "medium" }],
 }];

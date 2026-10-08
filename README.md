@@ -174,12 +174,12 @@ Direct API access is an optional fallback. Copy the example environment file and
 cp .env.example .env
 ```
 
-Available Codex/OpenAI models:
+Codex CLI uses the default model selected for the signed-in ChatGPT account. Wingdiff does not pass an API model ID to Codex, because API availability and ChatGPT-plan availability can differ. Codex CLI reviews offer low, medium, or high reasoning effort; if the account's default model does not accept the chosen effort, Codex reports the error and Wingdiff shows it. Named models are available through the direct OpenAI API provider:
 
 - `gpt-6-sol` — default balance of review quality, speed, and cost
 - `gpt-6-astra` — highest-capability option for difficult reviews
 - `gpt-6-luna` — fast, cost-efficient investigations
-- `gpt-5.3-codex` — Codex-tuned coding model
+- `gpt-5.3-codex` — deprecated Codex-tuned model available only through the direct OpenAI API provider
 
 Claude Sonnet 4.6 and Opus 4.6 remain available through the same provider interface. Select Codex CLI, OpenAI API, or Anthropic API plus the model and supported reasoning effort from the model control in the top bar.
 
@@ -228,6 +228,30 @@ npm run test:e2e
 ```
 
 The tests enforce the product's grounding contract: claims must resolve to real evidence, generated tours must cover every included changed file, diff ranges must be internally consistent, revision coverage must partition the full fixture tour, findings must remain attached to known stops, and staged comments must match the pinned GitHub diff side and line fingerprint. The browser suite drives a mocked real-PR session through context approval, generation, investigation, visible-code comment drafting, persistence, and navigation home.
+
+### Local live smoke tests
+
+The opt-in live suite exercises the production build with your existing `gh` and
+`codex` logins. It is separate from `npm run test:e2e`, refuses to run in CI,
+uses an isolated temporary database, and never opens the publish flow.
+
+```bash
+# Fast GitHub acquisition and rendering check; infers the PR for this branch.
+npm run test:e2e:live:acquire
+
+# Full acquisition plus real Codex guided-review generation.
+npm run test:e2e:live
+
+# Target another PR or checkout explicitly.
+WINGDIFF_LIVE_PR=https://github.com/owner/repository/pull/123 npm run test:e2e:live
+WINGDIFF_LIVE_CHECKOUT=/path/to/checkout WINGDIFF_LIVE_PR=owner/repository#123 npm run test:e2e:live
+```
+
+Run `gh auth status --hostname github.com` and `codex login status` if the
+preflight fails. Set `WINGDIFF_LIVE_KEEP_DATA=1` to retain the temporary
+database for debugging; otherwise it is deleted even after a failure. Failure
+traces and screenshots stay under `test-results/live/` and may contain source
+from the tested pull request, so keep those artifacts local.
 
 ## Keyboard shortcuts
 

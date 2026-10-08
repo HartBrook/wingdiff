@@ -8,9 +8,16 @@ import type {
 
 export const DEFAULT_SELECTION: ModelSelection = {
   provider: "codex",
-  model: "gpt-6-sol",
+  model: "codex-default",
   reasoningEffort: "medium",
 };
+
+const OPENAI_MODELS: ModelDefinition[] = [
+  model("gpt-6-sol", "GPT-6 Sol", "OpenAI", "Balanced reasoning, latency, and cost for everyday code review.", "API", ["none", "low", "medium", "high", "xhigh", "max"], "medium"),
+  model("gpt-6-astra", "GPT-6 Astra", "OpenAI", "Highest capability for architectural and high-risk reviews.", "Deep review", ["low", "medium", "high", "xhigh", "max"], "high"),
+  model("gpt-6-luna", "GPT-6 Luna", "OpenAI", "Fast, cost-efficient investigation for routine questions.", "Fast", ["none", "low", "medium", "high", "xhigh", "max"], "low"),
+  model("gpt-5.3-codex", "GPT-5.3-Codex", "OpenAI API", "Deprecated Codex model available through direct API authentication only.", "Deprecated", ["low", "medium", "high", "xhigh"], "medium"),
+];
 
 export const FALLBACK_PROVIDERS: ProviderDefinition[] = [
   {
@@ -20,7 +27,9 @@ export const FALLBACK_PROVIDERS: ProviderDefinition[] = [
     transport: "cli",
     setupCommand: "codex login",
     setupDescription: "Install Codex CLI and sign in with your ChatGPT account.",
-    models: openAIModels("codex", "Recommended"),
+    models: [
+      model("codex-default", "Account default", "Codex", "Let Codex choose the default model supported by your signed-in account.", "Recommended", ["low", "medium", "high"], "medium", "codex"),
+    ],
   },
   {
     id: "openai",
@@ -29,7 +38,7 @@ export const FALLBACK_PROVIDERS: ProviderDefinition[] = [
     transport: "api",
     setupCommand: "OPENAI_API_KEY",
     setupDescription: "Set an OpenAI API key in your shell or local .env file.",
-    models: openAIModels("openai", "API"),
+    models: OPENAI_MODELS,
   },
   {
     id: "anthropic",
@@ -151,13 +160,21 @@ export function selectedModel(providers: ProviderDefinition[], selection: ModelS
     ?? FALLBACK_PROVIDERS[0]!.models[0]!;
 }
 
-function openAIModels(provider: "codex" | "openai", solBadge: string): ModelDefinition[] {
-  return [
-    model("gpt-6-sol", "GPT-6 Sol", "OpenAI", "Balanced reasoning, latency, and cost for everyday code review.", solBadge, ["none", "low", "medium", "high", "xhigh", "max"], "medium", provider),
-    model("gpt-6-astra", "GPT-6 Astra", "OpenAI", "Highest capability for architectural and high-risk reviews.", "Deep review", ["low", "medium", "high", "xhigh", "max"], "high", provider),
-    model("gpt-6-luna", "GPT-6 Luna", "OpenAI", "Fast, cost-efficient investigation for routine questions.", "Fast", ["none", "low", "medium", "high", "xhigh", "max"], "low", provider),
-    model("gpt-5.3-codex", "GPT-5.3-Codex", "Codex", "Codex-tuned model for agentic coding and code investigation.", "Codex", ["low", "medium", "high", "xhigh"], "medium", provider),
-  ];
+export function normalizeSelection(providers: ProviderDefinition[], current: ModelSelection): ModelSelection {
+  const provider = providers.find((candidate) => candidate.id === current?.provider);
+  if (!provider) return DEFAULT_SELECTION;
+  const model = provider.models.find((candidate) => candidate.id === current.model) ?? provider.models[0];
+  if (!model) return current;
+  if (model.id === current.model && model.reasoningEfforts.includes(current.reasoningEffort)) return current;
+  return { provider: provider.id, model: model.id, reasoningEffort: model.defaultEffort };
+}
+
+export function preferredAvailableSelection(providers: ProviderDefinition[], current: ModelSelection): ModelSelection {
+  const normalized = normalizeSelection(providers, current);
+  if (providers.some((provider) => provider.id === normalized.provider && provider.configured)) return normalized;
+  const provider = providers.find((candidate) => candidate.configured);
+  const model = provider?.models[0];
+  return provider && model ? { provider: provider.id, model: model.id, reasoningEffort: model.defaultEffort } : normalized;
 }
 
 function model(
