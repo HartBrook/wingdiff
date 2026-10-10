@@ -356,7 +356,8 @@ code, kbd { font-family: var(--mono); }
 .diff-line { display: grid; min-width: 630px; min-height: 24px; grid-template-columns: 45px 20px minmax(max-content, 1fr); align-items: center; color: var(--text-2); font-family: var(--mono); font-size: 10px; line-height: 24px; }
 .diff-line--addition { background: var(--code-add); }
 .diff-line--deletion { background: var(--code-delete); }
-.diff-line.is-emphasized { background: var(--accent-soft); }
+.diff-line.is-emphasized { box-shadow: inset 2px 0 var(--accent-strong); }
+.diff-line--context.is-emphasized { background: var(--accent-soft); }
 .diff-line--addition.is-emphasized { background: var(--code-add-strong); }
 .diff-line--deletion.is-emphasized { background: var(--code-delete-strong); }
 .diff-line.is-selected { background: var(--selection); box-shadow: inset 2px 0 var(--accent); }
