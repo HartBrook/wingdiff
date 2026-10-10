@@ -49,7 +49,7 @@ describe("wingdiff CLI", () => {
     expect(() => parseCliArguments(["--checkout"])).toThrow(/requires a path/);
     expect(() => parseCliArguments(["--checkout", "one", "--checkout", "two"])).toThrow(/one checkout path/);
     expect(() => parseCliArguments(["--demo", "openai/codex#42"])).toThrow(/either demo/);
-    expect(() => parseCliArguments(["one", "two"])).toThrow(/one pull request target/);
+    expect(() => parseCliArguments(["one", "two"])).toThrow(/one review target/);
     expect(() => parseCliArguments(["doctor", "--no-open"])).toThrow(/does not accept/);
   });
 
@@ -66,6 +66,8 @@ describe("wingdiff CLI", () => {
     const url = launchUrl("http://127.0.0.1:4173", {
       demo: false,
       target: {
+        platform: "github",
+        host: "github.com",
         owner: "openai",
         repository: "codex",
         number: 42,
@@ -108,6 +110,17 @@ describe("wingdiff CLI", () => {
     ]);
   });
 
+  it("infers the merge request for a GitLab checkout", async () => {
+    const calls: string[] = [];
+    const target = await inferPullRequestTarget("/work/service", async (command, arguments_) => {
+      calls.push(`${command} ${arguments_.join(" ")}`);
+      if (command === "git") return "git@gitlab.com:acme/platform/service.git\n";
+      return "https://gitlab.com/acme/platform/service/-/merge_requests/42\n";
+    });
+    expect(target).toBe("https://gitlab.com/acme/platform/service/-/merge_requests/42");
+    expect(calls).toContain("glab mr view --output json --jq .web_url");
+  });
+
   it("falls back to the launcher when no current pull request can be inferred", async () => {
     await expect(inferPullRequestTarget("/tmp", async () => { throw new Error("not a repository"); }))
       .resolves.toBeUndefined();
@@ -117,13 +130,35 @@ describe("wingdiff CLI", () => {
     const checks = await diagnoseEnvironment("/work/codex", {}, async (command, arguments_) => {
       if (command === "codex") throw new Error("missing");
       if (command === "gh" && arguments_[0] === "auth") throw new Error("logged out");
+      if (command === "glab" && arguments_[0] === "--version") return "glab 1.100.0";
       return "ok";
     });
     expect(checks).toEqual([
       { label: "Git", ok: true, detail: "installed" },
-      { label: "GitHub CLI", ok: true, detail: "installed" },
-      { label: "GitHub authentication", ok: false, detail: "not authenticated; run: gh auth login" },
+      { label: "Code host", ok: true, detail: "GitHub needs: gh auth login; GitLab authenticated (gitlab.com)" },
       { label: "AI provider", ok: false, detail: "not configured; run: codex login" },
     ]);
+  });
+
+  it("checks each trusted GitLab host separately so one stale login does not hide another", async () => {
+    const checks = await diagnoseEnvironment("/work/codex", { WINGDIFF_GITLAB_HOSTS: "gitlab.example.com" }, async (command, arguments_) => {
+      const hostnameIndex = arguments_.indexOf("--hostname");
+      if (command === "glab" && arguments_[0] === "auth" && arguments_[hostnameIndex + 1] !== "gitlab.example.com") throw new Error("stale");
+      if (command === "glab" && arguments_[0] === "--version") return "glab 1.100.0";
+      if (command === "gh" && arguments_[0] === "auth") throw new Error("logged out");
+      return "ok";
+    });
+    expect(checks[1]).toEqual({ label: "Code host", ok: true, detail: "GitHub needs: gh auth login; GitLab authenticated (gitlab.example.com)" });
+  });
+
+  it("reports an authenticated but outdated GitLab CLI as unavailable", async () => {
+    const checks = await diagnoseEnvironment("/work/service", {}, async (command, arguments_) => {
+      if (command === "gh" || command === "codex") throw new Error("missing");
+      if (command === "glab" && arguments_[0] === "--version") return "glab 1.99.0";
+      return "ok";
+    });
+    expect(checks[1]).toEqual({
+      label: "Code host", ok: false, detail: "GitLab needs glab 1.100.0+ (found 1.99.0)",
+    });
   });
 });

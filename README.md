@@ -4,18 +4,20 @@
 [![CodeQL](https://github.com/HartBrook/wingdiff/actions/workflows/codeql.yml/badge.svg)](https://github.com/HartBrook/wingdiff/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-**Understand a pull request before you approve it.**
+**Understand a pull or merge request before you approve it.**
 
-Wingdiff turns a pull request into a guided tour, ordered by behavior, data flow, and risk instead of by file name. Every explanation links to the exact lines that support it. You investigate, you write the comments, and you publish one review to GitHub as yourself.
+Wingdiff turns a GitHub pull request or GitLab merge request into a guided tour, ordered by behavior, data flow, and risk instead of by file name. Every explanation links to the exact lines that support it. You investigate, you write the comments, and you publish one review to the code host as yourself.
 
 Free and open source under the MIT License. Runs entirely on your machine with the model access you already have.
 
 ```bash
 npx wingdiff https://github.com/owner/repository/pull/123
+# or
+npx wingdiff https://gitlab.com/group/repository/-/merge_requests/123
 ```
 
 > [!NOTE]
-> Wingdiff is pre-1.0 software. Review the generated evidence and final GitHub
+> Wingdiff is pre-1.0 software. Review the generated evidence and final code-host
 > payload before publishing.
 
 ![Wingdiff guided review interface](./docs/images/wingdiff-demo.png)
@@ -24,12 +26,12 @@ npx wingdiff https://github.com/owner/repository/pull/123
 
 AI review bots made review comments cheap. They did not make changes easier to understand. Pull requests keep getting larger, more of them are written by coding agents, and the person who approves still owns the outcome. Wingdiff is built for that person.
 
-- **No bot comments on your pull request.** Wingdiff never posts on its own and never approves anything. Its findings are for you to confirm, dismiss, or turn into a comment in your own words. Nothing reaches GitHub until you publish, and it arrives as your review.
+- **No bot comments on your change request.** Wingdiff never posts on its own and never approves anything. Its findings are for you to confirm, dismiss, or turn into a comment in your own words. Nothing reaches GitHub or GitLab until you publish, and it arrives as your review.
 - **Every explanation is checked against the diff.** Wingdiff rejects a generated tour unless every claim and finding resolves to an exact line range in the pinned diff, and every changed file is covered. The raw diff is always one keystroke away.
 - **Coverage you can trust.** Wingdiff records which tour stops you actually visited, not which files scrolled past. Approving with unseen stops, open flags, or high-severity findings requires an explicit acknowledgement.
 - **Built for large and agent-written changes.** The tour reconstructs the story a pull request often arrives without: what behavior changed, the path from entry point to effect, and where it can fail. When the author pushes again, **Since your review** shows only what changed since your last checkpoint.
 - **Free, open source, and local.** No Wingdiff account, seat license, or per-review fee, and no review service holding a copy of your code. Wingdiff runs on loopback and uses your existing Codex sign-in or your own OpenAI or Anthropic key, so your organization's model and data policies still apply.
-- **Read-only by design.** Wingdiff fetches pull requests through the GitHub CLI into private Git refs. It never checks out the pull request, touches your working tree, or runs pull-request code.
+- **Read-only by design.** Wingdiff fetches pull or merge requests through the host CLI into private Git refs. It never checks out the change, touches your working tree, or runs untrusted code.
 
 ### Wingdiff and automated reviewers
 
@@ -58,7 +60,7 @@ Browse mode shows the full diff at any time. Review progress, investigation note
 
 - [Git](https://git-scm.com/downloads)
 - [Node.js](https://nodejs.org/) 22.13+ (excluding Node 23) or Node.js 24+ when using the npm package
-- [GitHub CLI](https://cli.github.com/) authenticated with `gh auth login` for real pull requests
+- [GitHub CLI](https://cli.github.com/) authenticated with `gh auth login` for GitHub pull requests, or [GitLab CLI](https://docs.gitlab.com/cli/) 1.100 or later authenticated with `glab auth login` for GitLab merge requests. Self-managed GitLab servers must be version 19.2 or later.
 - [Codex](https://developers.openai.com/learn/codex) CLI authenticated with `codex login` for the default model transport, or an optional direct provider API key
 
 Wingdiff supports macOS, Linux, and Windows. Its server binds to loopback by
@@ -68,10 +70,12 @@ default and is not intended to be deployed as a public web service.
 
 ```bash
 npx wingdiff https://github.com/owner/repository/pull/123
+# or
+npx wingdiff https://gitlab.com/group/repository/-/merge_requests/123
 ```
 
 Wingdiff starts on a loopback address and opens an authenticated local URL. It
-uses the current checkout when it matches the pull request, or creates a private
+uses the current checkout when it matches the repository, or creates a private
 bare repository cache when it does not. Inside a matching checkout, a pull
 request number is enough:
 
@@ -90,9 +94,9 @@ npm install --global wingdiff
 wingdiff 123
 ```
 
-Run `wingdiff` with no arguments to open the pull request associated with the
-current branch, or open the launcher when the branch has no pull request. Run
-`wingdiff doctor` for actionable GitHub and model-provider setup checks.
+Run `wingdiff` with no arguments to open the pull or merge request associated with the
+current branch, or open the launcher when the branch has no review request. Run
+`wingdiff doctor` for actionable code-host and model-provider setup checks.
 
 ### Run from source
 
@@ -105,7 +109,7 @@ npm ci
 npm run wingdiff -- --demo
 ```
 
-Pass the checkout that owns the pull request when launching from the Wingdiff
+Pass the checkout that owns the review request when launching from the Wingdiff
 source directory:
 
 ```bash
@@ -125,20 +129,27 @@ Use `npm run dev` when developing the UI without automatic browser launch.
 
 ## How it works
 
-### Read-only PR acquisition
+### Read-only change acquisition
 
-For a real pull request, use an authenticated GitHub CLI:
+For a GitHub pull request, use an authenticated GitHub CLI:
 
 ```bash
 gh auth status
 npx wingdiff https://github.com/owner/repository/pull/123
 ```
 
-Wingdiff reads metadata through `gh`, fetches missing objects into private `refs/wingdiff/pull/...` references, and builds the full PR diff from the exact pinned merge-base/head pair GitHub compares. When no matching checkout is available, it keeps a private bare repository cache beside its application data. Update reviews use the exact reviewed-head/current-head pair. It does not checkout the PR, modify the worktree or index, or execute pull-request code. Acquired metadata, evidence, generated tours, and review checkpoints are stored in a local SQLite database. Set `WINGDIFF_DATA_DIR` to choose its location.
+For a GitLab merge request, use GitLab 19.2 or later, authenticate `glab`, and pass its URL (nested groups are supported). Self-managed HTTPS hosts must be listed, comma-separated, in `WINGDIFF_GITLAB_HOSTS` so `glab` credentials are never sent to an untrusted host:
+
+```bash
+glab auth status --hostname gitlab.com
+npx wingdiff https://gitlab.com/group/repository/-/merge_requests/123
+```
+
+Wingdiff reads metadata through `gh` or `glab`, fetches missing objects into private `refs/wingdiff/...` references, and builds the full diff from the exact pinned merge-base/head pair the host compares. When no matching checkout is available, it keeps a private bare repository cache beside its application data. Update reviews use the exact reviewed-head/current-head pair. It does not check out the change, modify the worktree or index, or execute change-request code. Acquired metadata, evidence, generated tours, and review checkpoints are stored in a local SQLite database. Set `WINGDIFF_DATA_DIR` to choose its location.
 
 From the real-PR Summary, choose a configured model and select **Generate guided review**. The model organizes the validated diff into semantic stops, ranks concrete findings by severity, and references opaque evidence anchors. Wingdiff rejects the result unless every changed file is covered and every claim or finding resolves to an exact known anchor. Generated tours are pinned to the acquired head SHA and can be resumed locally.
 
-Before generation, Wingdiff shows the exact model context, provider transport, changed files, repository instructions, exclusions, size, and content fingerprint. The immutable manifest, fingerprint, and evidence-anchor snapshot are stored with the tour; a changed manifest invalidates the resumable tour. Model-facing evidence references use compact request-local aliases constrained to the supplied anchor set, then map back to immutable evidence fingerprints before validation and storage. Potentially sensitive, generated, and vendor files are marked; common key and environment-file patterns are excluded by default. Exclusions are editable local globs. `AGENTS.md`, `CONTRIBUTING.md`, and `.github/CONTRIBUTING.md` are included when present, capped at 20,000 characters each. Context over 750,000 characters is blocked until reduced.
+Before generation, Wingdiff shows the exact model context, provider transport, changed files, repository instructions, exclusions, size, and content fingerprint. The immutable manifest, fingerprint, and evidence-anchor snapshot are stored with the tour; a changed manifest invalidates the resumable tour. Model-facing evidence references use compact request-local aliases constrained to the supplied anchor set, then map back to immutable evidence fingerprints before validation and storage. Potentially sensitive, generated, and vendor files are marked; common key and environment-file patterns are excluded by default. Exclusions are editable local globs. `AGENTS.md`, `CONTRIBUTING.md`, `.github/CONTRIBUTING.md`, and `.gitlab/CONTRIBUTING.md` are included when present, capped at 20,000 characters each. Context over 750,000 characters is blocked until reduced.
 
 Guided-tour generation runs as a local background job. The browser polls its
 status once per second, shows elapsed time and the configured deadline, and can
@@ -146,13 +157,13 @@ reconnect to an in-progress generation after a page refresh.
 
 Investigation requests identify a persisted session and stop rather than sending authoritative evidence from the browser. The server reconstructs the stop, adds bounded base/head source windows and related symbol references from the pinned Git objects, and sends that grounded context to the selected provider.
 
-Comments drafted from a real tour are also pinned to the acquired diff. Wingdiff records the GitHub side and exact line range, verifies the terminal line fingerprint against the canonical pull-request diff, and stores accepted drafts in the local SQLite session. A stale, cross-hunk, wrong-side, or non-diff anchor is rejected before it can enter the review queue.
+Comments drafted from a real tour are also pinned to the acquired diff. Wingdiff records the host side and exact line range, verifies the terminal line fingerprint against the canonical diff, and stores accepted drafts in the local SQLite session. A stale, cross-hunk, wrong-side, or non-diff anchor is rejected before it can enter the review queue.
 
-The real-PR **Review desk** presents the exact summary, disposition, and inline-comment batch before an explicit publish action. Approval with unseen stops, flags, high-severity findings, or failed checks requires explicit acknowledgement. Immediately before publishing, Wingdiff rereads the pull request through the authenticated GitHub CLI, blocks a moved or closed head, and revalidates every stored anchor. It reserves the pinned head, then sends one batch review using `commit_id`, `line`, `side`, and optional multi-line coordinates. A successful GitHub receipt is saved locally. Concurrent publication is blocked, and an interrupted or ambiguous request must be reconciled against GitHub before the reviewer can enable a retry. The authenticated GitHub identity needs pull-request write permission to publish.
+The **Review desk** presents the exact summary, disposition, and inline-comment batch before an explicit publish action. Approval with unseen stops, flags, high-severity findings, or failed checks requires explicit acknowledgement. Immediately before publishing, Wingdiff rereads the request through the authenticated host CLI, blocks a moved or closed head, and revalidates every stored anchor. GitHub receives one batch review. On GitLab, Wingdiff creates pinned draft notes, rechecks the diff version, bulk-publishes them with the summary and reviewer state, and uses the SHA-pinned native approval endpoint for approvals. GitLab's bulk-publish operation has no revision precondition, so an author push racing the final request can still leave comments attached to an outdated diff; GitLab displays those comments as outdated. A successful receipt is saved locally. Concurrent publication is blocked, and an interrupted or ambiguous request must be reconciled against the code host before the reviewer can enable a retry. The authenticated identity needs permission to comment and, for approval, to approve the request.
 
 ### Review author updates
 
-After visiting every stop, select **Complete review** to create an explicit checkpoint at the current head SHA. **Check for updates** then reacquires the pull request without checking it out or running its code. If the author pushed a new head, Wingdiff opens a new local session in **Since your review** mode using the exact reviewed-head → current-head diff.
+After visiting every stop, select **Complete review** to create an explicit checkpoint at the current head SHA. **Check for updates** then reacquires the pull or merge request without checking it out or running its code. If the author pushed a new head, Wingdiff opens a new local session in **Since your review** mode using the exact reviewed-head → current-head diff.
 
 The **Entire PR** scope remains available as an independent backstop. Update and full-PR tours, progress, positions, and completion checkpoints are persisted separately. Previously reviewed areas that do not intersect the update are labeled as reviewed and unchanged. Every acquired revision is retained under a private `refs/wingdiff/pull/.../revisions/...` reference so a later force-push does not erase the comparison baseline.
 
@@ -227,7 +238,7 @@ npx playwright install chromium # once per machine
 npm run test:e2e
 ```
 
-The tests enforce the product's grounding contract: claims must resolve to real evidence, generated tours must cover every included changed file, diff ranges must be internally consistent, revision coverage must partition the full fixture tour, findings must remain attached to known stops, and staged comments must match the pinned GitHub diff side and line fingerprint. The browser suite drives a mocked real-PR session through context approval, generation, investigation, visible-code comment drafting, persistence, and navigation home.
+The tests enforce the product's grounding contract: claims must resolve to real evidence, generated tours must cover every included changed file, diff ranges must be internally consistent, revision coverage must partition the full fixture tour, findings must remain attached to known stops, and staged comments must match the pinned host diff side and line fingerprint. The browser suite drives a mocked real-request session through context approval, generation, investigation, visible-code comment drafting, persistence, and navigation home.
 
 ### Local live smoke tests
 

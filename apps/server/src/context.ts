@@ -7,7 +7,7 @@ import type { ChangedFileEvidence, PullRequestEvidence } from "./diff.js";
 import type { ReviewSession, SessionStore, TourScope } from "./sessions.js";
 import { buildTourGenerationInput, buildTourPrompt, prepareModelTourInput, type PriorTourFinding, type TourGenerationInput } from "./tour.js";
 
-const INSTRUCTION_PATHS = ["AGENTS.md", "CONTRIBUTING.md", ".github/CONTRIBUTING.md"];
+const INSTRUCTION_PATHS = ["AGENTS.md", "CONTRIBUTING.md", ".github/CONTRIBUTING.md", ".gitlab/CONTRIBUTING.md"];
 const MAX_INSTRUCTION_CHARACTERS = 20_000;
 const MAX_MODEL_CONTEXT_CHARACTERS = 750_000;
 const DEFAULT_EXCLUSIONS = ["**/.env*", "**/*.pem", "**/*.key"];

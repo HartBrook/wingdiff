@@ -3,7 +3,7 @@ import type { Server } from "node:http";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "./app.js";
 import type { PullRequestEvidence } from "./diff.js";
 import type { PullRequestMetadata } from "./github.js";
@@ -16,6 +16,7 @@ let store: SessionStore | undefined;
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   if (server) await new Promise<void>((resolve, reject) => server!.close((error) => error ? reject(error) : resolve()));
   store?.close();
   server = undefined;
@@ -363,6 +364,25 @@ describe("generated tour API", () => {
       body: JSON.stringify({ scope: "full", activeStopId: "stale-stop" }),
     });
     expect(stale.status).toBe(400);
+  });
+
+  it("returns a JSON error when a saved review's GitLab host is no longer trusted", async () => {
+    vi.stubEnv("WINGDIFF_GITLAB_HOSTS", "gitlab.example.com");
+    store = new SessionStore(":memory:");
+    const gitLabTarget = parsePullRequestTarget("https://gitlab.example.com/acme/service/-/merge_requests/7");
+    const session = store.upsertReadySession(gitLabTarget, metadata, evidence, process.cwd());
+    vi.stubEnv("WINGDIFF_GITLAB_HOSTS", "");
+    const app = createApp({}, { sessionStore: store, providers: new Map(), cwd: process.cwd() });
+    server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => server!.once("listening", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    const response = await fetch(`http://127.0.0.1:${port}/api/sessions/${session.id}`);
+    expect(response.status).toBe(500);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(await response.json()).toEqual({
+      error: "This saved review is for gitlab.example.com, which is not listed in WINGDIFF_GITLAB_HOSTS. Add it to reopen the review.",
+    });
   });
 
   it("previews and persists the exact model-context boundary", async () => {

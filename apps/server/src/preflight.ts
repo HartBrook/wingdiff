@@ -1,9 +1,11 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import type { PullRequestTarget } from "./targets.js";
-import { repositoryFromRemoteUrl } from "./targets.js";
+import { repositoryIdentityFromRemoteUrl, targetRepositoryPath } from "./targets.js";
 
 const execFile = promisify(execFileCallback);
+
+export const MINIMUM_GITLAB_CLI_VERSION = "1.100.0";
 
 export type CheckoutStatus = "matched" | "managed" | "different" | "not-found";
 
@@ -13,8 +15,12 @@ export interface LocalTargetPreflight {
     path?: string;
     repository?: string;
   };
-  githubCli: {
+  hostingCli: {
+    provider: "github" | "gitlab";
+    command: "gh" | "glab";
     installed: boolean;
+    supported: boolean;
+    version?: string;
     authenticated: boolean;
   };
   networkChecked: false;
@@ -27,12 +33,45 @@ export async function inspectLocalTarget(
   cwd: string,
   runCommand: CommandRunner = defaultCommandRunner,
 ): Promise<LocalTargetPreflight> {
-  const [checkout, githubCli, githubAuth] = await Promise.all([
+  const command = target.platform === "gitlab" ? "glab" : "gh";
+  const authArguments = ["auth", "status", "--hostname", target.host];
+  const [checkout, cliVersionOutput, cliAuthenticated] = await Promise.all([
     inspectCheckout(target, cwd, runCommand),
-    commandExists("gh", ["--version"], cwd, runCommand),
-    commandExists("gh", ["auth", "status", "--hostname", "github.com"], cwd, runCommand),
+    commandOutput(command, ["--version"], cwd, runCommand),
+    commandExists(command, authArguments, cwd, runCommand),
   ]);
-  return { checkout, githubCli: { installed: githubCli, authenticated: githubAuth }, networkChecked: false };
+  const cliInstalled = cliVersionOutput !== undefined;
+  const version = target.platform === "gitlab" && cliVersionOutput
+    ? parseGitLabCliVersion(cliVersionOutput)
+    : undefined;
+  const supported = target.platform === "github"
+    || Boolean(version && versionAtLeast(version, MINIMUM_GITLAB_CLI_VERSION));
+  return {
+    checkout,
+    hostingCli: {
+      provider: target.platform,
+      command,
+      installed: cliInstalled,
+      supported,
+      ...(version ? { version } : {}),
+      authenticated: cliAuthenticated,
+    },
+    networkChecked: false,
+  };
+}
+
+export function parseGitLabCliVersion(output: string): string | undefined {
+  return /(?:^|\s)v?(\d+\.\d+\.\d+)(?:\s|$)/m.exec(output)?.[1];
+}
+
+export function versionAtLeast(actual: string, minimum: string): boolean {
+  const actualParts = actual.split(".").map(Number);
+  const minimumParts = minimum.split(".").map(Number);
+  for (let index = 0; index < Math.max(actualParts.length, minimumParts.length); index += 1) {
+    const difference = (actualParts[index] ?? 0) - (minimumParts[index] ?? 0);
+    if (difference !== 0) return difference > 0;
+  }
+  return true;
 }
 
 async function inspectCheckout(
@@ -45,10 +84,13 @@ async function inspectCheckout(
       resolveRepositoryPath(cwd, runCommand),
       runCommand("git", ["config", "--get", "remote.origin.url"], cwd),
     ]);
-    const repository = repositoryFromRemoteUrl(remote);
-    const expected = `${target.owner}/${target.repository}`.toLowerCase();
+    const identity = repositoryIdentityFromRemoteUrl(remote);
+    const repository = identity?.path;
+    const expected = targetRepositoryPath(target).toLowerCase();
     return {
-      status: repository?.toLowerCase() === expected ? "matched" : "different",
+      status: identity?.platform === target.platform
+        && identity.host.toLowerCase() === target.host.toLowerCase()
+        && repository?.toLowerCase() === expected ? "matched" : "different",
       path: repositoryPath,
       ...(repository ? { repository } : {}),
     };
@@ -76,6 +118,19 @@ async function commandExists(
     return true;
   } catch {
     return false;
+  }
+}
+
+async function commandOutput(
+  command: string,
+  arguments_: string[],
+  cwd: string,
+  runCommand: CommandRunner,
+): Promise<string | undefined> {
+  try {
+    return await runCommand(command, arguments_, cwd);
+  } catch {
+    return undefined;
   }
 }
 
