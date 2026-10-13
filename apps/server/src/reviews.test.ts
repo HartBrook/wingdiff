@@ -3,7 +3,10 @@ import { publishPullRequestReview, submitSessionReview } from "./reviews.js";
 import { SessionStore, type DraftReviewComment } from "./sessions.js";
 import { parsePullRequestTarget } from "./targets.js";
 import type { PullRequestMetadata } from "./github.js";
-import type { PullRequestEvidence } from "./diff.js";
+import { createHash } from "node:crypto";
+import { validateDraftComment } from "./comments.js";
+import { parseUnifiedDiff, type PullRequestEvidence } from "./diff.js";
+import { publishGitLabMergeRequestReview } from "./gitlab.js";
 
 const target = parsePullRequestTarget("https://github.com/openai/codex/pull/42");
 const headSha = "b".repeat(40);
@@ -36,6 +39,85 @@ describe("GitHub review submission", () => {
       publishReview: async () => { published = true; return { id: 1, url: "url", state: "APPROVED" }; },
     })).rejects.toThrow(/head changed/);
     expect(published).toBe(false);
+    store.close();
+  });
+
+  it("blocks GitLab publishing when the target branch moved but the head did not", async () => {
+    const gitLabTarget = parsePullRequestTarget("https://gitlab.com/acme/service/-/merge_requests/42");
+    const store = new SessionStore(":memory:");
+    const session = store.upsertReadySession(gitLabTarget, metadata(), evidence());
+    let published = false;
+    await expect(submitSessionReview(session, store, "/work/service", { body: "Looks good.", event: "APPROVE" }, {
+      readMetadata: async () => ({ ...metadata(), base: { ref: "main", sha: "d".repeat(40) } }),
+      publishReview: async () => { published = true; return { id: 1, url: "url", state: "APPROVED" }; },
+    })).rejects.toThrow(/target branch moved from aaaaaaa to ddddddd/);
+    expect(published).toBe(false);
+    store.close();
+  });
+
+  it("passes the pinned GitLab diff refs to publication", async () => {
+    const gitLabTarget = parsePullRequestTarget("https://gitlab.com/acme/service/-/merge_requests/42");
+    const diffRefs = { baseSha: "e".repeat(40), startSha: "a".repeat(40), headSha };
+    const store = new SessionStore(":memory:");
+    const session = store.upsertReadySession(gitLabTarget, { ...metadata(), diffRefs }, evidence());
+    let pinned: unknown;
+    await submitSessionReview(session, store, "/work/service", { body: "Looks good.", event: "APPROVE" }, {
+      readMetadata: async () => ({ ...metadata(), diffRefs }),
+      publishReview: async (_target, _cwd, revisions) => { pinned = revisions; return { id: 1, url: "url", state: "APPROVED" }; },
+    });
+    expect(pinned).toEqual({ headSha, startSha: "a".repeat(40), baseSha: "e".repeat(40) });
+    store.close();
+  });
+
+  it("builds GitLab line ranges from each endpoint's own line kind and the file's new path", async () => {
+    const gitLabTarget = parsePullRequestTarget("https://gitlab.com/acme/service/-/merge_requests/42");
+    const renamed = parseUnifiedDiff(`diff --git a/src/old.ts b/src/new.ts
+similarity index 70%
+rename from src/old.ts
+rename to src/new.ts
+--- a/src/old.ts
++++ b/src/new.ts
+@@ -1,2 +1,3 @@
+ export const first = 1;
+-export const second = 2;
++export const second = 3;
++export const third = 4;
+`, "a".repeat(40), headSha);
+    const store = new SessionStore(":memory:");
+    const session = store.upsertReadySession(gitLabTarget, metadata(), renamed);
+    const lines = renamed.files[0]!.hunks[0]!.lines;
+    const comment = (side: "LEFT" | "RIGHT", startLine: number, endLine: number) => validateDraftComment({
+      stopId: "rename", evidenceId: "rename-file", path: "src/new.ts", side, startLine, endLine, body: `${side} range`, severity: "low",
+      fingerprint: lines.find((line) => (side === "RIGHT" ? line.newLine : line.oldLine) === endLine)!.fingerprint,
+    }, renamed);
+    store.saveDraftComment(session.id, comment("RIGHT", 1, 3));
+    store.saveDraftComment(session.id, comment("LEFT", 1, 2));
+
+    const notes: Array<{ note: string; position: { line_range: unknown } }> = [];
+    await submitSessionReview(session, store, "/work/service", { body: "Ranges.", event: "COMMENT" }, {
+      readMetadata: async () => metadata(),
+      publishReview: (reviewTarget, cwd, pinned, draft, comments) => publishGitLabMergeRequestReview(reviewTarget, cwd, pinned, draft, comments, async (arguments_, _cwd, input) => {
+        if (arguments_.some((value) => value.endsWith("/versions"))) {
+          return JSON.stringify([{ base_commit_sha: "a".repeat(40), start_commit_sha: "a".repeat(40), head_commit_sha: headSha }]);
+        }
+        if (arguments_.some((value) => value.endsWith("/draft_notes?per_page=100"))) return "[]";
+        if (arguments_.some((value) => value.endsWith("/draft_notes"))) {
+          notes.push(JSON.parse(input!));
+          return JSON.stringify({ id: notes.length });
+        }
+        return "";
+      }),
+    });
+
+    const pathHash = createHash("sha1").update("src/new.ts").digest("hex");
+    expect(notes.find((note) => note.note === "RIGHT range")!.position.line_range).toEqual({
+      start: { line_code: `${pathHash}_1_1`, type: "old", old_line: 1, new_line: 1 },
+      end: { line_code: `${pathHash}_3_3`, type: "new", new_line: 3 },
+    });
+    expect(notes.find((note) => note.note === "LEFT range")!.position.line_range).toEqual({
+      start: { line_code: `${pathHash}_1_1`, type: "old", old_line: 1, new_line: 1 },
+      end: { line_code: `${pathHash}_2_2`, type: "old", old_line: 2 },
+    });
     store.close();
   });
 

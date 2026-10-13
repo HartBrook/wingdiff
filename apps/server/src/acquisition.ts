@@ -1,9 +1,10 @@
 import { readDiffEvidence, type PullRequestEvidence } from "./diff.js";
 import { acquirePinnedRevisions, type PinnedRevisions } from "./git.js";
-import { readPullRequestMetadata, type PullRequestMetadata } from "./github.js";
-import { inspectLocalTarget, type LocalTargetPreflight } from "./preflight.js";
+import type { PullRequestMetadata } from "./github.js";
+import { readCodeReviewMetadata } from "./hosting.js";
+import { inspectLocalTarget, MINIMUM_GITLAB_CLI_VERSION, type LocalTargetPreflight } from "./preflight.js";
 import { SessionStore, type ReviewSession } from "./sessions.js";
-import type { PullRequestTarget } from "./targets.js";
+import { codeHostName, targetRepositoryKey, type PullRequestTarget } from "./targets.js";
 
 export type AcquisitionStage = "preflight" | "metadata" | "revisions" | "evidence" | "persisting" | "update-evidence";
 
@@ -22,7 +23,7 @@ export interface AcquisitionDependencies {
 
 const defaultDependencies: AcquisitionDependencies = {
   inspectTarget: inspectLocalTarget,
-  readMetadata: readPullRequestMetadata,
+  readMetadata: readCodeReviewMetadata,
   acquireRevisions: acquirePinnedRevisions,
   readEvidence: readDiffEvidence,
 };
@@ -44,8 +45,8 @@ export async function refreshReviewSession(
   onStage: (stage: AcquisitionStage) => void = () => undefined,
   dependencies: AcquisitionDependencies = defaultDependencies,
 ): Promise<ReviewRefreshResult> {
-  const baseline = store.latestCheckpointForPullRequest(`${target.owner}/${target.repository}`, target.number);
-  if (!baseline) throw new Error("Complete this pull request review before checking for author updates.");
+  const baseline = store.latestCheckpointForPullRequest(targetRepositoryKey(target), target.number);
+  if (!baseline) throw new Error("Complete this review before checking for author updates.");
 
   const acquired = await acquireReviewArtifacts(target, cwd, store, onStage, dependencies);
   if (acquired.session.metadata.head.sha === baseline.reviewedHeadSha) {
@@ -57,7 +58,7 @@ export async function refreshReviewSession(
     repositoryRoot: acquired.revisions.repositoryRoot,
     base: {
       sha: baseline.reviewedHeadSha,
-      ref: `refs/wingdiff/pull/${target.number}/revisions/${baseline.reviewedHeadSha}`,
+      ref: `refs/wingdiff/${target.platform === "gitlab" ? "merge-request" : "pull"}/${target.number}/revisions/${baseline.reviewedHeadSha}`,
     },
     head: acquired.revisions.head,
   });
@@ -81,11 +82,16 @@ async function acquireReviewArtifacts(
     const actual = preflight.checkout.repository ? ` Current checkout: ${preflight.checkout.repository}.` : "";
     throw new Error(`Launch Wingdiff from a checkout of ${target.owner}/${target.repository}.${actual}`);
   }
-  if (!preflight.githubCli.installed) {
-    throw new Error("GitHub CLI is not installed. Install gh, then run: gh auth login");
+  const hostName = codeHostName(target);
+  if (!preflight.hostingCli.installed) {
+    throw new Error(`${hostName} CLI is not installed. Install ${preflight.hostingCli.command}, then run: ${preflight.hostingCli.command} auth login`);
   }
-  if (!preflight.githubCli.authenticated) {
-    throw new Error("GitHub CLI is not authenticated for github.com. Run: gh auth login");
+  if (!preflight.hostingCli.supported) {
+    const found = preflight.hostingCli.version ? ` Found ${preflight.hostingCli.version}.` : "";
+    throw new Error(`GitLab CLI ${MINIMUM_GITLAB_CLI_VERSION} or later is required.${found} Upgrade glab and try again.`);
+  }
+  if (!preflight.hostingCli.authenticated) {
+    throw new Error(`${hostName} CLI is not authenticated for ${target.host}. Run: ${preflight.hostingCli.command} auth login${target.host === "gitlab.com" || target.host === "github.com" ? "" : ` --hostname ${target.host}`}`);
   }
 
   onStage("metadata");
@@ -96,9 +102,15 @@ async function acquireReviewArtifacts(
   const evidence = await dependencies.readEvidence(revisions);
   const expectedBaseSha = revisions.comparisonBase?.sha ?? revisions.base.sha;
   if (evidence.baseSha !== expectedBaseSha || evidence.headSha !== metadata.head.sha) {
-    throw new Error("Acquired evidence does not match the pull request's pinned revisions.");
+    throw new Error("Acquired evidence does not match the review request's pinned revisions.");
   }
 
   onStage("persisting");
-  return { session: store.upsertReadySession(target, metadata, evidence, revisions.repositoryRoot), revisions };
+  const normalizedMetadata = {
+    ...metadata,
+    additions: evidence.additions,
+    deletions: evidence.deletions,
+    filesChanged: evidence.files.length,
+  };
+  return { session: store.upsertReadySession(target, normalizedMetadata, evidence, revisions.repositoryRoot), revisions };
 }

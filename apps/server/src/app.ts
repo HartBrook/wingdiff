@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
-import express from "express";
+import express, { type ErrorRequestHandler } from "express";
 import { acquireReviewSession, refreshReviewSession, type AcquisitionDependencies } from "./acquisition.js";
 import { validateDraftComment } from "./comments.js";
 import { buildSessionGenerationContext } from "./context.js";
@@ -8,7 +8,7 @@ import { createProviders, publicProviders, validateSelection } from "./providers
 import type { ModelSelection, ProviderId, TextProvider } from "./providers/types.js";
 import { SessionStore } from "./sessions.js";
 import type { InvestigationEntry, ReviewDraft, ReviewProgressStatus, TourScope } from "./sessions.js";
-import { parsePullRequestTarget } from "./targets.js";
+import { codeHostName, parsePullRequestTarget } from "./targets.js";
 import { generateSessionTour, getSessionTour } from "./tourService.js";
 import { validateInvestigationContext } from "./validation.js";
 import { submitSessionReview, type ReviewSubmissionDependencies } from "./reviews.js";
@@ -70,7 +70,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
       const target = parsePullRequestTarget(request.body?.input, request.body?.checkoutRepository);
       response.json({ target });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "The pull request target is not valid.";
+      const message = error instanceof Error ? error.message : "The review target is not valid.";
       response.status(400).json({ error: message });
     }
   });
@@ -81,7 +81,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
       const preparation = await prepareRepositoryTarget(target, cwd, environment, options.repositoryDependencies);
       response.json({ target, environment: preparation });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "The pull request target could not be prepared.";
+      const message = error instanceof Error ? error.message : "The review target could not be prepared.";
       response.status(400).json({ error: message });
     }
   });
@@ -106,7 +106,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
       const session = await acquireReviewSession(target, repositoryPath, sessionStore, undefined, options.acquisitionDependencies);
       response.status(201).json({ session });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Wingdiff could not acquire this pull request.";
+      const message = error instanceof Error ? error.message : "Wingdiff could not acquire this review request.";
       response.status(400).json({ error: message });
     }
   });
@@ -316,8 +316,8 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
       response.status(404).json({ error: "Review session not found." });
       return;
     }
-    if (request.body?.verifiedGitHub !== true) {
-      response.status(400).json({ error: "Confirm that GitHub does not contain the review before allowing a retry." });
+    if (request.body?.verifiedCodeHost !== true && request.body?.verifiedGitHub !== true) {
+      response.status(400).json({ error: `Confirm that ${codeHostName(session.target)} does not contain the review before allowing a retry.` });
       return;
     }
     if (!sessionStore.clearUncertainReviewPublication(session.id, session.metadata.head.sha)) {
@@ -371,7 +371,7 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
       );
       response.json(result);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Wingdiff could not check for pull request updates.";
+      const message = error instanceof Error ? error.message : "Wingdiff could not check for author updates.";
       response.status(400).json({ error: message });
     }
   });
@@ -585,6 +585,17 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
       investigationError(response, error);
     }
   });
+
+  // Routes that throw outside a try block (e.g. a saved review whose host is no longer trusted) still answer in JSON.
+  const apiErrorHandler: ErrorRequestHandler = (error, _request, response, next) => {
+    if (response.headersSent) {
+      next(error);
+      return;
+    }
+    const message = error instanceof Error ? error.message : "Wingdiff could not complete this request.";
+    response.status(500).json({ error: message });
+  };
+  app.use("/api", apiErrorHandler);
 
   return app;
 }
