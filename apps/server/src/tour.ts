@@ -7,6 +7,22 @@ export type TourConfidence = "high" | "medium" | "low";
 export type TourSeverity = "high" | "medium" | "low";
 export type FindingContinuityState = "still-applies" | "appears-addressed" | "recheck" | "superseded";
 
+export const TOUR_TEXT_LIMITS = {
+  summary: 500,
+  stopId: 64,
+  stopTitle: 140,
+  stopSummary: 360,
+  stopPurpose: 280,
+  claimText: 280,
+  prompt: 220,
+  findingRevisionId: 128,
+  findingRevisionSummary: 360,
+  findingTitle: 160,
+  findingBody: 420,
+  findingCategory: 80,
+  suggestedComment: 500,
+} as const;
+
 export interface TourEvidenceAnchor {
   id: string;
   path: string;
@@ -154,7 +170,7 @@ export function prepareModelTourInput(input: TourGenerationInput): ModelTourGene
 
 export function validateGeneratedTour(raw: unknown, input: TourGenerationInput): GeneratedTour {
   const value = record(raw, "tour");
-  const summary = boundedText(value.summary, "tour summary", 500);
+  const summary = boundedText(value.summary, "tour summary", TOUR_TEXT_LIMITS.summary);
   const rawStops = list(value.stops, "tour stops", 1, 12);
   const knownAnchors = new Set(input.anchors.map((anchor) => anchor.id));
   const anchorToPath = new Map(input.anchors.map((anchor) => [anchor.id, anchor.path]));
@@ -167,7 +183,7 @@ export function validateGeneratedTour(raw: unknown, input: TourGenerationInput):
 
   const stops = rawStops.map((candidate, index): GeneratedTourStop => {
     const stop = record(candidate, `tour stop ${index + 1}`);
-    const id = boundedText(stop.id, `tour stop ${index + 1} id`, 64);
+    const id = boundedText(stop.id, `tour stop ${index + 1} id`, TOUR_TEXT_LIMITS.stopId);
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)) throw new Error(`Tour stop id must be a lowercase slug: ${id}`);
     if (ids.has(id)) throw new Error(`Tour stop id is duplicated: ${id}`);
     ids.add(id);
@@ -183,23 +199,23 @@ export function validateGeneratedTour(raw: unknown, input: TourGenerationInput):
       const claimAnchorIds = anchors(claim.anchorIds, `${id} claim anchors`, knownAnchors, 1, 8);
       if (kind !== "unknown") requirePreciseTextAnchor(claimAnchorIds, `${id} claim`, anchorById, pathsWithLineAnchors);
       return {
-        text: boundedText(claim.text, `${id} claim text`, 280),
+        text: boundedText(claim.text, `${id} claim text`, TOUR_TEXT_LIMITS.claimText),
         kind,
         confidence: choice(claim.confidence, `${id} claim confidence`, ["high", "medium", "low"] as const),
         anchorIds: claimAnchorIds,
       };
     });
     const prompts = list(stop.prompts, `${id} prompts`, 0, 4)
-      .map((prompt, promptIndex) => boundedText(prompt, `${id} prompt ${promptIndex + 1}`, 220));
+      .map((prompt, promptIndex) => boundedText(prompt, `${id} prompt ${promptIndex + 1}`, TOUR_TEXT_LIMITS.prompt));
     const finding = stop.finding === undefined || stop.finding === null
       ? undefined
       : validateFinding(stop.finding, id, knownAnchors, anchorById, pathsWithLineAnchors);
 
     return {
       id,
-      title: boundedText(stop.title, `${id} title`, 140),
-      summary: boundedText(stop.summary, `${id} summary`, 360),
-      purpose: boundedText(stop.purpose, `${id} purpose`, 280),
+      title: boundedText(stop.title, `${id} title`, TOUR_TEXT_LIMITS.stopTitle),
+      summary: boundedText(stop.summary, `${id} summary`, TOUR_TEXT_LIMITS.stopSummary),
+      purpose: boundedText(stop.purpose, `${id} purpose`, TOUR_TEXT_LIMITS.stopPurpose),
       anchorIds,
       claims,
       prompts,
@@ -284,7 +300,7 @@ function validateFindingRevisions(
   const seen = new Set<string>();
   const result = revisions.map((candidate, index): GeneratedFindingRevision => {
     const revision = record(candidate, `finding revision ${index + 1}`);
-    const findingId = boundedText(revision.findingId, `finding revision ${index + 1} id`, 128);
+    const findingId = boundedText(revision.findingId, `finding revision ${index + 1} id`, TOUR_TEXT_LIMITS.findingRevisionId);
     if (!priorIds.has(findingId)) throw new Error(`Finding revision references unknown prior finding ${findingId}.`);
     if (seen.has(findingId)) throw new Error(`Finding revision is duplicated: ${findingId}`);
     seen.add(findingId);
@@ -293,7 +309,7 @@ function validateFindingRevisions(
     return {
       findingId,
       state,
-      summary: boundedText(revision.summary, `${findingId} revision summary`, 360),
+      summary: boundedText(revision.summary, `${findingId} revision summary`, TOUR_TEXT_LIMITS.findingRevisionSummary),
       anchorIds,
     };
   });
@@ -314,12 +330,12 @@ function validateFinding(
   const anchorIds = anchors(finding.anchorIds, `${stopId} finding anchors`, knownAnchors, 1, 8);
   requirePreciseTextAnchor(anchorIds, `${stopId} finding`, anchorById, pathsWithLineAnchors);
   return {
-    title: boundedText(finding.title, `${stopId} finding title`, 160),
-    body: boundedText(finding.body, `${stopId} finding body`, 420),
+    title: boundedText(finding.title, `${stopId} finding title`, TOUR_TEXT_LIMITS.findingTitle),
+    body: boundedText(finding.body, `${stopId} finding body`, TOUR_TEXT_LIMITS.findingBody),
     severity: choice(finding.severity, `${stopId} finding severity`, ["high", "medium", "low"] as const),
-    category: boundedText(finding.category, `${stopId} finding category`, 80),
+    category: boundedText(finding.category, `${stopId} finding category`, TOUR_TEXT_LIMITS.findingCategory),
     anchorIds,
-    suggestedComment: boundedText(finding.suggestedComment, `${stopId} suggested comment`, 500),
+    suggestedComment: boundedText(finding.suggestedComment, `${stopId} suggested comment`, TOUR_TEXT_LIMITS.suggestedComment),
   };
 }
 

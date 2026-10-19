@@ -1,4 +1,4 @@
-import { buildTourPrompt, type TourGenerationInput } from "../tour.js";
+import { buildTourPrompt, TOUR_TEXT_LIMITS, type TourGenerationInput } from "../tour.js";
 
 export const TOUR_INSTRUCTIONS = `You are preparing a guided code review for an experienced engineer.
 
@@ -13,11 +13,17 @@ Write for a developer making a review decision. Be direct, specific, and compact
 
 Return only JSON matching the supplied schema. Anchor IDs are compact request-local aliases such as a17. Reference only exact anchor IDs from the evidence.`;
 
-const stringArray = (minimum: number, maximum: number) => ({
+const boundedString = (maxLength: number) => ({
+  type: "string",
+  minLength: 1,
+  maxLength,
+}) as const;
+
+const stringArray = (minimum: number, maximum: number, maxLength: number) => ({
   type: "array",
   minItems: minimum,
   maxItems: maximum,
-  items: { type: "string" },
+  items: boundedString(maxLength),
 }) as const;
 
 const anchorArray = (minimum: number, maximum: number) => ({
@@ -33,12 +39,12 @@ export function tourJsonSchema(input: TourGenerationInput) {
     additionalProperties: false,
     required: ["title", "body", "severity", "category", "anchorIds", "suggestedComment"],
     properties: {
-      title: { type: "string" },
-      body: { type: "string" },
+      title: boundedString(TOUR_TEXT_LIMITS.findingTitle),
+      body: boundedString(TOUR_TEXT_LIMITS.findingBody),
       severity: { type: "string", enum: ["high", "medium", "low"] },
-      category: { type: "string" },
+      category: boundedString(TOUR_TEXT_LIMITS.findingCategory),
       anchorIds: anchorArray(1, 8),
-      suggestedComment: { type: "string" },
+      suggestedComment: boundedString(TOUR_TEXT_LIMITS.suggestedComment),
     },
   } as const;
 
@@ -50,7 +56,7 @@ export function tourJsonSchema(input: TourGenerationInput) {
     },
     required: ["summary", "stops", "findingRevisions"],
     properties: {
-      summary: { type: "string" },
+      summary: boundedString(TOUR_TEXT_LIMITS.summary),
       stops: {
         type: "array",
         minItems: 1,
@@ -60,10 +66,10 @@ export function tourJsonSchema(input: TourGenerationInput) {
           additionalProperties: false,
           required: ["id", "title", "summary", "purpose", "anchorIds", "claims", "prompts", "finding"],
           properties: {
-            id: { type: "string", pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
-            title: { type: "string" },
-            summary: { type: "string" },
-            purpose: { type: "string" },
+            id: { ...boundedString(TOUR_TEXT_LIMITS.stopId), pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+            title: boundedString(TOUR_TEXT_LIMITS.stopTitle),
+            summary: boundedString(TOUR_TEXT_LIMITS.stopSummary),
+            purpose: boundedString(TOUR_TEXT_LIMITS.stopPurpose),
             anchorIds: anchorArray(1, 24),
             claims: {
               type: "array",
@@ -74,14 +80,14 @@ export function tourJsonSchema(input: TourGenerationInput) {
                 additionalProperties: false,
                 required: ["text", "kind", "confidence", "anchorIds"],
                 properties: {
-                  text: { type: "string" },
+                  text: boundedString(TOUR_TEXT_LIMITS.claimText),
                   kind: { type: "string", enum: ["fact", "inference", "unknown"] },
                   confidence: { type: "string", enum: ["high", "medium", "low"] },
                   anchorIds: anchorArray(1, 8),
                 },
               },
             },
-            prompts: stringArray(0, 4),
+            prompts: stringArray(0, 4, TOUR_TEXT_LIMITS.prompt),
             finding: { anyOf: [findingSchema, { type: "null" }] },
           },
         },
@@ -94,9 +100,9 @@ export function tourJsonSchema(input: TourGenerationInput) {
           additionalProperties: false,
           required: ["findingId", "state", "summary", "anchorIds"],
           properties: {
-            findingId: { type: "string" },
+            findingId: boundedString(TOUR_TEXT_LIMITS.findingRevisionId),
             state: { type: "string", enum: ["still-applies", "appears-addressed", "recheck", "superseded"] },
-            summary: { type: "string" },
+            summary: boundedString(TOUR_TEXT_LIMITS.findingRevisionSummary),
             anchorIds: anchorArray(0, 8),
           },
         },
@@ -106,7 +112,17 @@ export function tourJsonSchema(input: TourGenerationInput) {
 }
 
 export function buildTourRequestPrompt(input: TourGenerationInput): string {
-  return `${buildTourPrompt(input)}\n\n${coverageChecklist(input)}\n\nCreate the guided review tour. Before returning JSON, verify that every required-coverage row is represented in at least one stop.anchorIds array. Use null for finding when the evidence does not support a concrete issue.`;
+  return `${buildTourPrompt(input)}\n\n${coverageChecklist(input)}\n\n${textLimitChecklist()}\n\nCreate the guided review tour. Before returning JSON, verify that every required-coverage row is represented in at least one stop.anchorIds array and every string stays within its character limit. Use null for finding when the evidence does not support a concrete issue.`;
+}
+
+function textLimitChecklist(): string {
+  return `<text_limits>
+- tour summary: ${TOUR_TEXT_LIMITS.summary}
+- stop id: ${TOUR_TEXT_LIMITS.stopId}; title: ${TOUR_TEXT_LIMITS.stopTitle}; summary: ${TOUR_TEXT_LIMITS.stopSummary}; purpose: ${TOUR_TEXT_LIMITS.stopPurpose}
+- claim text: ${TOUR_TEXT_LIMITS.claimText}; prompt: ${TOUR_TEXT_LIMITS.prompt}
+- finding title: ${TOUR_TEXT_LIMITS.findingTitle}; body: ${TOUR_TEXT_LIMITS.findingBody}; category: ${TOUR_TEXT_LIMITS.findingCategory}; suggestedComment: ${TOUR_TEXT_LIMITS.suggestedComment}
+- finding revision id: ${TOUR_TEXT_LIMITS.findingRevisionId}; summary: ${TOUR_TEXT_LIMITS.findingRevisionSummary}
+</text_limits>`;
 }
 
 function coverageChecklist(input: TourGenerationInput): string {

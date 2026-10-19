@@ -31,6 +31,8 @@ describe("tour generation prompt", () => {
     expect(prompt).toContain("<validated_evidence>");
     expect(prompt).toContain("a2\tnew:8");
     expect(prompt).toContain("<required_coverage>");
+    expect(prompt).toContain("<text_limits>");
+    expect(prompt).toContain("finding title: 160; body: 420");
     expect(prompt).toContain("- src/store.ts: include at least one of [a2] in a stop.anchorIds array");
     expect(prompt).toContain("verify that every required-coverage row is represented");
     expect(prompt).not.toContain("line_def");
@@ -51,6 +53,9 @@ describe("tour generation prompt", () => {
     expect(schema.$defs.anchorId.enum).toEqual(["a1", "a2"]);
     expect(stop.properties.anchorIds.items).toEqual({ $ref: "#/$defs/anchorId" });
     expect(stop.properties.claims.items.properties.anchorIds.items).toEqual({ $ref: "#/$defs/anchorId" });
+    expect(stop.properties.finding.anyOf[0].properties.body).toEqual({ type: "string", minLength: 1, maxLength: 420 });
+    expect(stop.properties.prompts.items.maxLength).toBe(220);
+    expect(schema.properties.summary.maxLength).toBe(500);
   });
 });
 
