@@ -65,6 +65,18 @@ test("returns to the top when marking a stop understood", async ({ page }) => {
   await expect.poll(() => canvas.evaluate((element) => element.scrollTop)).toBe(0);
 });
 
+test("moves from the final real-review stop directly to the review desk", async ({ page }) => {
+  await mockReviewApi(page, { tourReady: true });
+  await page.goto("/?session=pilot-session");
+
+  await page.getByRole("button", { name: "Start review" }).click();
+  await expect(page.getByRole("heading", { name: "Counter updates become atomic" })).toBeVisible();
+  await page.getByRole("button", { name: "Mark understood & review" }).click();
+
+  await expect(page.getByRole("heading", { name: "Prepare your decision." })).toBeVisible();
+  await expect(page).toHaveURL(/session=pilot-session&view=review/);
+});
+
 test("keeps browser history inside a real review session", async ({ page }) => {
   await mockReviewApi(page, { tourReady: true });
   await page.goto("/");
