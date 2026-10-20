@@ -614,6 +614,14 @@ export class SessionStore {
     return this.getReviewPublication(sessionId, headSha)!;
   }
 
+  cancelReviewPublication(sessionId: string, headSha: string): boolean {
+    this.requireSession(sessionId);
+    return this.database.prepare(`
+      DELETE FROM review_publications
+      WHERE session_id = ? AND head_sha = ? AND state = 'publishing'
+    `).run(sessionId, headSha).changes > 0;
+  }
+
   clearUncertainReviewPublication(sessionId: string, headSha: string): boolean {
     this.requireSession(sessionId);
     return this.database.prepare(`

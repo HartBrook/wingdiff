@@ -3,6 +3,7 @@ import { validateDraftComment } from "./comments.js";
 import type { PullRequestMetadata } from "./github.js";
 import { publishGitLabMergeRequestReview, type GitLabLineEndpoint, type GitLabReviewComment, type PinnedReviewRevisions } from "./gitlab.js";
 import { readCodeReviewMetadata } from "./hosting.js";
+import { ReviewPublicationError } from "./publication.js";
 import type { DraftReviewComment, ReviewDraft, ReviewSession, SessionStore, SubmittedReview, TourScope } from "./sessions.js";
 import { codeHostName, type PullRequestTarget } from "./targets.js";
 import { approvalWarnings } from "./reviewWorkflow.js";
@@ -111,6 +112,10 @@ export async function submitSessionReview(
     published = await dependencies.publishReview(session.target, cwd, pinned, draft, hostedComments);
   } catch (error) {
     const message = error instanceof Error ? error.message : `${codeHostName(session.target)} review publication failed.`;
+    if (error instanceof ReviewPublicationError && error.outcome === "not-published") {
+      store.cancelReviewPublication(session.id, session.metadata.head.sha);
+      throw new Error(message);
+    }
     store.markReviewPublicationUncertain(session.id, session.metadata.head.sha, message);
     throw new Error(`${message} The publication outcome is uncertain; verify ${codeHostName(session.target)} before allowing a retry.`);
   }

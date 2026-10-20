@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { validateDraftComment } from "./comments.js";
 import { parseUnifiedDiff, type PullRequestEvidence } from "./diff.js";
 import { publishGitLabMergeRequestReview } from "./gitlab.js";
+import { ReviewPublicationError } from "./publication.js";
 
 const target = parsePullRequestTarget("https://github.com/openai/codex/pull/42");
 const headSha = "b".repeat(40);
@@ -207,6 +208,31 @@ rename to src/new.ts
     finishPublication({ id: 93, url: "url", state: "COMMENTED" });
     await expect(first).resolves.toMatchObject({ githubReviewId: 93 });
     expect(store.getReviewPublication(session.id, session.metadata.head.sha)).toBeUndefined();
+    store.close();
+  });
+
+  it("allows an immediate retry when GitLab rejects approval before publication", async () => {
+    const gitLabTarget = parsePullRequestTarget("https://gitlab.com/acme/service/-/merge_requests/42");
+    const store = new SessionStore(":memory:");
+    const session = store.upsertReadySession(gitLabTarget, metadata(), evidence());
+    let publishCount = 0;
+    const dependencies = {
+      readMetadata: async () => metadata(),
+      publishReview: async () => {
+        publishCount += 1;
+        throw new ReviewPublicationError(
+          "GitLab reports that you cannot approve this merge request. Choose Comment, or authenticate as an eligible reviewer.",
+          "not-published",
+        );
+      },
+    };
+
+    await expect(submitSessionReview(session, store, "/work/service", { body: "Looks good.", event: "APPROVE" }, dependencies))
+      .rejects.toThrow(/cannot approve.*eligible reviewer/);
+    expect(store.getReviewPublication(session.id, session.metadata.head.sha)).toBeUndefined();
+    await expect(submitSessionReview(session, store, "/work/service", { body: "Looks good.", event: "APPROVE" }, dependencies))
+      .rejects.toThrow(/cannot approve/);
+    expect(publishCount).toBe(2);
     store.close();
   });
 

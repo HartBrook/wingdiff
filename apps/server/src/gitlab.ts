@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import type { EvidenceLineKind } from "./diff.js";
 import type { PullRequestMetadata } from "./github.js";
 import { versionAtLeast } from "./preflight.js";
+import { publicationErrorMessage, ReviewPublicationError, type ReviewPublicationOutcome } from "./publication.js";
 import type { DraftReviewComment, ReviewDraft } from "./sessions.js";
 import type { PullRequestTarget } from "./targets.js";
 import { targetRepositoryPath } from "./targets.js";
@@ -142,92 +143,124 @@ export async function publishGitLabMergeRequestReview(
 ): Promise<{ id: number; url: string; state: string }> {
   assertGitLabTarget(target);
   const endpoint = mergeRequestEndpoint(target);
-  const refs = await readLatestGitLabDiffRefs(target, endpoint, cwd, runCommand);
-  assertPinnedRevisions(pinned, refs);
-  const headSha = pinned.headSha;
-
-  // bulk_publish publishes every pending draft the user has on this merge request, so refuse to
-  // run while drafts Wingdiff did not create are waiting.
-  const pendingOutput = await runCommand(apiArguments(target, `${endpoint}/draft_notes?per_page=100`), cwd);
-  let pending: unknown;
+  let outcome: ReviewPublicationOutcome = "not-published";
   try {
-    pending = JSON.parse(pendingOutput);
-  } catch {
-    throw new Error("GitLab CLI returned an invalid draft note list.");
-  }
-  if (array(pending).length) {
-    throw new Error("You have pending GitLab draft notes on this merge request. Submit or discard them in GitLab before publishing from Wingdiff.");
-  }
+    const refs = await readLatestGitLabDiffRefs(target, endpoint, cwd, runCommand);
+    assertPinnedRevisions(pinned, refs);
+    const headSha = pinned.headSha;
 
-  let receiptId = target.number;
-  const createdDraftIds: number[] = [];
-  try {
-    for (const comment of comments) {
-      const path = comment.path;
-      const position = {
-        position_type: "text",
-        base_sha: refs.baseSha,
-        head_sha: refs.headSha,
-        start_sha: refs.startSha,
-        old_path: comment.oldPath ?? path,
-        new_path: path,
-        ...gitLabLinePair(comment.endLine, comment.endOldLine, comment.endNewLine, comment.side),
-        ...(comment.startLine === comment.endLine ? {} : {
-          line_range: {
-            start: gitLabLineRangePoint(comment, "start"),
-            end: gitLabLineRangePoint(comment, "end"),
-          },
-        }),
-      };
-      const output = await runCommand(
-        apiArguments(target, `${endpoint}/draft_notes`, "POST", true),
-        cwd,
-        JSON.stringify({ note: comment.body, position }),
-      );
-      let created: Record<string, unknown>;
+    if (draft.event === "APPROVE") {
+      const approvalOutput = await runCommand(apiArguments(target, `${endpoint}/approvals`), cwd);
+      let approvalStatus: Record<string, unknown>;
       try {
-        created = object(JSON.parse(output), "GitLab draft note response");
+        approvalStatus = object(JSON.parse(approvalOutput), "GitLab approval status");
       } catch (error) {
-        if (error instanceof SyntaxError) throw new Error("GitLab CLI returned an invalid draft note response.");
+        if (error instanceof SyntaxError) throw new Error("GitLab CLI returned invalid approval status.");
         throw error;
       }
-      if (Number.isSafeInteger(created.id)) {
-        receiptId = Number(created.id);
-        createdDraftIds.push(receiptId);
+      if (approvalStatus.user_has_approved === true) {
+        throw new Error("GitLab reports that you have already approved this merge request. Choose Comment to publish additional review feedback.");
+      }
+      if (approvalStatus.user_can_approve !== true) {
+        throw new Error("GitLab reports that you cannot approve this merge request. Choose Comment, or authenticate as an eligible reviewer.");
       }
     }
-  } catch (error) {
-    // Remove this attempt's drafts so a retry does not publish duplicates alongside them.
-    await deleteDraftNotes(target, endpoint, createdDraftIds, cwd, runCommand);
-    throw error;
-  }
 
-  // Draft creation is not atomic with publication. Recheck after the last draft so an author
-  // push during this attempt cannot knowingly publish comments against an obsolete diff.
-  try {
-    assertPinnedRevisions(pinned, await readLatestGitLabDiffRefs(target, endpoint, cwd, runCommand));
-  } catch (error) {
-    await deleteDraftNotes(target, endpoint, createdDraftIds, cwd, runCommand);
-    throw error;
-  }
+    // bulk_publish publishes every pending draft the user has on this merge request, so refuse to
+    // run while drafts Wingdiff did not create are waiting.
+    const pendingOutput = await runCommand(apiArguments(target, `${endpoint}/draft_notes?per_page=100`), cwd);
+    let pending: unknown;
+    try {
+      pending = JSON.parse(pendingOutput);
+    } catch {
+      throw new Error("GitLab CLI returned an invalid draft note list.");
+    }
+    if (array(pending).length) {
+      throw new Error("You have pending GitLab draft notes on this merge request. Submit or discard them in GitLab before publishing from Wingdiff.");
+    }
 
-  await runCommand(
-    apiArguments(target, `${endpoint}/draft_notes/bulk_publish`, "POST", true),
-    cwd,
-    JSON.stringify({
-      ...(draft.body.trim() ? { note: draft.body.trim() } : {}),
-      reviewer_state: draft.event === "REQUEST_CHANGES" ? "requested_changes" : "reviewed",
-    }),
-  );
+    let receiptId = target.number;
+    const createdDraftIds: number[] = [];
+    try {
+      for (const comment of comments) {
+        const path = comment.path;
+        const position = {
+          position_type: "text",
+          base_sha: refs.baseSha,
+          head_sha: refs.headSha,
+          start_sha: refs.startSha,
+          old_path: comment.oldPath ?? path,
+          new_path: path,
+          ...gitLabLinePair(comment.endLine, comment.endOldLine, comment.endNewLine, comment.side),
+          ...(comment.startLine === comment.endLine ? {} : {
+            line_range: {
+              start: gitLabLineRangePoint(comment, "start"),
+              end: gitLabLineRangePoint(comment, "end"),
+            },
+          }),
+        };
+        const output = await runCommand(
+          apiArguments(target, `${endpoint}/draft_notes`, "POST", true),
+          cwd,
+          JSON.stringify({ note: comment.body, position }),
+        );
+        let created: Record<string, unknown>;
+        try {
+          created = object(JSON.parse(output), "GitLab draft note response");
+        } catch (error) {
+          if (error instanceof SyntaxError) throw new Error("GitLab CLI returned an invalid draft note response.");
+          throw error;
+        }
+        if (Number.isSafeInteger(created.id)) {
+          receiptId = Number(created.id);
+          createdDraftIds.push(receiptId);
+        }
+      }
+    } catch (error) {
+      // Remove this attempt's drafts so a retry does not publish duplicates alongside them.
+      await deleteDraftNotes(target, endpoint, createdDraftIds, cwd, runCommand);
+      throw error;
+    }
 
-  if (draft.event === "APPROVE") {
+    // Draft creation is not atomic with publication. Recheck after the last draft so an author
+    // push during this attempt cannot knowingly publish comments against an obsolete diff.
+    try {
+      assertPinnedRevisions(pinned, await readLatestGitLabDiffRefs(target, endpoint, cwd, runCommand));
+    } catch (error) {
+      await deleteDraftNotes(target, endpoint, createdDraftIds, cwd, runCommand);
+      throw error;
+    }
+
+    // A timeout or disconnect after this request starts cannot prove whether GitLab applied it.
+    outcome = "uncertain";
     await runCommand(
-      apiArguments(target, `${endpoint}/approve`, "POST", true),
+      apiArguments(target, `${endpoint}/draft_notes/bulk_publish`, "POST", true),
       cwd,
-      JSON.stringify({ sha: headSha }),
+      JSON.stringify({
+        ...(draft.body.trim() ? { note: draft.body.trim() } : {}),
+        reviewer_state: draft.event === "REQUEST_CHANGES" ? "requested_changes" : "reviewed",
+      }),
     );
+
+    if (draft.event === "APPROVE") {
+      try {
+        await runCommand(
+          apiArguments(target, `${endpoint}/approve`, "POST", true),
+          cwd,
+          JSON.stringify({ sha: headSha }),
+        );
+      } catch (error) {
+        throw new ReviewPublicationError(
+          `GitLab published the review summary and comments, but approval was not confirmed: ${publicationErrorMessage(error, "GitLab approval failed.")}`,
+          "uncertain",
+        );
+      }
+    }
+    return { id: receiptId, url: target.canonicalUrl, state: draft.event };
+  } catch (error) {
+    if (error instanceof ReviewPublicationError) throw error;
+    throw new ReviewPublicationError(publicationErrorMessage(error, "GitLab review publication failed."), outcome);
   }
-  return { id: receiptId, url: target.canonicalUrl, state: draft.event };
 }
 
 export function assertSupportedGitLabServerVersion(output: string): void {

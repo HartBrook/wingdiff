@@ -161,11 +161,58 @@ describe("GitLab merge request integration", () => {
       if (arguments_.some((value) => value.endsWith("/versions"))) {
         return JSON.stringify([{ base_commit_sha: baseSha, start_commit_sha: startSha, head_commit_sha: headSha }]);
       }
+      if (arguments_.some((value) => value.endsWith("/approvals"))) return JSON.stringify({ user_can_approve: true, user_has_approved: false });
       if (arguments_.some((value) => value.endsWith("/draft_notes?per_page=100"))) return "[]";
       return "";
     });
     const approval = calls.find((call) => call.arguments_.some((value) => value.endsWith("/approve")))!;
     expect(JSON.parse(approval.input!)).toEqual({ sha: headSha });
+  });
+
+  it("rejects an ineligible approval before publishing anything", async () => {
+    const calls: Array<{ arguments_: string[]; input?: string }> = [];
+    const failure = await publishGitLabMergeRequestReview(
+      target, "/work/service", pinned, { body: "Looks good.", event: "APPROVE" }, [],
+      async (arguments_, _cwd, input) => {
+        calls.push({ arguments_, input });
+        if (arguments_.some((value) => value.endsWith("/versions"))) {
+          return JSON.stringify([{ base_commit_sha: baseSha, start_commit_sha: startSha, head_commit_sha: headSha }]);
+        }
+        if (arguments_.some((value) => value.endsWith("/approvals"))) {
+          return JSON.stringify({ user_can_approve: false, user_has_approved: false });
+        }
+        return "";
+      },
+    ).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ outcome: "not-published" });
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toMatch(/cannot approve.*eligible reviewer/);
+    expect(calls.some((call) => call.arguments_.includes("POST"))).toBe(false);
+  });
+
+  it("reports a failed approval as partial publication after the review is published", async () => {
+    const calls: Array<{ arguments_: string[]; input?: string }> = [];
+    const failure = await publishGitLabMergeRequestReview(
+      target, "/work/service", pinned, { body: "Looks good.", event: "APPROVE" }, [],
+      async (arguments_, _cwd, input) => {
+        calls.push({ arguments_, input });
+        if (arguments_.some((value) => value.endsWith("/versions"))) {
+          return JSON.stringify([{ base_commit_sha: baseSha, start_commit_sha: startSha, head_commit_sha: headSha }]);
+        }
+        if (arguments_.some((value) => value.endsWith("/approvals"))) {
+          return JSON.stringify({ user_can_approve: true, user_has_approved: false });
+        }
+        if (arguments_.some((value) => value.endsWith("/draft_notes?per_page=100"))) return "[]";
+        if (arguments_.some((value) => value.endsWith("/approve"))) throw new Error("glab: 401 Unauthorized");
+        return "";
+      },
+    ).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ outcome: "uncertain" });
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toMatch(/published the review summary and comments.*approval was not confirmed.*401 Unauthorized/);
+    expect(calls.some((call) => call.arguments_.some((value) => value.endsWith("/bulk_publish")))).toBe(true);
   });
 
   it("sends both line numbers for a single-line comment on an unchanged context line", async () => {
