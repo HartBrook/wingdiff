@@ -3,7 +3,7 @@ import { validateDraftComment } from "./comments.js";
 import type { PullRequestMetadata } from "./github.js";
 import { publishGitLabMergeRequestReview, type GitLabLineEndpoint, type GitLabReviewComment, type PinnedReviewRevisions } from "./gitlab.js";
 import { readCodeReviewMetadata } from "./hosting.js";
-import { ReviewPublicationError } from "./publication.js";
+import { publicationErrorMessage, ReviewPublicationError, type ReviewPublicationOutcome } from "./publication.js";
 import type { DraftReviewComment, ReviewDraft, ReviewSession, SessionStore, SubmittedReview, TourScope } from "./sessions.js";
 import { codeHostName, type PullRequestTarget } from "./targets.js";
 import { approvalWarnings } from "./reviewWorkflow.js";
@@ -22,6 +22,7 @@ export interface ReviewSubmissionDependencies {
     pinned: PinnedReviewRevisions,
     draft: Pick<ReviewDraft, "body" | "event">,
     comments: GitLabReviewComment[],
+    authorLogin: string,
   ) => Promise<PublishedReview>;
 }
 
@@ -109,7 +110,7 @@ export async function submitSessionReview(
       startSha: session.metadata.base.sha,
       ...(session.metadata.diffRefs ? { baseSha: session.metadata.diffRefs.baseSha } : {}),
     };
-    published = await dependencies.publishReview(session.target, cwd, pinned, draft, hostedComments);
+    published = await dependencies.publishReview(session.target, cwd, pinned, draft, hostedComments, session.metadata.author.login);
   } catch (error) {
     const message = error instanceof Error ? error.message : `${codeHostName(session.target)} review publication failed.`;
     if (error instanceof ReviewPublicationError && error.outcome === "not-published") {
@@ -124,48 +125,79 @@ export async function submitSessionReview(
   );
 }
 
-export type GitHubApiRunner = (arguments_: string[], cwd: string, input: string) => Promise<string>;
+export type GitHubApiRunner = (arguments_: string[], cwd: string, input?: string) => Promise<string>;
 
 export async function publishPullRequestReview(
   target: PullRequestTarget,
   cwd: string,
   headSha: string,
+  authorLogin: string,
   draft: Pick<ReviewDraft, "body" | "event">,
   comments: DraftReviewComment[],
   runCommand: GitHubApiRunner = defaultGitHubApiRunner,
 ): Promise<PublishedReview> {
-  const payload = {
-    commit_id: headSha,
-    body: draft.body.trim(),
-    event: draft.event,
-    comments: comments.map((comment) => ({
-      path: comment.path,
-      body: comment.body,
-      line: comment.endLine,
-      side: comment.side,
-      ...(comment.startLine === comment.endLine ? {} : { start_line: comment.startLine, start_side: comment.side }),
-    })),
-  };
-  const output = await runCommand([
-    "api",
-    "--method", "POST",
-    "-H", "Accept: application/vnd.github+json",
-    `repos/${target.owner}/${target.repository}/pulls/${target.number}/reviews`,
-    "--input", "-",
-  ], cwd, JSON.stringify(payload));
-
-  let raw: unknown;
+  let outcome: ReviewPublicationOutcome = "not-published";
   try {
-    raw = JSON.parse(output);
-  } catch {
-    throw new Error("GitHub CLI returned an invalid review response.");
+    if (draft.event !== "COMMENT") {
+      const viewerOutput = await runCommand(["api", "user"], cwd);
+      let viewer: unknown;
+      try {
+        viewer = JSON.parse(viewerOutput);
+      } catch {
+        throw new Error("GitHub CLI returned an invalid authenticated user.");
+      }
+      const viewerLogin = viewer && typeof viewer === "object" && !Array.isArray(viewer)
+        ? (viewer as Record<string, unknown>).login
+        : undefined;
+      if (typeof viewerLogin !== "string" || !viewerLogin.trim()) {
+        throw new Error("GitHub CLI returned an invalid authenticated user.");
+      }
+      if (viewerLogin.toLowerCase() === authorLogin.toLowerCase()) {
+        const action = draft.event === "APPROVE" ? "approve" : "request changes on";
+        throw new Error(`GitHub does not allow you to ${action} your own pull request. Choose Comment, or authenticate as another reviewer.`);
+      }
+    }
+
+    const payload = {
+      commit_id: headSha,
+      body: draft.body.trim(),
+      event: draft.event,
+      comments: comments.map((comment) => ({
+        path: comment.path,
+        body: comment.body,
+        line: comment.endLine,
+        side: comment.side,
+        ...(comment.startLine === comment.endLine ? {} : { start_line: comment.startLine, start_side: comment.side }),
+      })),
+    };
+    // A timeout or disconnect after this request starts cannot prove whether GitHub applied it.
+    outcome = "uncertain";
+    const output = await runCommand([
+      "api",
+      "--method", "POST",
+      "-H", "Accept: application/vnd.github+json",
+      `repos/${target.owner}/${target.repository}/pulls/${target.number}/reviews`,
+      "--input", "-",
+    ], cwd, JSON.stringify(payload));
+
+    let raw: unknown;
+    try {
+      raw = JSON.parse(output);
+    } catch {
+      throw new Error("GitHub CLI returned an invalid review response.");
+    }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("GitHub CLI returned an invalid review response.");
+    const value = raw as Record<string, unknown>;
+    if (!Number.isSafeInteger(value.id) || typeof value.html_url !== "string" || !value.html_url) {
+      throw new Error("GitHub CLI returned an incomplete review response.");
+    }
+    return { id: Number(value.id), url: value.html_url, state: typeof value.state === "string" ? value.state : draft.event };
+  } catch (error) {
+    if (error instanceof ReviewPublicationError) throw error;
+    const message = publicationErrorMessage(error, "GitHub review publication failed.");
+    const rejectedBeforePublication = /(?:HTTP 422|Unprocessable Entity)/i.test(message);
+    throw new ReviewPublicationError(message, rejectedBeforePublication ? "not-published" : outcome);
   }
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("GitHub CLI returned an invalid review response.");
-  const value = raw as Record<string, unknown>;
-  if (!Number.isSafeInteger(value.id) || typeof value.html_url !== "string" || !value.html_url) {
-    throw new Error("GitHub CLI returned an incomplete review response.");
-  }
-  return { id: Number(value.id), url: value.html_url, state: typeof value.state === "string" ? value.state : draft.event };
 }
 
 export async function publishCodeReview(
@@ -174,13 +206,14 @@ export async function publishCodeReview(
   pinned: PinnedReviewRevisions,
   draft: Pick<ReviewDraft, "body" | "event">,
   comments: GitLabReviewComment[],
+  authorLogin: string,
 ): Promise<PublishedReview> {
   return target.platform === "gitlab"
     ? publishGitLabMergeRequestReview(target, cwd, pinned, draft, comments)
-    : publishPullRequestReview(target, cwd, pinned.headSha, draft, comments);
+    : publishPullRequestReview(target, cwd, pinned.headSha, authorLogin, draft, comments);
 }
 
-function defaultGitHubApiRunner(arguments_: string[], cwd: string, input: string): Promise<string> {
+function defaultGitHubApiRunner(arguments_: string[], cwd: string, input?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn("gh", arguments_, { cwd, stdio: ["pipe", "pipe", "pipe"] });
     const stdout: Buffer[] = [];

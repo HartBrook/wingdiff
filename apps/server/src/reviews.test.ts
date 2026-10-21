@@ -14,21 +14,63 @@ const headSha = "b".repeat(40);
 
 describe("GitHub review submission", () => {
   it("sends a line/side batch review as JSON over stdin", async () => {
-    const calls: Array<{ arguments_: string[]; input: string }> = [];
+    const calls: Array<{ arguments_: string[]; input?: string }> = [];
     const comment = draftComment();
-    const result = await publishPullRequestReview(target, "/work/codex", headSha, { body: "Please address the race.", event: "REQUEST_CHANGES" }, [comment], async (arguments_, _cwd, input) => {
+    const result = await publishPullRequestReview(target, "/work/codex", headSha, "octocat", { body: "Please address the race.", event: "REQUEST_CHANGES" }, [comment], async (arguments_, _cwd, input) => {
       calls.push({ arguments_, input });
+      if (arguments_.includes("user")) return JSON.stringify({ login: "reviewer" });
       return JSON.stringify({ id: 91, html_url: "https://github.com/openai/codex/pull/42#pullrequestreview-91", state: "CHANGES_REQUESTED" });
     });
 
-    expect(calls[0]?.arguments_).toContain("repos/openai/codex/pulls/42/reviews");
-    expect(JSON.parse(calls[0]!.input)).toEqual({
+    const publication = calls.find((call) => call.arguments_.includes("POST"))!;
+    expect(publication.arguments_).toContain("repos/openai/codex/pulls/42/reviews");
+    expect(JSON.parse(publication.input!)).toEqual({
       commit_id: headSha,
       body: "Please address the race.",
       event: "REQUEST_CHANGES",
       comments: [{ path: "src/counter.ts", body: "This can race.", line: 3, side: "RIGHT", start_line: 2, start_side: "RIGHT" }],
     });
     expect(result.id).toBe(91);
+  });
+
+  it.each([
+    ["APPROVE", "approve"],
+    ["REQUEST_CHANGES", "request changes on"],
+  ] as const)("rejects %s on the author's own pull request before publication", async (event, action) => {
+    const calls: string[][] = [];
+    const failure = await publishPullRequestReview(
+      target,
+      "/work/codex",
+      headSha,
+      "octocat",
+      { body: "Review.", event },
+      [],
+      async (arguments_) => {
+        calls.push(arguments_);
+        return JSON.stringify({ login: "OctoCat" });
+      },
+    ).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ outcome: "not-published" });
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain(`does not allow you to ${action} your own pull request`);
+    expect(calls.some((call) => call.includes("POST"))).toBe(false);
+  });
+
+  it("treats a GitHub validation rejection as definitely not published", async () => {
+    const failure = await publishPullRequestReview(
+      target,
+      "/work/codex",
+      headSha,
+      "octocat",
+      { body: "Review.", event: "COMMENT" },
+      [],
+      async () => { throw new Error("gh: Unprocessable Entity (HTTP 422)"); },
+    ).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ outcome: "not-published" });
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain("HTTP 422");
   });
 
   it("blocks publishing when the pull request head moved", async () => {
