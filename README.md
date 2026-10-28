@@ -163,7 +163,7 @@ The **Review desk** presents the exact summary, disposition, and inline-comment 
 
 ### Review author updates
 
-After visiting every stop, select **Complete review** to create an explicit checkpoint at the current head SHA. **Check for updates** then reacquires the pull or merge request without checking it out or running its code. If the author pushed a new head, Wingdiff opens a new local session in **Since your review** mode using the exact reviewed-head → current-head diff.
+After visiting every stop, Wingdiff opens the **Review desk** to prepare your decision. To track later author pushes, return to **Summary** and select **Save checkpoint** at the current head SHA. **Check for updates** then reacquires the pull or merge request without checking it out or running its code. If the author pushed a new head, Wingdiff opens a new local session in **Since your review** mode using the exact reviewed-head → current-head diff.
 
 The **Entire PR** scope remains available as an independent backstop. Update and full-PR tours, progress, positions, and completion checkpoints are persisted separately. Previously reviewed areas that do not intersect the update are labeled as reviewed and unchanged. Every acquired revision is retained under a private `refs/wingdiff/pull/.../revisions/...` reference so a later force-push does not erase the comparison baseline.
 
