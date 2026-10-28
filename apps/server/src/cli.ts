@@ -7,9 +7,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { defaultConfigPath, loadWingdiffEnvironment, repositoryRoot } from "./environment.js";
+import { MINIMUM_GITLAB_CLI_VERSION, parseGitLabCliVersion, versionAtLeast } from "./preflight.js";
 import { startWingdiffServer } from "./server.js";
 import { defaultDatabasePath } from "./sessions.js";
-import { parsePullRequestTarget, repositoryFromRemoteUrl, type PullRequestTarget } from "./targets.js";
+import { parsePullRequestTarget, repositoryIdentityFromRemoteUrl, trustedGitLabHosts, type PullRequestTarget } from "./targets.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -68,13 +69,13 @@ export function parseCliArguments(arguments_: string[]): CliOptions {
       checkout = value;
     }
     else if (argument.startsWith("-")) throw new Error(`Unknown option: ${argument}`);
-    else if (target) throw new Error("Wingdiff accepts one pull request target at a time.");
+    else if (target) throw new Error("Wingdiff accepts one review target at a time.");
     else target = argument;
   }
 
-  if (demo && target) throw new Error("Use either demo or a pull request target, not both.");
+  if (demo && target) throw new Error("Use either demo or a review target, not both.");
   if (command !== "open" && (target || checkout || demo || !openBrowser)) {
-    throw new Error(`${command} does not accept pull request or launcher options.`);
+    throw new Error(`${command} does not accept review-target or launcher options.`);
   }
   return { command, target, ...(checkout ? { checkout } : {}), demo, openBrowser, help, version };
 }
@@ -112,7 +113,7 @@ export function browserInvocation(platform: NodeJS.Platform, url: string): { com
 export async function repositoryForCheckout(cwd: string): Promise<string | undefined> {
   try {
     const { stdout } = await execFile("git", ["config", "--get", "remote.origin.url"], { cwd });
-    return repositoryFromRemoteUrl(stdout);
+    return repositoryIdentityFromRemoteUrl(stdout) ? stdout.trim() : undefined;
   } catch {
     return undefined;
   }
@@ -125,9 +126,12 @@ export async function inferPullRequestTarget(
   runCommand: CliCommandRunner = runCliCommand,
 ): Promise<string | undefined> {
   try {
-    const repository = (await runCommand("git", ["config", "--get", "remote.origin.url"], cwd)).trim();
-    if (!repositoryFromRemoteUrl(repository)) return undefined;
-    const url = (await runCommand("gh", ["pr", "view", "--json", "url", "--jq", ".url"], cwd)).trim();
+    const remote = (await runCommand("git", ["config", "--get", "remote.origin.url"], cwd)).trim();
+    const repository = repositoryIdentityFromRemoteUrl(remote);
+    if (!repository) return undefined;
+    const url = repository.platform === "gitlab"
+      ? (await runCommand("glab", ["mr", "view", "--output", "json", "--jq", ".web_url"], cwd)).trim()
+      : (await runCommand("gh", ["pr", "view", "--json", "url", "--jq", ".url"], cwd)).trim();
     return url || undefined;
   } catch {
     return undefined;
@@ -153,20 +157,42 @@ export async function diagnoseEnvironment(
       return false;
     }
   };
-  const [git, githubCli, githubAuth, codex] = await Promise.all([
+  const output = async (command: string, arguments_: string[]) => {
+    try {
+      return await runCommand(command, arguments_, cwd);
+    } catch {
+      return undefined;
+    }
+  };
+  // Without --hostname, glab may check every configured host and fail if any one is logged out.
+  const gitlabHosts = trustedGitLabHosts(environment);
+  const [git, githubCli, githubAuth, gitlabVersionOutput, codex, ...gitlabHostAuth] = await Promise.all([
     available("git", ["--version"]),
     available("gh", ["--version"]),
     available("gh", ["auth", "status", "--hostname", "github.com"]),
+    output("glab", ["--version"]),
     available(environment.WINGDIFF_CODEX_BIN || "codex", ["login", "status"]),
+    ...gitlabHosts.map((host) => available("glab", ["auth", "status", "--hostname", host])),
   ]);
+  const gitlabCli = gitlabVersionOutput !== undefined;
+  const gitlabVersion = gitlabVersionOutput ? parseGitLabCliVersion(gitlabVersionOutput) : undefined;
+  const gitlabSupported = Boolean(gitlabVersion && versionAtLeast(gitlabVersion, MINIMUM_GITLAB_CLI_VERSION));
+  const gitlabAuthenticatedHosts = gitlabHosts.filter((_, index) => gitlabHostAuth[index]);
+  const gitlabAuth = gitlabSupported && gitlabAuthenticatedHosts.length > 0;
   const directProvider = Boolean(environment.OPENAI_API_KEY || environment.ANTHROPIC_API_KEY);
   return [
     { label: "Git", ok: git, detail: git ? "installed" : "not found; install Git" },
-    { label: "GitHub CLI", ok: githubCli, detail: githubCli ? "installed" : "not found; install gh" },
     {
-      label: "GitHub authentication",
-      ok: githubAuth,
-      detail: githubAuth ? "authenticated" : "not authenticated; run: gh auth login",
+      label: "Code host",
+      ok: githubAuth || gitlabAuth,
+      detail: [
+        ...(githubAuth ? ["GitHub authenticated"] : githubCli ? ["GitHub needs: gh auth login"] : []),
+        ...(gitlabAuth
+          ? [`GitLab authenticated (${gitlabAuthenticatedHosts.join(", ")})`]
+          : gitlabCli && !gitlabSupported
+            ? [`GitLab needs glab ${MINIMUM_GITLAB_CLI_VERSION}+${gitlabVersion ? ` (found ${gitlabVersion})` : ""}`]
+            : gitlabCli ? ["GitLab needs: glab auth login"] : []),
+      ].join("; ") || "install gh or glab, then authenticate",
     },
     {
       label: "AI provider",
@@ -318,7 +344,7 @@ function openBrowser(url: string) {
 }
 
 function helpText(): string {
-  return `wingdiff — guided pull request review\n\nUsage:\n  wingdiff [pull-request]\n  wingdiff demo\n  wingdiff doctor\n  wingdiff stop\n\nWith no target, Wingdiff opens the pull request for the current branch when one exists.\n\nTargets:\n  https://github.com/owner/repo/pull/123\n  owner/repo#123\n  123                         Resolve from the current checkout\n\nOptions:\n  --checkout <path>           Use a specific local checkout\n  --no-open                   Start without opening a browser\n  -v, --version               Show the installed version\n  -h, --help                  Show this help\n`;
+  return `wingdiff — guided code review\n\nUsage:\n  wingdiff [pull-or-merge-request]\n  wingdiff demo\n  wingdiff doctor\n  wingdiff stop\n\nWith no target, Wingdiff opens the pull or merge request for the current branch when one exists.\n\nTargets:\n  https://github.com/owner/repo/pull/123\n  https://gitlab.com/group/repo/-/merge_requests/123\n  owner/repo#123               GitHub shorthand\n  group/repo!123               GitLab shorthand\n  123                          Resolve from the current checkout\n\nOptions:\n  --checkout <path>           Use a specific local checkout\n  --no-open                   Start without opening a browser\n  -v, --version               Show the installed version\n  -h, --help                  Show this help\n`;
 }
 
 if (isDirectCliInvocation(import.meta.url, process.argv[1])) {

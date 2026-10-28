@@ -36,6 +36,8 @@ export interface PullRequestMetadata {
   author: { login: string; name?: string };
   base: { ref: string; sha: string };
   head: { ref: string; sha: string };
+  /** GitLab only: the diff_refs GitLab compared when this metadata was read. */
+  diffRefs?: { baseSha: string; startSha: string; headSha: string };
   additions: number;
   deletions: number;
   filesChanged: number;
