@@ -23,7 +23,7 @@ jobs:
         with:
           node-version: 24.x
           registry-url: https://registry.npmjs.org
-          cache: npm
+          package-manager-cache: false
       - run: npm ci --ignore-scripts
       - run: npm test
       - run: npm run typecheck
@@ -45,5 +45,4 @@ jobs:
         if: github.event_name == 'release'
         run: npm publish --provenance --access public --tag "$NPM_TAG"
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TAG: ${{ github.event.release.prerelease && 'next' || 'latest' }}
