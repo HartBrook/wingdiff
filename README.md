@@ -147,6 +147,13 @@ npx wingdiff https://gitlab.com/group/repository/-/merge_requests/123
 
 Wingdiff reads metadata through `gh` or `glab`, fetches missing objects into private `refs/wingdiff/...` references, and builds the full diff from the exact pinned merge-base/head pair the host compares. When no matching checkout is available, it keeps a private bare repository cache beside its application data. Update reviews use the exact reviewed-head/current-head pair. It does not check out the change, modify the worktree or index, or execute change-request code. Acquired metadata, evidence, generated tours, and review checkpoints are stored in a local SQLite database. Set `WINGDIFF_DATA_DIR` to choose its location.
 
+The built-in diff viewer takes a lightweight cue from
+[diff-so-fancy](https://github.com/so-fancy/diff-so-fancy): paired changed
+lines emphasize only the intraline span that differs, and hunk headers are
+reduced to a readable `@ path:line @ context` form. Wingdiff does not run the
+terminal renderer or consume ANSI output; Git's structured diff remains the
+authoritative source for line numbers, fingerprints, and review anchors.
+
 From the real-PR Summary, choose a configured model and select **Generate guided review**. The model organizes the validated diff into semantic stops, ranks concrete findings by severity, and references opaque evidence anchors. Wingdiff rejects the result unless every changed file is covered and every claim or finding resolves to an exact known anchor. Generated tours are pinned to the acquired head SHA and can be resumed locally.
 
 Before generation, Wingdiff shows the exact model context, provider transport, changed files, repository instructions, exclusions, size, and content fingerprint. The immutable manifest, fingerprint, and evidence-anchor snapshot are stored with the tour; a changed manifest invalidates the resumable tour. Model-facing evidence references use compact request-local aliases constrained to the supplied anchor set, then map back to immutable evidence fingerprints before validation and storage. Potentially sensitive, generated, and vendor files are marked; common key and environment-file patterns are excluded by default. Exclusions are editable local globs. `AGENTS.md`, `CONTRIBUTING.md`, `.github/CONTRIBUTING.md`, and `.gitlab/CONTRIBUTING.md` are included when present, capped at 20,000 characters each. Context over 750,000 characters is blocked until reduced.

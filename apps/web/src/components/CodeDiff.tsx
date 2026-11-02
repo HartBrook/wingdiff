@@ -1,5 +1,6 @@
-import { Fragment, memo } from "react";
-import type { DiffLine, EvidenceBlock } from "../types";
+import { memo, useMemo } from "react";
+import { presentDiffLines, type DiffLineSegments } from "../diffPresentation";
+import type { EvidenceBlock } from "../types";
 import { Icon } from "./Icon";
 
 interface Selection {
@@ -29,6 +30,10 @@ export const CodeDiff = memo(function CodeDiff({
   const selectedCount = selection?.evidenceId === evidence.id
     ? Math.abs(selection.end - selection.start) + 1
     : 0;
+  const lines = useMemo(
+    () => presentDiffLines(evidence.lines, evidence.path),
+    [evidence.lines, evidence.path],
+  );
 
   return (
     <section className="diff-card" aria-label={`${evidence.path} diff`}>
@@ -47,7 +52,7 @@ export const CodeDiff = memo(function CodeDiff({
       </header>
 
       <div className="diff-card__code" role="table">
-        {evidence.lines.map((line, index) => {
+        {lines.map((line, index) => {
           const side = line.kind === "deletion" ? "LEFT" : "RIGHT";
           const lineNumber = side === "RIGHT" ? line.newLine : line.oldLine;
           const selected = Boolean(
@@ -79,7 +84,7 @@ export const CodeDiff = memo(function CodeDiff({
                   <span aria-hidden="true" className="diff-line__sign">
                     {line.kind === "addition" ? "+" : line.kind === "deletion" ? "−" : ""}
                   </span>
-                  <code>{highlight(line)}</code>
+                  <code>{highlight(line.content, line.segments)}</code>
                 </>
               )}
             </div>
@@ -116,15 +121,61 @@ function directoryName(path: string) {
   return parts.length ? `${parts.join("/")}/` : "";
 }
 
-function highlight(line: DiffLine) {
-  const content = line.content.replace(/^\+ /, "").replace(/^- /, "");
+function highlight(content: string, segments?: DiffLineSegments) {
+  const changeStart = segments?.before.length ?? -1;
+  const changeEnd = segments ? changeStart + segments.changed.length : -1;
+  return syntaxTokens(content).flatMap((token, tokenIndex) => (
+    splitToken(content, token, changeStart, changeEnd).map((part, partIndex) => (
+      <span
+        className={part.changed ? `diff-line__change ${token.className}`.trim() : token.className || undefined}
+        key={`${token.start}-${tokenIndex}-${partIndex}`}
+      >
+        {part.text}
+      </span>
+    ))
+  ));
+}
+
+interface SyntaxToken {
+  start: number;
+  end: number;
+  className: string;
+}
+
+function syntaxTokens(content: string): SyntaxToken[] {
   const pattern = /(\"[^\"]*\"|'[^']*'|`[^`]*`|\b(?:async|await|const|return|if|else|new|throw|class|private|export|function|true|false|null|undefined)\b|\b\d+\b)/g;
-  return content.split(pattern).map((token, index) => {
-    if (!token) return null;
-    let className = "";
-    if (/^[\"'`]/.test(token)) className = "syntax-string";
-    else if (/^\d+$/.test(token)) className = "syntax-number";
-    else if (/^(async|await|const|return|if|else|new|throw|class|private|export|function|true|false|null|undefined)$/.test(token)) className = "syntax-keyword";
-    return <Fragment key={`${token}-${index}`}><span className={className}>{token}</span></Fragment>;
+  const tokens: SyntaxToken[] = [];
+  let cursor = 0;
+  for (const match of content.matchAll(pattern)) {
+    const start = match.index;
+    if (start > cursor) tokens.push({ start: cursor, end: start, className: "" });
+    const text = match[0];
+    tokens.push({ start, end: start + text.length, className: syntaxClass(text) });
+    cursor = start + text.length;
+  }
+  if (cursor < content.length) tokens.push({ start: cursor, end: content.length, className: "" });
+  return tokens;
+}
+
+function syntaxClass(token: string): string {
+  if (/^[\"'`]/.test(token)) return "syntax-string";
+  if (/^\d+$/.test(token)) return "syntax-number";
+  return "syntax-keyword";
+}
+
+function splitToken(content: string, token: SyntaxToken, changeStart: number, changeEnd: number) {
+  const boundaries = [token.start, token.end];
+  if (changeStart > token.start && changeStart < token.end) boundaries.push(changeStart);
+  if (changeEnd > token.start && changeEnd < token.end) boundaries.push(changeEnd);
+  boundaries.sort((left, right) => left - right);
+
+  return boundaries.slice(0, -1).map((start, index) => {
+    const end = boundaries[index + 1]!;
+    return {
+      text: content.slice(start, end),
+      start,
+      end,
+      changed: changeStart >= 0 && start >= changeStart && end <= changeEnd,
+    };
   });
 }

@@ -93,4 +93,14 @@ describe("guided review fixture", () => {
       }
     }
   });
+
+  it("stores changed-line content without unified-diff markers", () => {
+    const lines = [...tourStops, ...updateStops].flatMap((stop) => stop.evidence.flatMap((evidence) => evidence.lines));
+    const markedLines = lines.filter((line) => (
+      (line.kind === "addition" && /^[+](?: |$)/.test(line.content)) ||
+      (line.kind === "deletion" && /^[-](?: |$)/.test(line.content))
+    ));
+
+    expect(markedLines).toEqual([]);
+  });
 });
