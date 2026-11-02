@@ -48,8 +48,8 @@ test.describe.serial("local live review", () => {
     test.setTimeout(3 * 60_000);
     await openReview(page);
 
-    await expect(page.locator(".model-button")).toContainText("Codex CLI");
-    await expect(page.locator(".model-button")).toContainText("Account default");
+    await expect(page.locator(".begin-card")).toContainText("Default · Codex CLI · Account default");
+    await expect(page.locator(".topbar .model-button")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Generate guided review" })).toBeVisible();
     await expect(page.getByText(/changed files? passed anchor validation/i)).toBeVisible();
   });

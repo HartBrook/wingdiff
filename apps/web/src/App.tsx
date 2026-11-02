@@ -4,8 +4,6 @@ import {
   DEFAULT_SELECTION,
   FALLBACK_PROVIDERS,
   fetchProviders,
-  normalizeSelection,
-  preferredAvailableSelection,
   selectedModel,
   streamInvestigation,
   streamSessionInvestigation,
@@ -40,6 +38,7 @@ import {
   fetchReviewCheckpoint,
   fetchReviewProgress,
   fetchReviewSession,
+  fetchSessionModelSelectionOverride,
   fetchDraftComments,
   fetchInvestigationEntries,
   fetchReviewDraft,
@@ -56,6 +55,7 @@ import {
   revisionStopIndex,
   saveReviewDraft,
   saveReviewProgress,
+  saveSessionModelSelectionOverride,
   saveSessionContext,
   startSessionTourGeneration,
   updateInvestigationEntry,
@@ -251,8 +251,10 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setErrorMessage] = useState<string | null>(null);
   const [providers, setProviders] = useState<ProviderDefinition[]>(FALLBACK_PROVIDERS);
-  const [modelSelection, setModelSelection] = usePersistentState<ModelSelection>("wingdiff:model", DEFAULT_SELECTION, restoreModelSelection);
+  const [defaultModelSelection, setDefaultModelSelection] = useState<ModelSelection>(DEFAULT_SELECTION);
+  const [modelSelectionOverride, setModelSelectionOverride] = useState<ModelSelection | null>(null);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [modelSettingsSaving, setModelSettingsSaving] = useState(false);
   const [contextManifest, setContextManifest] = useState<SessionContextManifest | null>(null);
   const [contextPreviewOpen, setContextPreviewOpen] = useState(false);
   const [contextLoading, setContextLoading] = useState(false);
@@ -297,6 +299,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   const activeStop = stops[activeIndex];
   const activeEvidence = activeStop?.evidence.find((item) => item.id === activeEvidenceId) ?? activeStop?.evidence[0];
   const stopNotebook = activeStop ? notebook.filter((entry) => entry.stopId === activeStop.id) : [];
+  const modelSelection = modelSelectionOverride ?? defaultModelSelection;
   const activeProvider = providers.find((provider) => provider.id === modelSelection.provider);
   const activeModel = selectedModel(providers, modelSelection);
   const activeModelLabel = activeProvider ? `${activeProvider.name} · ${activeModel.name}` : activeModel.name;
@@ -338,11 +341,12 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       fetchReviewSubmission(session.id, controller.signal),
       fetchReviewPublication(session.id, controller.signal),
       fetchTourGenerationStatus(session.id, controller.signal),
-      fetchProviders(controller.signal).then((availableProviders) => {
-        setProviders(availableProviders);
-        setModelSelection((current) => preferredAvailableSelection(availableProviders, current));
+      fetchSessionModelSelectionOverride(session.id, controller.signal),
+      fetchProviders(controller.signal).then((catalog) => {
+        setProviders(catalog.providers);
+        setDefaultModelSelection(catalog.defaultSelection);
       }),
-    ]).then(([fullTour, updateTour, updateContext, fullCheckpoint, updateCheckpoint, storedProgress, storedComments, storedNotebook, storedReviewDraft, storedSubmission, storedPublication, storedGeneration]) => {
+    ]).then(([fullTour, updateTour, updateContext, fullCheckpoint, updateCheckpoint, storedProgress, storedComments, storedNotebook, storedReviewDraft, storedSubmission, storedPublication, storedGeneration, storedModelOverride]) => {
       setTours({ full: fullTour, update: updateTour });
       setUpdate(updateContext?.update ?? null);
       setBaselineCheckpoint(updateContext?.baselineCheckpoint ?? null);
@@ -354,6 +358,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       setDisposition(storedReviewDraft?.event ?? "COMMENT");
       setSubmission(storedSubmission);
       setPublication(storedPublication);
+      setModelSelectionOverride(storedModelOverride);
       setPublicationError(storedPublication?.error ?? null);
       setGenerationStatus(storedGeneration.state === "idle" ? null : storedGeneration);
       if (storedGeneration.state === "running" || storedGeneration.state === "succeeded") {
@@ -472,6 +477,21 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       setError(caught instanceof Error ? caught.message : "Wingdiff could not prepare the model context.");
     } finally {
       setContextLoading(false);
+    }
+  }
+
+  async function saveModelSettings(selection: ModelSelection | null) {
+    if (modelSettingsSaving) return;
+    setModelSettingsSaving(true);
+    setError(null);
+    try {
+      const override = selection && sameModelSelection(selection, defaultModelSelection) ? null : selection;
+      setModelSelectionOverride(await saveSessionModelSelectionOverride(session.id, override));
+      setModelPickerOpen(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Wingdiff could not save review model settings.");
+    } finally {
+      setModelSettingsSaving(false);
     }
   }
 
@@ -819,7 +839,6 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       <button className="home-button" onClick={onHome} type="button"><Icon name="git-pull" size={14} /><span>New review</span></button>
       <div className="pr-identity"><span>{metadata.repository}</span><strong>{session.target.platform === "gitlab" ? "!" : "#"}{metadata.number}</strong><span className="pr-identity__title">{metadata.title}</span></div>
       <div className="topbar__spacer" />
-      <button className="model-button" onClick={() => setModelPickerOpen(true)} type="button"><span className="model-button__spark"><Icon name="spark" size={13} /></span><span><small>{activeProvider?.configured ? "Review model" : "Model setup"}</small><strong>{activeModelLabel}</strong></span><Icon name="chevron-right" size={13} /></button>
       <a className="button button--quiet acquired-github-link" href={metadata.url} rel="noreferrer" target="_blank">{hostName} <Icon name="external" size={14} /></a>
       <button className="button button--primary topbar__review" onClick={() => openView("review")} type="button">Review {comments.length > 0 && <span>{comments.length}</span>}</button>
       <button aria-label={`Use ${theme === "dark" ? "light" : "dark"} theme`} className="icon-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} type="button"><Icon name={theme === "dark" ? "sun" : "moon"} size={17} /></button>
@@ -828,16 +847,16 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       <AcquiredTourRail activeIndex={activeIndex} inheritedStopIds={inheritedStopIds} onBrowse={() => openView("browse")} onReview={() => openView("review")} onSelect={selectStop} onSummary={() => openView("summary")} statuses={statuses} stops={stops} />
       <main className="main-canvas" ref={canvasRef}><AcquiredTourView activeEvidence={activeEvidence} activeEvidenceId={activeEvidenceId} activeFindingRevisions={activeFindingRevisions} activeIndex={activeIndex} comments={comments.filter((comment) => comment.stopId === activeStop.id).length} headSha={metadata.head.sha} onAsk={(prompt) => { setDrawerOpen(true); if (prompt) void askQuestion(prompt); }} onComment={() => openComment(false)} onEvidence={setActiveEvidenceId} onFindingComment={() => openComment(true)} onFlag={toggleFlag} onNavigate={navigateStop} onSelectLine={selectLine} onUnderstood={markUnderstood} selection={selection} status={statuses[activeStop.id] ?? "unseen"} stop={activeStop} totalStops={stops.length} /></main>
     </div> : <main className="main-canvas acquired-canvas" ref={canvasRef}>
-      {view === "summary" ? <AcquiredSummary activeModel={activeModelLabel} baselineCheckpoint={baselineCheckpoint} checkpoint={checkpoint} completing={completing} error={error} generated={generated} generating={generating || contextLoading} generationFailed={generationFailed} generationStatus={generationStatus} modelReady={Boolean(activeProvider?.configured)} notice={notice} onBegin={() => selectStop(activeIndex)} onBrowse={() => openView("browse")} onCheckUpdates={() => void checkForUpdates()} onComplete={() => void completeReview()} onGenerate={() => void previewGenerationContext()} onModel={() => setModelPickerOpen(true)} onScope={selectScope} onSelectStop={selectStop} refreshing={refreshing} reviewScope={reviewScope} scopedEvidence={scopedEvidence} session={session} statuses={statuses} stops={stops} tourLoading={tourLoading} update={update} /> : view === "browse" ? tourLoading ? null : <AcquiredBrowse blocks={blocks} initialFile={location.file} onFile={(file) => replaceReviewLocation(scoped("browse", { file }))} key={reviewScope} onSummary={() => openView("summary")} scope={reviewScope} session={session} /> : <AcquiredReviewDesk comments={comments} disposition={disposition} error={error} failedChecks={metadata.checks.failed} headSha={metadata.head.sha} highFindingCount={unresolvedHighFindingCount} hostName={hostName} onAllowRetry={() => void allowPublicationRetry()} onBack={() => back(scoped(generated ? "tour" : "summary", { stop: activeStop?.id }))} onDisposition={(event) => { setDisposition(event); void persistReviewDraft(reviewSummary, event); }} onPublish={(acknowledged) => void publishReviewToCodeHost(acknowledged)} onRemoveComment={(id) => void removeComment(id)} onSave={() => void persistReviewDraft()} onSummary={setReviewSummary} publication={publication} publishError={publicationError} publishing={publishingReview} saving={savingReview} statuses={statuses} stops={stops} submission={submission} summary={reviewSummary} />}
+      {view === "summary" ? <AcquiredSummary activeModel={`${activeModelLabel} · ${reasoningEffortLabel(modelSelection.reasoningEffort)}`} baselineCheckpoint={baselineCheckpoint} checkpoint={checkpoint} completing={completing} error={error} generated={generated} generating={generating || contextLoading} generationFailed={generationFailed} generationStatus={generationStatus} hasModelOverride={Boolean(modelSelectionOverride)} modelReady={Boolean(activeProvider?.configured)} notice={notice} onBegin={() => selectStop(activeIndex)} onBrowse={() => openView("browse")} onCheckUpdates={() => void checkForUpdates()} onComplete={() => void completeReview()} onGenerate={() => void previewGenerationContext()} onModel={() => setModelPickerOpen(true)} onScope={selectScope} onSelectStop={selectStop} refreshing={refreshing} reviewScope={reviewScope} scopedEvidence={scopedEvidence} session={session} statuses={statuses} stops={stops} tourLoading={tourLoading} update={update} /> : view === "browse" ? tourLoading ? null : <AcquiredBrowse blocks={blocks} initialFile={location.file} onFile={(file) => replaceReviewLocation(scoped("browse", { file }))} key={reviewScope} onSummary={() => openView("summary")} scope={reviewScope} session={session} /> : <AcquiredReviewDesk comments={comments} disposition={disposition} error={error} failedChecks={metadata.checks.failed} headSha={metadata.head.sha} highFindingCount={unresolvedHighFindingCount} hostName={hostName} onAllowRetry={() => void allowPublicationRetry()} onBack={() => back(scoped(generated ? "tour" : "summary", { stop: activeStop?.id }))} onDisposition={(event) => { setDisposition(event); void persistReviewDraft(reviewSummary, event); }} onPublish={(acknowledged) => void publishReviewToCodeHost(acknowledged)} onRemoveComment={(id) => void removeComment(id)} onSave={() => void persistReviewDraft()} onSummary={setReviewSummary} publication={publication} publishError={publicationError} publishing={publishingReview} saving={savingReview} statuses={statuses} stops={stops} submission={submission} summary={reviewSummary} />}
     </main>}
-    {modelPickerOpen && <ModelPicker onClose={() => setModelPickerOpen(false)} onSelection={setModelSelection} providers={providers} selection={modelSelection} />}
+    {modelPickerOpen && <ModelPicker defaultSelection={defaultModelSelection} error={error} onApply={(selection) => void saveModelSettings(selection)} onClose={() => setModelPickerOpen(false)} overrideSelection={modelSelectionOverride} providers={providers} saving={modelSettingsSaving} />}
     {contextPreviewOpen && contextManifest && activeProvider && <ContextPreview error={error} exclusions={exclusionText} manifest={contextManifest} modelName={activeModel.name} onCancel={() => setContextPreviewOpen(false)} onConfirm={() => void confirmGenerationContext()} onExclusions={setExclusionText} provider={activeProvider} saving={contextSaving} />}
     {drawerOpen && activeStop && activeEvidence && <InvestigationDrawer answering={answering} entries={stopNotebook} evidence={activeEvidence} headSha={metadata.head.sha} modelName={activeModelLabel} onAsk={askQuestion} onClose={closeInvestigation} onQuestion={setQuestion} onUseAnswer={useInvestigationAsComment} providerConfigured={Boolean(activeProvider?.configured)} question={question} stop={activeStop} />}
     {composer && <CommentComposer composer={composer} headSha={metadata.head.sha} onCancel={() => setComposer(null)} onChange={(body) => setComposer((current) => current ? { ...current, body } : null)} onSeverity={(severity) => setComposer((current) => current ? { ...current, severity } : null)} onStage={stageComment} />}
   </div>;
 }
 
-function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completing, error, generated, generating, generationFailed, generationStatus, modelReady, notice, onBegin, onBrowse, onCheckUpdates, onComplete, onGenerate, onModel, onScope, onSelectStop, refreshing, reviewScope, scopedEvidence, session, statuses, stops, tourLoading, update }: {
+function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completing, error, generated, generating, generationFailed, generationStatus, hasModelOverride, modelReady, notice, onBegin, onBrowse, onCheckUpdates, onComplete, onGenerate, onModel, onScope, onSelectStop, refreshing, reviewScope, scopedEvidence, session, statuses, stops, tourLoading, update }: {
   activeModel: string;
   baselineCheckpoint: ReviewCheckpoint | null;
   checkpoint: ReviewCheckpoint | null;
@@ -847,6 +866,7 @@ function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completi
   generating: boolean;
   generationFailed: boolean;
   generationStatus: TourGenerationStatus | null;
+  hasModelOverride: boolean;
   modelReady: boolean;
   notice: string | null;
   onBegin: () => void;
@@ -897,10 +917,10 @@ function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completi
       <section className="begin-card"><div><strong>{stops.length} review stop{stops.length === 1 ? "" : "s"}</strong><span>{stops.reduce((total, stop) => total + stop.minutes, 0)} min · pinned to {generated.headSha.slice(0, 7)}{generated.contextFingerprint ? ` · context ${generated.contextFingerprint.slice(0, 10)}` : ""}</span></div><button className="button button--hero" onClick={onBegin} type="button">Start review <Icon name="arrow-right" /></button></section>
       <section className="checkpoint-card"><div><span className={`card-icon ${checkpoint ? "" : "card-icon--spark"}`}><Icon name={checkpoint ? "check" : "shield"} size={17} /></span><div><strong>{checkpoint ? `Reviewed at ${checkpoint.reviewedHeadSha.slice(0, 7)}` : allReviewed ? "Ready to track future updates" : `${stops.length - reviewedStops} stop${stops.length - reviewedStops === 1 ? "" : "s"} remaining`}</strong><span>{checkpoint ? "Check whether the author has pushed anything new." : allReviewed ? "Save this head as the baseline for “Since your review.”" : "Review every stop before saving an update checkpoint."}</span></div></div>{checkpoint ? <button className="button button--secondary" disabled={refreshing} onClick={onCheckUpdates} type="button">{refreshing ? "Checking…" : "Check for updates"}<Icon name="arrow-right" size={14} /></button> : <button className="button button--secondary" disabled={!allReviewed || completing} onClick={onComplete} type="button">{completing ? "Saving…" : "Save checkpoint"}<Icon name="check" size={14} /></button>}</section>
     </> : <>
-      <section className="summary-findings acquired-evidence-ready"><header><div><div className="eyebrow">Evidence ready</div><h2>The change is pinned and ready for a guided review</h2></div><span className="summary-verdict"><Icon name="code" size={14} />{tourLoading ? "Checking" : "Not analyzed"}</span></header><div className="summary-clear"><Icon name="check" size={18} /><div><strong>{session.evidence.files.length} changed file{session.evidence.files.length === 1 ? "" : "s"} passed anchor validation.</strong><span>Generate a semantic route with {activeModel}, or inspect the diff directly.</span></div></div></section>
+      <section className="summary-findings acquired-evidence-ready"><header><div><div className="eyebrow">Evidence ready</div><h2>The change is pinned and ready for a guided review</h2></div><span className="summary-verdict"><Icon name="code" size={14} />{tourLoading ? "Checking" : "Not analyzed"}</span></header><div className="summary-clear"><Icon name="check" size={18} /><div><strong>{session.evidence.files.length} changed file{session.evidence.files.length === 1 ? "" : "s"} passed anchor validation.</strong><span>Generate a semantic route, or inspect the diff directly.</span></div></div></section>
       {metadata.body && <section className="summary-context acquired-description"><div><span>Author description</span><AuthorMarkdown source={metadata.body} /></div></section>}
       {error && <div className="target-error acquired-generation-error" role="alert"><Icon name="flag" size={14} /><span>{error}</span>{generationFailed && <button className="button button--quiet button--small" onClick={onModel} type="button">Review model setup</button>}</div>}
-      <section className="begin-card"><div><strong>{generating ? `Building ${generationStatus?.scope === "update" ? "update" : "guided"} tour` : modelReady ? activeModel : "Choose a configured model"}</strong><span>{generating && generationStatus?.state === "running" ? `${formatElapsedTime(generationStatus.elapsedMs)} elapsed${generationStatus.timeoutMs ? ` · ${formatElapsedTime(generationStatus.timeoutMs)} limit` : ""} · status checked every second` : "Analysis stays inside the local Wingdiff process"}</span></div><div className="acquired-start-actions"><button className="button button--quiet" onClick={onBrowse} type="button">Browse diff</button><button className="button button--hero" disabled={tourLoading || generating} onClick={onGenerate} type="button">{generating ? generationStatus?.state === "running" ? `Building · ${formatElapsedTime(generationStatus.elapsedMs)}` : "Preparing…" : modelReady ? "Generate guided review" : "Choose model"} <Icon name="arrow-right" /></button></div></section>
+      <section className="begin-card"><div><strong>{generating ? `Building ${generationStatus?.scope === "update" ? "update" : "guided"} tour` : modelReady ? "Ready to build your guided review" : "Model setup required"}</strong><span>{generating && generationStatus?.state === "running" ? `${formatElapsedTime(generationStatus.elapsedMs)} elapsed${generationStatus.timeoutMs ? ` · ${formatElapsedTime(generationStatus.timeoutMs)} limit` : ""} · status checked every second` : <>{hasModelOverride ? "Override" : "Default"} · {activeModel} <button className="model-change" disabled={generating} onClick={onModel} type="button">{modelReady ? "Change" : "Set up model"}</button></>}</span></div><div className="acquired-start-actions"><button className="button button--quiet" onClick={onBrowse} type="button">Browse diff</button><button className="button button--hero" disabled={tourLoading || generating} onClick={onGenerate} type="button">{generating ? generationStatus?.state === "running" ? `Building · ${formatElapsedTime(generationStatus.elapsedMs)}` : "Preparing…" : modelReady ? "Generate guided review" : "Set up model"} <Icon name="arrow-right" /></button></div></section>
     </>}
     {notice && <div className="review-notice" role="status"><Icon name="check" size={14} />{notice}</div>}
     {generated && error && <div className="target-error acquired-generation-error" role="alert"><Icon name="flag" size={14} />{error}</div>}
@@ -1070,7 +1090,8 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
   const [question, setQuestion] = useState("");
   const [answering, setAnswering] = useState(false);
   const [providers, setProviders] = useState<ProviderDefinition[]>(FALLBACK_PROVIDERS);
-  const [modelSelection, setModelSelection] = usePersistentState<ModelSelection>("wingdiff:model", DEFAULT_SELECTION, restoreModelSelection);
+  const [defaultModelSelection, setDefaultModelSelection] = useState<ModelSelection>(DEFAULT_SELECTION);
+  const [modelSelectionOverride, setModelSelectionOverride] = useState<ModelSelection | null>(null);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [theme, setTheme] = usePersistentState<"dark" | "light">("wingdiff:theme", "dark");
   const [reviewSummary, setReviewSummary] = useState(
@@ -1089,6 +1110,7 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
   const understoodCount = tourStops.filter((stop) => statuses[stop.id] === "understood").length;
   const activeEvidence = activeStop.evidence.find((item) => item.id === activeEvidenceId) ?? activeStop.evidence[0]!;
   const stopNotebook = notebook.filter((entry) => entry.stopId === activeStop.id);
+  const modelSelection = modelSelectionOverride ?? defaultModelSelection;
   const activeModel = selectedModel(providers, modelSelection);
   const activeProvider = providers.find((provider) => provider.id === modelSelection.provider);
   const activeModelLabel = activeProvider ? `${activeProvider.name} · ${activeModel.name}` : activeModel.name;
@@ -1099,9 +1121,9 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetchProviders(controller.signal).then((availableProviders) => {
-      setProviders(availableProviders);
-      setModelSelection((current) => preferredAvailableSelection(availableProviders, current));
+    fetchProviders(controller.signal).then((catalog) => {
+      setProviders(catalog.providers);
+      setDefaultModelSelection(catalog.defaultSelection);
     }).catch(() => undefined);
     return () => controller.abort();
   }, []);
@@ -1391,10 +1413,13 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
 
       {modelPickerOpen && (
         <ModelPicker
+          defaultSelection={defaultModelSelection}
+          error={null}
+          onApply={(selection) => { setModelSelectionOverride(selection && !sameModelSelection(selection, defaultModelSelection) ? selection : null); setModelPickerOpen(false); }}
           onClose={() => setModelPickerOpen(false)}
-          onSelection={setModelSelection}
+          overrideSelection={modelSelectionOverride}
           providers={providers}
-          selection={modelSelection}
+          saving={false}
         />
       )}
 
@@ -1558,22 +1583,34 @@ function ContextPreview({ error, exclusions, manifest, modelName, onCancel, onCo
   </section></div>;
 }
 
-function ModelPicker({ onClose, onSelection, providers, selection }: { onClose: () => void; onSelection: (selection: ModelSelection) => void; providers: ProviderDefinition[]; selection: ModelSelection }) {
+function ModelPicker({ defaultSelection, error, onApply, onClose, overrideSelection, providers, saving }: {
+  defaultSelection: ModelSelection;
+  error: string | null;
+  onApply: (selection: ModelSelection | null) => void;
+  onClose: () => void;
+  overrideSelection: ModelSelection | null;
+  providers: ProviderDefinition[];
+  saving: boolean;
+}) {
+  const [selection, setSelection] = useState<ModelSelection>(overrideSelection ?? defaultSelection);
   const provider = providers.find((candidate) => candidate.id === selection.provider) ?? providers[0]!;
   const active = provider.models.find((model) => model.id === selection.model) ?? provider.models[0]!;
+  const defaultLabel = modelSelectionLabel(providers, defaultSelection);
 
   function chooseProvider(next: ProviderDefinition) {
     const first = next.models[0]!;
-    onSelection({ provider: next.id, model: first.id, reasoningEffort: first.defaultEffort });
+    setSelection({ provider: next.id, model: first.id, reasoningEffort: first.defaultEffort });
   }
 
-  return <div className="modal-backdrop model-backdrop" role="presentation"><section aria-modal="true" className="model-modal" role="dialog">
-    <header><div><div className="eyebrow">AI provider</div><h2>Choose your review copilot.</h2><p>Codex CLI uses your existing local sign-in. Direct API providers remain optional, and credentials never enter browser JavaScript.</p></div><button aria-label="Close model picker" className="icon-button" onClick={onClose} type="button"><Icon name="x" size={17} /></button></header>
+  return <div className="modal-backdrop model-backdrop" role="presentation"><section aria-label="Review settings" aria-modal="true" className="model-modal" role="dialog">
+    <header><div><div className="eyebrow">Review settings</div><h2>Override the model for this review.</h2><p>New reviews use the configured default automatically. This override stays with only the current review.</p></div><button aria-label="Close review settings" className="icon-button" disabled={saving} onClick={onClose} type="button"><Icon name="x" size={17} /></button></header>
+    <div className="model-default"><span><Icon name="spark" size={14} /></span><div><small>Configured default</small><strong>{defaultLabel}</strong></div>{!overrideSelection && <em>In use</em>}</div>
+    {error && <div className="target-error model-settings-error" role="alert"><Icon name="flag" size={13} />{error}</div>}
     <div className="provider-tabs">{providers.map((candidate) => <button className={candidate.id === provider.id ? "is-active" : ""} key={candidate.id} onClick={() => chooseProvider(candidate)} type="button"><span>{candidate.name}</span><small className={candidate.configured ? "is-configured" : ""}><i />{candidate.configured ? "Ready" : candidate.transport === "cli" ? "Needs sign-in" : "Needs key"}</small></button>)}</div>
-    <div className="model-grid">{provider.models.map((model) => <button className={model.id === active.id ? "is-active" : ""} key={model.id} onClick={() => onSelection({ provider: provider.id, model: model.id, reasoningEffort: model.defaultEffort })} type="button"><span className="model-radio"><i /></span><span><strong>{model.name}{model.badge && <em>{model.badge}</em>}</strong><small>{model.description}</small></span></button>)}</div>
-    <section className="reasoning-setting"><div><span>Reasoning effort</span><small>Higher effort can improve difficult reviews with more latency and token usage.</small></div><div>{active.reasoningEfforts.map((effort) => <button className={selection.reasoningEffort === effort ? "is-active" : ""} key={effort} onClick={() => onSelection({ ...selection, reasoningEffort: effort })} type="button">{effort}</button>)}</div></section>
+    <div className="model-grid">{provider.models.map((model) => <button className={model.id === active.id ? "is-active" : ""} key={model.id} onClick={() => setSelection({ provider: provider.id, model: model.id, reasoningEffort: model.defaultEffort })} type="button"><span className="model-radio"><i /></span><span><strong>{model.name}{model.badge && <em>{model.badge}</em>}</strong><small>{model.description}</small></span></button>)}</div>
+    <section className="reasoning-setting"><div><span>Reasoning effort</span><small>Higher effort can improve difficult reviews with more latency and token usage.</small></div><div>{active.reasoningEfforts.map((effort) => <button className={selection.reasoningEffort === effort ? "is-active" : ""} key={effort} onClick={() => setSelection({ ...selection, reasoningEffort: effort })} type="button">{effort}</button>)}</div></section>
     {!provider.configured && <div className="provider-setup"><Icon name="shield" size={16} /><div><strong>{provider.name} is not ready</strong><p>{provider.setupDescription} Run <code>{provider.setupCommand}</code>, then restart Wingdiff.</p></div></div>}
-    <footer><span><Icon name="check" size={13} /> Selection saved locally</span><button className="button button--primary" onClick={onClose} type="button">Use {active.name}</button></footer>
+    <footer><button className="button button--quiet" disabled={saving || !overrideSelection} onClick={() => onApply(null)} type="button">Reset to default</button><div><button className="button button--quiet" disabled={saving} onClick={onClose} type="button">Cancel</button><button className="button button--primary" disabled={saving || !provider.configured} onClick={() => onApply(selection)} type="button">{saving ? "Saving…" : "Apply override"}</button></div></footer>
   </section></div>;
 }
 
@@ -1623,12 +1660,24 @@ function AuthorMarkdown({ fallback, source }: { fallback?: string; source: strin
   return <Suspense fallback={<p className="markdown-loading">Formatting description…</p>}><MarkdownContent fallback={fallback} source={source} /></Suspense>;
 }
 
-function restoreModelSelection(stored: ModelSelection) { return normalizeSelection(FALLBACK_PROVIDERS, stored); }
-
 function usePersistentState<T>(key: string, fallback: T, restore: (stored: T) => T = (stored) => stored) {
   const [value, setValue] = useState<T>(() => { try { const stored = window.localStorage.getItem(key); return stored ? restore(JSON.parse(stored) as T) : fallback; } catch { return fallback; } });
   useEffect(() => { try { window.localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage can be unavailable */ } }, [key, value]);
   return [value, setValue] as const;
+}
+
+function sameModelSelection(left: ModelSelection, right: ModelSelection) {
+  return left.provider === right.provider && left.model === right.model && left.reasoningEffort === right.reasoningEffort;
+}
+
+function modelSelectionLabel(providers: ProviderDefinition[], selection: ModelSelection) {
+  const provider = providers.find((candidate) => candidate.id === selection.provider);
+  const model = selectedModel(providers, selection);
+  return `${provider?.name ?? model.family} · ${model.name} · ${reasoningEffortLabel(selection.reasoningEffort)}`;
+}
+
+function reasoningEffortLabel(effort: ModelSelection["reasoningEffort"]) {
+  return effort === "xhigh" ? "Extra high" : effort.charAt(0).toUpperCase() + effort.slice(1);
 }
 
 function shortTitle(title: string) { return title.replace(/^The /, "").replace(/^Every /, "").replace(/^Delay /, ""); }
