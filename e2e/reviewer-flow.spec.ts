@@ -65,6 +65,22 @@ test("returns to the top when marking a stop understood", async ({ page }) => {
   await expect.poll(() => canvas.evaluate((element) => element.scrollTop)).toBe(0);
 });
 
+test("shows a readable, selectable intraline replacement in the demo update review", async ({ page }) => {
+  await page.goto("/?demo=1");
+  await page.getByRole("button", { name: "Review updates" }).click();
+
+  await expect(page.locator(".diff-line__change").first()).toBeVisible();
+  const header = page.locator(".diff-line__header").first();
+  await expect(header).toHaveText(/^@ src\/infra\/redis\/attempt-store\.ts:\d+ @/);
+  await expect(header).not.toContainText("@@");
+
+  const changedRow = page.locator(".diff-line--deletion, .diff-line--addition").first();
+  const lineButton = changedRow.locator(".diff-line__number");
+  await expect(lineButton).toBeEnabled();
+  await lineButton.click();
+  await expect(changedRow).toHaveClass(/is-selected/);
+});
+
 test("moves from the final real-review stop directly to the review desk", async ({ page }) => {
   await mockReviewApi(page, { tourReady: true });
   await page.goto("/?session=pilot-session");

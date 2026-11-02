@@ -11,8 +11,8 @@ describe("presentDiffLines", () => {
 
     const presented = presentDiffLines(lines, "src/timeouts.ts");
 
-    expect(presented[0]?.segments).toEqual({ before: "const timeout = ", changed: "30", after: ";" });
-    expect(presented[1]?.segments).toEqual({ before: "const timeout = ", changed: "60", after: ";" });
+    expect(presented[0]?.segments).toEqual({ before: "const timeout = ", changed: "3", after: "0;" });
+    expect(presented[1]?.segments).toEqual({ before: "const timeout = ", changed: "6", after: "0;" });
   });
 
   it("uses Unicode code points when finding the changed span", () => {
@@ -25,6 +25,36 @@ describe("presentDiffLines", () => {
 
     expect(presented[0]?.segments).toEqual({ before: "const label = \"café ", changed: "old", after: "\";" });
     expect(presented[1]?.segments).toEqual({ before: "const label = \"café ", changed: "new", after: "\";" });
+  });
+
+  it("keeps supplementary-plane code points intact", () => {
+    const lines: DiffLine[] = [
+      { kind: "deletion", oldLine: 3, content: "const marker = \"😀\";" },
+      { kind: "addition", newLine: 3, content: "const marker = \"😁\";" },
+    ];
+
+    const presented = presentDiffLines(lines, "src/labels.ts");
+
+    expect(presented[0]?.segments).toEqual({ before: "const marker = \"", changed: "😀", after: "\";" });
+    expect(presented[1]?.segments).toEqual({ before: "const marker = \"", changed: "😁", after: "\";" });
+  });
+
+  it("suppresses intraline segments for complete replacements", () => {
+    const lines: DiffLine[] = [
+      { kind: "deletion", oldLine: 4, content: "old" },
+      { kind: "addition", newLine: 4, content: "new" },
+    ];
+
+    expect(presentDiffLines(lines, "file.txt").every((line) => line.segments === undefined)).toBe(true);
+  });
+
+  it("ignores whitespace-only common affixes when deciding whether to segment", () => {
+    const lines: DiffLine[] = [
+      { kind: "deletion", oldLine: 4, content: "    old" },
+      { kind: "addition", newLine: 4, content: "    new" },
+    ];
+
+    expect(presentDiffLines(lines, "file.txt").every((line) => line.segments === undefined)).toBe(true);
   });
 
   it("leaves unbalanced replacement runs unsegmented", () => {

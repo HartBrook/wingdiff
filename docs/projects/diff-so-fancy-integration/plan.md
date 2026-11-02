@@ -56,8 +56,8 @@ describe("presentDiffLines", () => {
 
     const presented = presentDiffLines(lines, "src/timeouts.ts");
 
-    expect(presented[0]?.segments).toEqual({ before: "const timeout = ", changed: "30", after: ";" });
-    expect(presented[1]?.segments).toEqual({ before: "const timeout = ", changed: "60", after: ";" });
+    expect(presented[0]?.segments).toEqual({ before: "const timeout = ", changed: "3", after: "0;" });
+    expect(presented[1]?.segments).toEqual({ before: "const timeout = ", changed: "6", after: "0;" });
   });
 
   it("uses Unicode code points when finding the changed span", () => {
@@ -70,6 +70,36 @@ describe("presentDiffLines", () => {
 
     expect(presented[0]?.segments).toEqual({ before: "const label = \"café ", changed: "old", after: "\";" });
     expect(presented[1]?.segments).toEqual({ before: "const label = \"café ", changed: "new", after: "\";" });
+  });
+
+  it("keeps supplementary-plane code points intact", () => {
+    const lines: DiffLine[] = [
+      { kind: "deletion", oldLine: 3, content: "const marker = \"😀\";" },
+      { kind: "addition", newLine: 3, content: "const marker = \"😁\";" },
+    ];
+
+    const presented = presentDiffLines(lines, "src/labels.ts");
+
+    expect(presented[0]?.segments).toEqual({ before: "const marker = \"", changed: "😀", after: "\";" });
+    expect(presented[1]?.segments).toEqual({ before: "const marker = \"", changed: "😁", after: "\";" });
+  });
+
+  it("suppresses intraline segments for complete replacements", () => {
+    const lines: DiffLine[] = [
+      { kind: "deletion", oldLine: 4, content: "old" },
+      { kind: "addition", newLine: 4, content: "new" },
+    ];
+
+    expect(presentDiffLines(lines, "file.txt").every((line) => line.segments === undefined)).toBe(true);
+  });
+
+  it("ignores whitespace-only common affixes when deciding whether to segment", () => {
+    const lines: DiffLine[] = [
+      { kind: "deletion", oldLine: 4, content: "    old" },
+      { kind: "addition", newLine: 4, content: "    new" },
+    ];
+
+    expect(presentDiffLines(lines, "file.txt").every((line) => line.segments === undefined)).toBe(true);
   });
 
   it("leaves unbalanced replacement runs unsegmented", () => {
@@ -138,19 +168,20 @@ npm test --workspace @wingdiff/web -- src/diffPresentation.test.ts
 
 Expected: FAIL because `./diffPresentation` does not exist. If Vitest reports another reason, fix the test invocation or imports and rerun until the failure is specifically the missing module.
 
-- [ ] **Step 3: Write the failing canonical-fixture test**
+- [ ] **Step 3: Write the failing fixture intraline test**
 
-Add this test to `apps/web/src/fixture.test.ts`:
+Import `presentDiffLines` into `apps/web/src/fixture.test.ts` and add this test:
 
 ```typescript
-  it("stores changed-line content without unified-diff markers", () => {
-    const lines = [...tourStops, ...updateStops].flatMap((stop) => stop.evidence.flatMap((evidence) => evidence.lines));
-    const markedLines = lines.filter((line) => (
-      (line.kind === "addition" && /^[+](?: |$)/.test(line.content)) ||
-      (line.kind === "deletion" && /^[-](?: |$)/.test(line.content))
-    ));
+  it("includes an intraline replacement in the update review", () => {
+    const segments = updateStops.flatMap((stop) => stop.evidence.flatMap((evidence) => (
+      presentDiffLines(evidence.lines, evidence.path).flatMap((line) => line.segments ? [line.segments] : [])
+    )));
 
-    expect(markedLines).toEqual([]);
+    expect(segments.map((segment) => segment.changed)).toEqual(expect.arrayContaining([
+      "Number(await this.redis.get(key) ?? 0) + 1",
+      "await this.redis.eval(INCREMENT_WITH_TTL, { keys: [key], arguments: [ttlMs] })",
+    ]));
   });
 ```
 
@@ -160,14 +191,18 @@ Run:
 npm test --workspace @wingdiff/web -- src/fixture.test.ts
 ```
 
-Expected: FAIL because demo fixture changed lines still contain unified-diff markers.
+Expected: FAIL because the update evidence has no equal-length deletion/addition pair, so `presentDiffLines` produces no segments.
 
-- [ ] **Step 4: Normalize the demo fixture and verify GREEN**
+- [ ] **Step 4: Add a natural equal-length replacement to the demo fixture and verify GREEN**
 
-Remove only the fixture-only leading `+ ` and `- ` markers from changed-line content:
+In the `redis-increment-update` evidence block, replace the unbalanced three-line deletion and five-line addition with a small coherent replacement:
 
-```bash
-perl -pi -e 's/content: "\+ /content: "/g; s/content: "- /content: "/g' apps/web/src/fixture.ts
+```typescript
+{ kind: "context", oldLine: 20, newLine: 20, content: "async increment(subject: string, ttlMs: number) {" },
+{ kind: "deletion", oldLine: 21, content: "  const next = Number(await this.redis.get(key) ?? 0) + 1;", emphasized: true },
+{ kind: "addition", newLine: 21, content: "  const next = await this.redis.eval(INCREMENT_WITH_TTL, { keys: [key], arguments: [ttlMs] });", emphasized: true },
+{ kind: "context", oldLine: 22, newLine: 22, content: "  return next;" },
+{ kind: "context", oldLine: 23, newLine: 23, content: "}" },
 ```
 
 Run:
@@ -176,7 +211,7 @@ Run:
 npm test --workspace @wingdiff/web -- src/fixture.test.ts
 ```
 
-Expected: PASS. The fixture now matches the server's canonical `DiffLine.content` shape, so the renderer never needs to guess whether a leading `+ ` or `- ` is a marker or legitimate source text.
+Expected: PASS. The update review now has a natural equal-length replacement with a shared `const next = ` prefix and `;` suffix, so the browser can show an intraline segment.
 
 - [ ] **Step 5: Implement the minimal presentation helper**
 
@@ -260,6 +295,7 @@ function splitChangedSpan(
   const deletionSegments = segments(deleted, prefix, suffix);
   const additionSegments = segments(added, prefix, suffix);
   if (!deletionSegments.changed && !additionSegments.changed) return undefined;
+  if (!/\S/.test(deletionSegments.before) && !/\S/.test(deletionSegments.after)) return undefined;
   return { deletion: deletionSegments, addition: additionSegments };
 }
 
@@ -280,7 +316,7 @@ Run:
 npm test --workspace @wingdiff/web -- src/diffPresentation.test.ts
 ```
 
-Expected: PASS, 7 tests passed.
+Expected: PASS, 10 tests passed.
 
 - [ ] **Step 7: Write the failing component and stylesheet tests**
 
@@ -358,6 +394,8 @@ describe("CodeDiff", () => {
   });
 });
 ```
+
+The stylesheet assertion extracts each changed-span rule and verifies the exact dark/light opaque colors, the two `box-shadow: inset 0 -2px 0 ...` declarations, the absence of `background` in those rules, and the existing whole-row addition/deletion backgrounds.
 
 - [ ] **Step 8: Run the component tests and verify RED**
 
@@ -562,26 +600,38 @@ function splitToken(content: string, token: SyntaxToken, changeStart: number, ch
 In `apps/web/src/styles.css`, add these variables to the dark `:root` block after `--code-delete-strong`:
 
 ```css
-  --code-add-inline: rgba(106, 226, 160, 0.34);
-  --code-delete-inline: rgba(255, 126, 116, 0.34);
+  --code-add-inline: #6ae2a0;
+  --code-delete-inline: #ff7e74;
 ```
 
 Add these variables to the light `:root[data-theme="light"]` block after its `--code-delete-strong`:
 
 ```css
-  --code-add-inline: rgba(36, 135, 79, 0.24);
-  --code-delete-inline: rgba(185, 69, 56, 0.23);
+  --code-add-inline: #21794e;
+  --code-delete-inline: #b94538;
 ```
 
 Add these rules after `.diff-line__sign`:
 
 ```css
 .diff-line__change { padding: 1px 0; border-radius: 2px; }
-.diff-line--addition .diff-line__change { background: var(--code-add-inline); }
-.diff-line--deletion .diff-line__change { background: var(--code-delete-inline); }
+.diff-line--addition .diff-line__change { box-shadow: inset 0 -2px 0 var(--code-add-inline); }
+.diff-line--deletion .diff-line__change { box-shadow: inset 0 -2px 0 var(--code-delete-inline); }
 ```
 
-- [ ] **Step 11: Run the focused web tests and verify GREEN**
+The whole-row addition/deletion backgrounds remain unchanged. Changed spans must not add a text background; the stylesheet test rejects `background` inside both changed-span rules and asserts the exact opaque underline colors and inset rules.
+
+- [ ] **Step 11: Add the focused browser proof and run focused tests**
+
+Add a Playwright test in `e2e/reviewer-flow.spec.ts` that opens `/?demo=1`, selects `Review updates`, and verifies that a `.diff-line__change` span is visible, the active header starts with `@ src/infra/redis/attempt-store.ts:<line> @` rather than `@@`, and a line-number button in a changed row can be selected.
+
+Run the focused browser test:
+
+```bash
+npx playwright test e2e/reviewer-flow.spec.ts --grep "readable, selectable intraline replacement"
+```
+
+Expected: PASS, 1 test passed.
 
 Run:
 
@@ -589,7 +639,7 @@ Run:
 npm test --workspace @wingdiff/web -- src/diffPresentation.test.ts src/fixture.test.ts src/components/CodeDiff.test.tsx
 ```
 
-Expected: PASS, all presentation and component tests pass.
+Expected: PASS, 23 presentation, fixture, and component tests across 3 files.
 
 - [ ] **Step 12: Document the integration boundary**
 
@@ -598,10 +648,11 @@ Add this paragraph under the `### Read-only change acquisition` section in `READ
 ```markdown
 The built-in diff viewer takes a lightweight cue from
 [diff-so-fancy](https://github.com/so-fancy/diff-so-fancy): paired changed
-lines emphasize only the intraline span that differs, and hunk headers are
-reduced to a readable `@ path:line @ context` form. Wingdiff does not run the
-terminal renderer or consume ANSI output; Git's structured diff remains the
-authoritative source for line numbers, fingerprints, and review anchors.
+lines with meaningful shared context emphasize only the intraline span that
+differs, and hunk headers are reduced to a readable `@ path:line @ context`
+form. Wingdiff does not run the terminal renderer or consume ANSI output;
+Git's structured diff remains the authoritative source for line numbers,
+fingerprints, and review anchors.
 ```
 
 - [ ] **Step 13: Run the complete repository verification**
@@ -633,40 +684,37 @@ npm exec --workspace @wingdiff/web -- vitest run src/diffPresentation.test.ts --
 
 Expected: `diffPresentation.ts` has greater than 90 percent statements, branches, functions, and lines. If any metric is at or below 90 percent, add tests for the uncovered behavior, rerun the focused test to observe it fail when the behavior is absent, then implement and rerun. Report the exact four coverage percentages.
 
-- [ ] **Step 15: Exercise the feature in the local development server**
+- [ ] **Step 15: Leave server verification to the controller**
 
-Run this command in a dedicated PTY session that remains alive:
-
-```bash
-npm run wingdiff -- --demo --no-open
-```
-
-Expected: the command prints an authenticated `Wingdiff is ready at` URL with a
-`wingdiff_token` query parameter. Open that URL, choose the demo review, enter
-Changed files, and verify that a paired replacement shows a narrower intraline
-emphasis and that the hunk header uses `@ path:line @ context` instead of
-`@@ ... @@`. Confirm line selection still works. Keep the server session alive for
-the user and record its URL, PTY session ID, representative flow, and any
-limitation in the report.
+Do not leave a development or demo server running. The focused and full
+Playwright runs own the browser-level proof and shut their web server down when
+they exit. The controller may perform a separate persistent authenticated
+server check after the fix wave; record that URL and session only if the check
+is delegated.
 
 - [ ] **Step 16: Commit the validated change**
 
 Use explicit task-owned paths:
 
 ```bash
-gcommit --no-push -m "feat: add diff-so-fancy-style diff readability" -- docs/projects/diff-so-fancy-integration/plan.md apps/web/src/diffPresentation.ts apps/web/src/diffPresentation.test.ts apps/web/src/fixture.ts apps/web/src/fixture.test.ts apps/web/src/components/CodeDiff.tsx apps/web/src/components/CodeDiff.test.tsx apps/web/src/styles.css README.md
+gcommit --no-push -m "fix: refine diff presentation and demo coverage" -- docs/projects/diff-so-fancy-integration/plan.md apps/web/src/diffPresentation.ts apps/web/src/diffPresentation.test.ts apps/web/src/fixture.ts apps/web/src/fixture.test.ts apps/web/src/components/CodeDiff.tsx apps/web/src/components/CodeDiff.test.tsx apps/web/src/styles.css README.md e2e/reviewer-flow.spec.ts
 ```
 
-Expected: one local commit containing only the plan, presentation helper and tests, viewer integration, styles, and documentation. Do not push, merge, or deploy.
+Expected: one local commit containing only the plan, presentation helper and tests, viewer integration, styles, browser coverage, and documentation. Do not push, merge, or deploy.
 
 ## Verification Receipt
 
-The implementer report must record:
-- RED command and the exact missing-behavior failure for both TDD cycles
-- GREEN focused-test output
-- Complete `npm test`, `npm run typecheck`, `npm run build`, and `npm run test:e2e` results
-- Exact helper coverage percentages
-- Commit SHA and changed paths
-- Local URL and PTY session ID for the still-running development server
-- Representative demo flow and visual verification result
-- Any intentional limitation, especially that diff-so-fancy itself is not bundled
+The fix-wave implementer report records:
+
+- RED/GREEN evidence for exact intraline spans, meaningful-affix suppression, high-contrast underline CSS, the fixture replacement, and the focused Playwright flow.
+- Focused web verification: 3 files passed, 23 tests passed.
+- Focused demo Playwright verification: 1 test passed.
+- Complete `npm test`: 24 server files / 151 tests and 10 web files / 64 tests passed.
+- `npm run typecheck`: server and web both passed.
+- `npm run build`: web (321 modules) and server both passed.
+- Full `npm run test:e2e`: 8 tests passed.
+- Helper coverage: statements 100% (50/50), branches 100% (28/28), functions 100% (5/5), lines 100% (40/40).
+- The temporary coverage provider was installed without changing package manifests or the lockfile, then `npm ci` restored the locked dependency tree.
+- No development server was left running; the controller owns the persistent authenticated server check.
+- The final fix commit SHA and changed paths are recorded in `task-1-report.md` after commit.
+- Diff-so-fancy itself remains intentionally unbundled; Wingdiff presents structured Git data and does not execute Perl, parse ANSI, or add a runtime dependency.

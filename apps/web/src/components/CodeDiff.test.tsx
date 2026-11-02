@@ -5,6 +5,11 @@ import { describe, expect, it } from "vitest";
 import type { EvidenceBlock } from "../types";
 import { CodeDiff } from "./CodeDiff";
 
+function ruleBody(css: string, selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`${escaped}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+}
+
 describe("CodeDiff", () => {
   const sampleEvidence: EvidenceBlock = {
     id: "evidence-1",
@@ -55,15 +60,22 @@ describe("CodeDiff", () => {
     expect(html).toContain("new");
   });
 
-  it("defines strong deletion tokens and intraline emphasis CSS rules", () => {
+  it("uses high-contrast intraline underlines without filled backgrounds", () => {
     const cssPath = resolve(__dirname, "../styles.css");
     const css = readFileSync(cssPath, "utf-8");
+    const additionChange = ruleBody(css, ".diff-line--addition .diff-line__change");
+    const deletionChange = ruleBody(css, ".diff-line--deletion .diff-line__change");
 
-    expect(css).toContain("--code-add-inline:");
-    expect(css).toContain("--code-delete-inline:");
-    expect(css).toContain(".diff-line__change");
-    expect(css).toContain(".diff-line--addition .diff-line__change");
-    expect(css).toContain(".diff-line--deletion .diff-line__change");
+    expect(css).toContain("--code-add-inline: #6ae2a0;");
+    expect(css).toContain("--code-delete-inline: #ff7e74;");
+    expect(css).toContain("--code-add-inline: #21794e;");
+    expect(css).toContain("--code-delete-inline: #b94538;");
+    expect(additionChange).toContain("box-shadow: inset 0 -2px 0 var(--code-add-inline);");
+    expect(deletionChange).toContain("box-shadow: inset 0 -2px 0 var(--code-delete-inline);");
+    expect(additionChange).not.toContain("background");
+    expect(deletionChange).not.toContain("background");
+    expect(css).toContain(".diff-line--addition { background: var(--code-add); }");
+    expect(css).toContain(".diff-line--deletion { background: var(--code-delete); }");
     expect(css).toContain(".diff-line--deletion.is-emphasized");
     expect(css).toContain(".diff-line--addition.is-emphasized");
   });

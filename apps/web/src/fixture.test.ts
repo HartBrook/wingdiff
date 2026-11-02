@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { presentDiffLines } from "./diffPresentation";
 import { pullRequest, reviewUpdate, risks, topologyNodes, tourStops, updateStops } from "./fixture";
 
 describe("guided review fixture", () => {
@@ -94,13 +95,14 @@ describe("guided review fixture", () => {
     }
   });
 
-  it("stores changed-line content without unified-diff markers", () => {
-    const lines = [...tourStops, ...updateStops].flatMap((stop) => stop.evidence.flatMap((evidence) => evidence.lines));
-    const markedLines = lines.filter((line) => (
-      (line.kind === "addition" && /^[+](?: |$)/.test(line.content)) ||
-      (line.kind === "deletion" && /^[-](?: |$)/.test(line.content))
-    ));
+  it("includes an intraline replacement in the update review", () => {
+    const segments = updateStops.flatMap((stop) => stop.evidence.flatMap((evidence) => (
+      presentDiffLines(evidence.lines, evidence.path).flatMap((line) => line.segments ? [line.segments] : [])
+    )));
 
-    expect(markedLines).toEqual([]);
+    expect(segments.map((segment) => segment.changed)).toEqual(expect.arrayContaining([
+      "Number(await this.redis.get(key) ?? 0) + 1",
+      "await this.redis.eval(INCREMENT_WITH_TTL, { keys: [key], arguments: [ttlMs] })",
+    ]));
   });
 });

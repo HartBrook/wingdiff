@@ -62,13 +62,6 @@ function splitChangedSpan(
   const added = Array.from(addition);
   let prefix = 0;
   while (prefix < deleted.length && prefix < added.length && deleted[prefix] === added[prefix]) prefix += 1;
-  while (
-    prefix > 0 &&
-    isDigit(deleted[prefix - 1]!) &&
-    isDigit(deleted[prefix]!) &&
-    isDigit(added[prefix - 1]!) &&
-    isDigit(added[prefix]!)
-  ) prefix -= 1;
 
   let suffix = 0;
   while (
@@ -78,17 +71,11 @@ function splitChangedSpan(
   ) {
     suffix += 1;
   }
-  while (
-    suffix > 0 &&
-    isDigit(deleted[deleted.length - suffix - 1]!) &&
-    isDigit(deleted[deleted.length - suffix]!) &&
-    isDigit(added[added.length - suffix - 1]!) &&
-    isDigit(added[added.length - suffix]!)
-  ) suffix -= 1;
 
   const deletionSegments = segments(deleted, prefix, suffix);
   const additionSegments = segments(added, prefix, suffix);
   if (!deletionSegments.changed && !additionSegments.changed) return undefined;
+  if (!/\S/.test(deletionSegments.before) && !/\S/.test(deletionSegments.after)) return undefined;
   return { deletion: deletionSegments, addition: additionSegments };
 }
 
@@ -98,8 +85,4 @@ function segments(codepoints: string[], prefix: number, suffix: number): DiffLin
     changed: codepoints.slice(prefix, codepoints.length - suffix).join(""),
     after: codepoints.slice(codepoints.length - suffix).join(""),
   };
-}
-
-function isDigit(codepoint: string): boolean {
-  return /^\d$/.test(codepoint);
 }

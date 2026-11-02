@@ -149,10 +149,11 @@ Wingdiff reads metadata through `gh` or `glab`, fetches missing objects into pri
 
 The built-in diff viewer takes a lightweight cue from
 [diff-so-fancy](https://github.com/so-fancy/diff-so-fancy): paired changed
-lines emphasize only the intraline span that differs, and hunk headers are
-reduced to a readable `@ path:line @ context` form. Wingdiff does not run the
-terminal renderer or consume ANSI output; Git's structured diff remains the
-authoritative source for line numbers, fingerprints, and review anchors.
+lines with meaningful shared context emphasize only the intraline span that
+differs, and hunk headers are reduced to a readable `@ path:line @ context`
+form. Wingdiff does not run the terminal renderer or consume ANSI output;
+Git's structured diff remains the authoritative source for line numbers,
+fingerprints, and review anchors.
 
 From the real-PR Summary, choose a configured model and select **Generate guided review**. The model organizes the validated diff into semantic stops, ranks concrete findings by severity, and references opaque evidence anchors. Wingdiff rejects the result unless every changed file is covered and every claim or finding resolves to an exact known anchor. Generated tours are pinned to the acquired head SHA and can be resumed locally.
 
