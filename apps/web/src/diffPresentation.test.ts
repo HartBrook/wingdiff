@@ -99,6 +99,14 @@ describe("presentDiffLines", () => {
     expect(presented[2]?.content).toBe("Binary file changed");
   });
 
+  it("uses the deleted range start when a nonzero new range is empty", () => {
+    const presented = presentDiffLines([
+      { kind: "header", content: "@@ -10,2 +9,0 @@" },
+    ], "src/auth/login.ts");
+
+    expect(presented[0]?.content).toBe("@ src/auth/login.ts:10 @");
+  });
+
   it("does not mutate the supplied evidence lines", () => {
     const lines: DiffLine[] = [
       { kind: "deletion", oldLine: 4, content: "old" },

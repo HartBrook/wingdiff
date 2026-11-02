@@ -30,6 +30,7 @@
 - Modify: `apps/web/src/components/CodeDiff.tsx`
 - Modify: `apps/web/src/components/CodeDiff.test.tsx`
 - Modify: `apps/web/src/styles.css`
+- Modify: `e2e/reviewer-flow.spec.ts`
 - Modify: `README.md`
 
 **Interfaces:**
@@ -142,6 +143,14 @@ describe("presentDiffLines", () => {
     expect(presented[0]?.content).toBe("@ src/auth/login.ts:41 @ export async function login(input: LoginInput) {");
     expect(presented[1]?.content).toBe("@ src/auth/login.ts:10 @");
     expect(presented[2]?.content).toBe("Binary file changed");
+  });
+
+  it("uses the deleted range start when a nonzero new range is empty", () => {
+    const presented = presentDiffLines([
+      { kind: "header", content: "@@ -10,2 +9,0 @@" },
+    ], "src/auth/login.ts");
+
+    expect(presented[0]?.content).toBe("@ src/auth/login.ts:10 @");
   });
 
   it("does not mutate the supplied evidence lines", () => {
@@ -266,11 +275,12 @@ export function presentDiffLines(lines: DiffLine[], path: string): PresentedDiff
 }
 
 function humanizeHunkHeader(header: string, path: string): string {
-  const match = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/.exec(header);
+  const match = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,(\d+))? @@(.*)$/.exec(header);
   if (!match) return header;
   const newStart = Number(match[2]);
-  const lineNumber = newStart === 0 ? Number(match[1]) : newStart;
-  const suffix = match[3]!.trimEnd();
+  const newLines = match[3] === undefined ? 1 : Number(match[3]);
+  const lineNumber = newLines === 0 ? Number(match[1]) : newStart;
+  const suffix = match[4]!.trimEnd();
   return `@ ${path}:${lineNumber} @${suffix}`;
 }
 
@@ -316,7 +326,7 @@ Run:
 npm test --workspace @wingdiff/web -- src/diffPresentation.test.ts
 ```
 
-Expected: PASS, 10 tests passed.
+Expected: PASS, 11 tests passed. The deletion-only header test covers both a zero new start (`+0,0`) and a nonzero new start with a zero count (`+9,0`).
 
 - [ ] **Step 7: Write the failing component and stylesheet tests**
 
@@ -329,6 +339,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { EvidenceBlock } from "../types";
 import { CodeDiff } from "./CodeDiff";
+
+function ruleBody(css: string, selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`${escaped}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+}
 
 describe("CodeDiff", () => {
   const sampleEvidence: EvidenceBlock = {
@@ -380,15 +395,22 @@ describe("CodeDiff", () => {
     expect(html).toContain("new");
   });
 
-  it("defines strong deletion tokens and intraline emphasis CSS rules", () => {
+  it("uses high-contrast intraline underlines without filled backgrounds", () => {
     const cssPath = resolve(__dirname, "../styles.css");
     const css = readFileSync(cssPath, "utf-8");
+    const additionChange = ruleBody(css, ".diff-line--addition .diff-line__change");
+    const deletionChange = ruleBody(css, ".diff-line--deletion .diff-line__change");
 
-    expect(css).toContain("--code-add-inline:");
-    expect(css).toContain("--code-delete-inline:");
-    expect(css).toContain(".diff-line__change");
-    expect(css).toContain(".diff-line--addition .diff-line__change");
-    expect(css).toContain(".diff-line--deletion .diff-line__change");
+    expect(css).toContain("--code-add-inline: #6ae2a0;");
+    expect(css).toContain("--code-delete-inline: #ff7e74;");
+    expect(css).toContain("--code-add-inline: #21794e;");
+    expect(css).toContain("--code-delete-inline: #b94538;");
+    expect(additionChange).toContain("box-shadow: inset 0 -2px 0 var(--code-add-inline);");
+    expect(deletionChange).toContain("box-shadow: inset 0 -2px 0 var(--code-delete-inline);");
+    expect(additionChange).not.toContain("background");
+    expect(deletionChange).not.toContain("background");
+    expect(css).toContain(".diff-line--addition { background: var(--code-add); }");
+    expect(css).toContain(".diff-line--deletion { background: var(--code-delete); }");
     expect(css).toContain(".diff-line--deletion.is-emphasized");
     expect(css).toContain(".diff-line--addition.is-emphasized");
   });
@@ -623,7 +645,27 @@ The whole-row addition/deletion backgrounds remain unchanged. Changed spans must
 
 - [ ] **Step 11: Add the focused browser proof and run focused tests**
 
-Add a Playwright test in `e2e/reviewer-flow.spec.ts` that opens `/?demo=1`, selects `Review updates`, and verifies that a `.diff-line__change` span is visible, the active header starts with `@ src/infra/redis/attempt-store.ts:<line> @` rather than `@@`, and a line-number button in a changed row can be selected.
+Add this Playwright test to `e2e/reviewer-flow.spec.ts`:
+
+```typescript
+test("shows a readable, selectable intraline replacement in the demo update review", async ({ page }) => {
+  await page.goto("/?demo=1");
+  await page.getByRole("button", { name: "Review updates" }).click();
+
+  await expect(page.locator(".diff-line__change").first()).toBeVisible();
+  const header = page.locator(".diff-line__header").first();
+  await expect(header).toHaveText(/^@ src\/infra\/redis\/attempt-store\.ts:\d+ @/);
+  await expect(header).not.toContainText("@@");
+
+  const changedRow = page.locator(".diff-line--deletion, .diff-line--addition").first();
+  const lineButton = changedRow.locator(".diff-line__number");
+  await expect(lineButton).toBeEnabled();
+  await lineButton.click();
+  await expect(changedRow).toHaveClass(/is-selected/);
+});
+```
+
+The proof opens `/?demo=1`, selects `Review updates`, and verifies that a readable intraline replacement is visible, the active header uses the humanized form rather than `@@`, and a line-number button in a changed row remains selectable.
 
 Run the focused browser test:
 
@@ -639,7 +681,7 @@ Run:
 npm test --workspace @wingdiff/web -- src/diffPresentation.test.ts src/fixture.test.ts src/components/CodeDiff.test.tsx
 ```
 
-Expected: PASS, 23 presentation, fixture, and component tests across 3 files.
+Expected: PASS, 24 presentation, fixture, and component tests across 3 files.
 
 - [ ] **Step 12: Document the integration boundary**
 
@@ -706,14 +748,14 @@ Expected: one local commit containing only the plan, presentation helper and tes
 
 The fix-wave implementer report records:
 
-- RED/GREEN evidence for exact intraline spans, meaningful-affix suppression, high-contrast underline CSS, the fixture replacement, and the focused Playwright flow.
-- Focused web verification: 3 files passed, 23 tests passed.
+- RED/GREEN evidence for deletion-only hunk headers, exact intraline spans, meaningful-affix suppression, high-contrast underline CSS, the fixture replacement, and the focused Playwright flow.
+- Focused web verification: 3 files passed, 24 tests passed.
 - Focused demo Playwright verification: 1 test passed.
-- Complete `npm test`: 24 server files / 151 tests and 10 web files / 64 tests passed.
+- Complete `npm test`: 24 server files / 151 tests and 10 web files / 65 tests passed.
 - `npm run typecheck`: server and web both passed.
 - `npm run build`: web (321 modules) and server both passed.
 - Full `npm run test:e2e`: 8 tests passed.
-- Helper coverage: statements 100% (50/50), branches 100% (28/28), functions 100% (5/5), lines 100% (40/40).
+- Helper coverage: statements 100% (51/51), branches 96.66% (29/30), functions 100% (5/5), lines 100% (41/41).
 - The temporary coverage provider was installed without changing package manifests or the lockfile, then `npm ci` restored the locked dependency tree.
 - No development server was left running; the controller owns the persistent authenticated server check.
 - The final fix commit SHA and changed paths are recorded in `task-1-report.md` after commit.

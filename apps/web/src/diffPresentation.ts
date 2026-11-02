@@ -46,11 +46,12 @@ export function presentDiffLines(lines: DiffLine[], path: string): PresentedDiff
 }
 
 function humanizeHunkHeader(header: string, path: string): string {
-  const match = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/.exec(header);
+  const match = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,(\d+))? @@(.*)$/.exec(header);
   if (!match) return header;
   const newStart = Number(match[2]);
-  const lineNumber = newStart === 0 ? Number(match[1]) : newStart;
-  const suffix = match[3]!.trimEnd();
+  const newLines = match[3] === undefined ? 1 : Number(match[3]);
+  const lineNumber = newLines === 0 ? Number(match[1]) : newStart;
+  const suffix = match[4]!.trimEnd();
   return `@ ${path}:${lineNumber} @${suffix}`;
 }
 
