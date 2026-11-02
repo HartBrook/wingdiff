@@ -59,7 +59,7 @@ Browse mode shows the full diff at any time. Review progress, investigation note
 ### Prerequisites
 
 - [Git](https://git-scm.com/downloads)
-- [Node.js](https://nodejs.org/) 22.13+ (excluding Node 23) or Node.js 24+ when using the npm package
+- [Node.js](https://nodejs.org/) 22.19+ (excluding Node 23) or Node.js 24+ when using the npm package
 - [GitHub CLI](https://cli.github.com/) authenticated with `gh auth login` for GitHub pull requests, or [GitLab CLI](https://docs.gitlab.com/cli/) 1.100 or later authenticated with `glab auth login` for GitLab merge requests. Self-managed GitLab servers must be version 19.2 or later.
 - [Codex](https://developers.openai.com/learn/codex) CLI authenticated with `codex login` for the default model transport, or an optional direct provider API key
 

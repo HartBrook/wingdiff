@@ -14,7 +14,7 @@ By participating, you agree to follow the [Code of Conduct](./CODE_OF_CONDUCT.md
 
 ## Development setup
 
-You need Git, Node.js 22.13+ (excluding Node 23) or Node.js 24+, npm, and the
+You need Git, Node.js 22.19+ (excluding Node 23) or Node.js 24+, npm, and the
 GitHub CLI or GitLab CLI 1.100+ for real change-request acquisition. GitLab integration requires
 GitLab 19.2 or later. Codex CLI is the default model
 transport; direct provider keys are optional.

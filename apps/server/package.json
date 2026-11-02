@@ -7,7 +7,7 @@
     "wingdiff": "dist/cli.js"
   },
   "engines": {
-    "node": "^22.13.0 || >=24.0.0"
+    "node": "^22.19.0 || >=24.0.0"
   },
   "scripts": {
     "dev": "cross-env NODE_ENV=development tsx src/index.ts",
