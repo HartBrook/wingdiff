@@ -22,8 +22,8 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            node: 22.13.0
-            label: Linux, Node 22.13
+            node: 22.19.0
+            label: Linux, Node 22.19
           - os: ubuntu-latest
             node: 24.x
             label: Linux, Node 24
