@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MODEL_CATALOG, publicProviders, validateSelection } from "./catalog.js";
+import { defaultSelection, MODEL_CATALOG, publicProviders, validateSelection } from "./catalog.js";
 
 describe("model catalog", () => {
   it("offers OpenAI, Codex, and Anthropic choices", () => {
@@ -29,6 +29,21 @@ describe("model catalog", () => {
     expect(providers.find((provider) => provider.id === "codex")?.models.map((model) => model.id)).toEqual(["codex-default"]);
     expect(providers.find((provider) => provider.id === "openai")?.models.map((model) => model.id)).toContain("gpt-5.3-codex");
     expect(JSON.stringify(providers)).not.toContain("secret-openai");
+  });
+
+  it("selects the first configured provider as the application default", () => {
+    expect(defaultSelection(publicProviders({}, new Set(["codex"])))).toEqual({
+      provider: "codex", model: "codex-default", reasoningEffort: "medium",
+    });
+    expect(defaultSelection(publicProviders({ ANTHROPIC_API_KEY: "secret" }, new Set()))).toEqual({
+      provider: "anthropic", model: "claude-sonnet-4-6", reasoningEffort: "medium",
+    });
+  });
+
+  it("falls back to Codex setup when no provider is configured", () => {
+    expect(defaultSelection(publicProviders({}, new Set()))).toEqual({
+      provider: "codex", model: "codex-default", reasoningEffort: "medium",
+    });
   });
 
   it("rejects cross-provider and unsupported reasoning selections", () => {

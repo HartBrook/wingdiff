@@ -57,6 +57,37 @@ describe("generated tour API", () => {
     })).status).toBe(403);
   });
 
+  it("exposes the configured default and persists a session model override", async () => {
+    store = new SessionStore(":memory:");
+    const session = store.upsertReadySession(target, metadata, evidence, process.cwd());
+    const provider: TextProvider = {
+      id: "codex",
+      async generateTour() { return {}; },
+      async *streamInvestigation() { yield ""; },
+    };
+    const app = createApp({}, { sessionStore: store, providers: new Map([["codex", provider]]) });
+    server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => server!.once("listening", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const baseUrl = `http://127.0.0.1:${port}/api`;
+
+    expect(await (await fetch(`${baseUrl}/providers`)).json()).toMatchObject({
+      defaultSelection: { provider: "codex", model: "codex-default", reasoningEffort: "medium" },
+    });
+    const settingsUrl = `${baseUrl}/sessions/${session.id}/model-selection`;
+    expect(await (await fetch(settingsUrl)).json()).toEqual({ override: null });
+    const selection = { provider: "codex", model: "codex-default", reasoningEffort: "high" };
+    const saved = await fetch(settingsUrl, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ override: selection }),
+    });
+    expect(saved.status).toBe(200);
+    expect(await saved.json()).toEqual({ override: selection });
+    expect(await (await fetch(settingsUrl)).json()).toEqual({ override: selection });
+    expect(await (await fetch(settingsUrl, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ override: null }),
+    })).json()).toEqual({ override: null });
+  });
+
   it("generates and resumes a revision-pinned tour", async () => {
     store = new SessionStore(":memory:");
     const session = store.upsertReadySession(target, metadata, evidence, process.cwd());

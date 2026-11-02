@@ -232,6 +232,36 @@ export class SessionStore {
     }));
   }
 
+  getModelSelectionOverride(sessionId: string): ModelSelection | null {
+    this.requireSession(sessionId);
+    const row = this.database.prepare(`
+      SELECT provider, model, reasoning_effort FROM model_settings WHERE session_id = ?
+    `).get(sessionId);
+    return row ? {
+      provider: String(row.provider) as ModelSelection["provider"],
+      model: String(row.model),
+      reasoningEffort: String(row.reasoning_effort) as ModelSelection["reasoningEffort"],
+    } : null;
+  }
+
+  saveModelSelectionOverride(sessionId: string, selection: ModelSelection | null): ModelSelection | null {
+    this.requireSession(sessionId);
+    if (!selection) {
+      this.database.prepare("DELETE FROM model_settings WHERE session_id = ?").run(sessionId);
+      return null;
+    }
+    this.database.prepare(`
+      INSERT INTO model_settings (session_id, provider, model, reasoning_effort, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        provider = excluded.provider,
+        model = excluded.model,
+        reasoning_effort = excluded.reasoning_effort,
+        updated_at = excluded.updated_at
+    `).run(sessionId, selection.provider, selection.model, selection.reasoningEffort, this.now().toISOString());
+    return selection;
+  }
+
   getReviewProgress(sessionId: string): ReviewProgressSnapshot {
     this.requireSession(sessionId);
     const rows = this.database.prepare(`
@@ -717,7 +747,7 @@ export function defaultDatabasePath(environment: NodeJS.ProcessEnv = process.env
 
 function migrate(database: DatabaseSync) {
   let version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
-  if (version > 15) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
+  if (version > 16) throw new Error(`Wingdiff session database version ${version} is newer than this application supports.`);
 
   if (version === 0) database.exec(`
     BEGIN;
@@ -999,6 +1029,20 @@ function migrate(database: DatabaseSync) {
     BEGIN;
     ALTER TABLE review_sessions ADD COLUMN repository_path TEXT;
     PRAGMA user_version = 15;
+    COMMIT;
+  `);
+
+  version = Number(database.prepare("PRAGMA user_version").get()?.user_version ?? 0);
+  if (version === 15) database.exec(`
+    BEGIN;
+    CREATE TABLE model_settings (
+      session_id TEXT PRIMARY KEY REFERENCES review_sessions(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL CHECK (provider IN ('codex', 'openai', 'anthropic')),
+      model TEXT NOT NULL,
+      reasoning_effort TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    PRAGMA user_version = 16;
     COMMIT;
   `);
 }
