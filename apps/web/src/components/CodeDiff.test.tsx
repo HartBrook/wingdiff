@@ -79,4 +79,15 @@ describe("CodeDiff", () => {
     expect(css).toContain(".diff-line--deletion.is-emphasized");
     expect(css).toContain(".diff-line--addition.is-emphasized");
   });
+
+  it("preserves intraline distinction in forced-colors mode", () => {
+    const cssPath = resolve(__dirname, "../styles.css");
+    const css = readFileSync(cssPath, "utf-8");
+    const forcedColorsChange = /@media \(forced-colors: active\) \{[\s\S]*?\.diff-line--addition \.diff-line__change,\s*\.diff-line--deletion \.diff-line__change\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+
+    expect(forcedColorsChange).toContain("text-decoration: underline;");
+    expect(forcedColorsChange).toContain("text-decoration-color: CanvasText;");
+    expect(forcedColorsChange).toContain("text-decoration-thickness: 2px;");
+    expect(forcedColorsChange).toContain("text-underline-offset: 2px;");
+  });
 });

@@ -414,10 +414,21 @@ describe("CodeDiff", () => {
     expect(css).toContain(".diff-line--deletion.is-emphasized");
     expect(css).toContain(".diff-line--addition.is-emphasized");
   });
+
+  it("preserves intraline distinction in forced-colors mode", () => {
+    const cssPath = resolve(__dirname, "../styles.css");
+    const css = readFileSync(cssPath, "utf-8");
+    const forcedColorsChange = /@media \(forced-colors: active\) \{[\s\S]*?\.diff-line--addition \.diff-line__change,\s*\.diff-line--deletion \.diff-line__change\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+
+    expect(forcedColorsChange).toContain("text-decoration: underline;");
+    expect(forcedColorsChange).toContain("text-decoration-color: CanvasText;");
+    expect(forcedColorsChange).toContain("text-decoration-thickness: 2px;");
+    expect(forcedColorsChange).toContain("text-underline-offset: 2px;");
+  });
 });
 ```
 
-The stylesheet assertion extracts each changed-span rule and verifies the exact dark/light opaque colors, the two `box-shadow: inset 0 -2px 0 ...` declarations, the absence of `background` in those rules, and the existing whole-row addition/deletion backgrounds.
+The stylesheet assertions extract each changed-span rule and verify the exact dark/light opaque colors, the two `box-shadow: inset 0 -2px 0 ...` declarations, the absence of `background` in those rules, and the existing whole-row addition/deletion backgrounds. They also require a forced-colors fallback that underlines both addition and deletion changes with the `CanvasText` system color.
 
 - [ ] **Step 8: Run the component tests and verify RED**
 
@@ -639,9 +650,18 @@ Add these rules after `.diff-line__sign`:
 .diff-line__change { padding: 1px 0; border-radius: 2px; }
 .diff-line--addition .diff-line__change { box-shadow: inset 0 -2px 0 var(--code-add-inline); }
 .diff-line--deletion .diff-line__change { box-shadow: inset 0 -2px 0 var(--code-delete-inline); }
+@media (forced-colors: active) {
+  .diff-line--addition .diff-line__change,
+  .diff-line--deletion .diff-line__change {
+    text-decoration: underline;
+    text-decoration-color: CanvasText;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 2px;
+  }
+}
 ```
 
-The whole-row addition/deletion backgrounds remain unchanged. Changed spans must not add a text background; the stylesheet test rejects `background` inside both changed-span rules and asserts the exact opaque underline colors and inset rules.
+The whole-row addition/deletion backgrounds remain unchanged. Changed spans must not add a text background; the stylesheet test rejects `background` inside both changed-span rules and asserts the exact opaque underline colors and inset rules. Forced-colors mode suppresses `box-shadow`, so the media fallback conveys the changed span with a 2px text underline using `CanvasText`.
 
 - [ ] **Step 11: Add the focused browser proof and run focused tests**
 
@@ -681,7 +701,7 @@ Run:
 npm test --workspace @wingdiff/web -- src/diffPresentation.test.ts src/fixture.test.ts src/components/CodeDiff.test.tsx
 ```
 
-Expected: PASS, 24 presentation, fixture, and component tests across 3 files.
+Expected: PASS, 25 presentation, fixture, and component tests across 3 files.
 
 - [ ] **Step 12: Document the integration boundary**
 
@@ -748,15 +768,15 @@ Expected: one local commit containing only the plan, presentation helper and tes
 
 The fix-wave implementer report records:
 
-- RED/GREEN evidence for deletion-only hunk headers, exact intraline spans, meaningful-affix suppression, high-contrast underline CSS, the fixture replacement, and the focused Playwright flow.
-- Focused web verification: 3 files passed, 24 tests passed.
+- RED/GREEN evidence for deletion-only hunk headers, exact intraline spans, meaningful-affix suppression, high-contrast underline CSS, the forced-colors text fallback, the fixture replacement, and the focused Playwright flow.
+- Focused web verification: 3 files passed, 25 tests passed.
 - Focused demo Playwright verification: 1 test passed.
-- Complete `npm test`: 24 server files / 151 tests and 10 web files / 65 tests passed.
+- Complete `npm test`: 24 server files / 151 tests and 10 web files / 66 tests passed.
 - `npm run typecheck`: server and web both passed.
 - `npm run build`: web (321 modules) and server both passed.
 - Full `npm run test:e2e`: 8 tests passed.
 - Helper coverage: statements 100% (51/51), branches 96.66% (29/30), functions 100% (5/5), lines 100% (41/41).
 - The temporary coverage provider was installed without changing package manifests or the lockfile, then `npm ci` restored the locked dependency tree.
 - No development server was left running; the controller owns the persistent authenticated server check.
-- The final fix commit SHA and changed paths are recorded in `task-1-report.md` after commit.
+- The final P3 accessibility fix adds only the forced-colors stylesheet contract, the fallback rule, and this plan update. Its SHA and changed paths are recorded in `task-1-report.md` after commit.
 - Diff-so-fancy itself remains intentionally unbundled; Wingdiff presents structured Git data and does not execute Perl, parse ANSI, or add a runtime dependency.
