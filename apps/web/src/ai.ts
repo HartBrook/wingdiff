@@ -54,11 +54,15 @@ export const FALLBACK_PROVIDERS: ProviderDefinition[] = [
   },
 ];
 
-export async function fetchProviders(signal?: AbortSignal): Promise<ProviderDefinition[]> {
+export interface ProviderCatalog {
+  providers: ProviderDefinition[];
+  defaultSelection: ModelSelection;
+}
+
+export async function fetchProviders(signal?: AbortSignal): Promise<ProviderCatalog> {
   const response = await fetch("/api/providers", { signal });
   if (!response.ok) throw new Error("Could not load AI providers.");
-  const body = await response.json() as { providers: ProviderDefinition[] };
-  return body.providers;
+  return response.json() as Promise<ProviderCatalog>;
 }
 
 export async function streamInvestigation({
@@ -158,23 +162,6 @@ export function selectedModel(providers: ProviderDefinition[], selection: ModelS
   return providers.find((provider) => provider.id === selection.provider)?.models.find((candidate) => candidate.id === selection.model)
     ?? FALLBACK_PROVIDERS.find((provider) => provider.id === selection.provider)?.models.find((candidate) => candidate.id === selection.model)
     ?? FALLBACK_PROVIDERS[0]!.models[0]!;
-}
-
-export function normalizeSelection(providers: ProviderDefinition[], current: ModelSelection): ModelSelection {
-  const provider = providers.find((candidate) => candidate.id === current?.provider);
-  if (!provider) return DEFAULT_SELECTION;
-  const model = provider.models.find((candidate) => candidate.id === current.model) ?? provider.models[0];
-  if (!model) return current;
-  if (model.id === current.model && model.reasoningEfforts.includes(current.reasoningEffort)) return current;
-  return { provider: provider.id, model: model.id, reasoningEffort: model.defaultEffort };
-}
-
-export function preferredAvailableSelection(providers: ProviderDefinition[], current: ModelSelection): ModelSelection {
-  const normalized = normalizeSelection(providers, current);
-  if (providers.some((provider) => provider.id === normalized.provider && provider.configured)) return normalized;
-  const provider = providers.find((candidate) => candidate.configured);
-  const model = provider?.models[0];
-  return provider && model ? { provider: provider.id, model: model.id, reasoningEffort: model.defaultEffort } : normalized;
 }
 
 function model(

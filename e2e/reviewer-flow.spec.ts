@@ -51,6 +51,32 @@ test("reviews a real-session fixture from privacy preview through an anchored dr
   await expect(page.getByRole("button", { name: "Check setup" })).toBeVisible();
 });
 
+test("uses the configured default and applies model changes only after confirmation", async ({ page }) => {
+  await mockReviewApi(page);
+  await page.goto("/?session=pilot-session");
+
+  const runCard = page.locator(".begin-card");
+  await expect(runCard).toContainText("Default · Codex CLI · Account default");
+  await expect(page.locator(".topbar .model-button")).toHaveCount(0);
+
+  await runCard.getByRole("button", { name: "Change" }).click();
+  const settings = page.getByRole("dialog", { name: "Review settings" });
+  await settings.getByRole("button", { name: /OpenAI API/ }).click();
+  await settings.getByRole("button", { name: "Cancel" }).click();
+  await expect(runCard).toContainText("Default · Codex CLI · Account default");
+
+  await runCard.getByRole("button", { name: "Change" }).click();
+  await settings.getByRole("button", { name: /OpenAI API/ }).click();
+  await settings.getByRole("button", { name: "Apply override" }).click();
+  await expect(runCard).toContainText("Override · OpenAI API · GPT-6 Sol");
+
+  await page.reload();
+  await expect(runCard).toContainText("Override · OpenAI API · GPT-6 Sol");
+  await runCard.getByRole("button", { name: "Change" }).click();
+  await settings.getByRole("button", { name: "Reset to default" }).click();
+  await expect(runCard).toContainText("Default · Codex CLI · Account default");
+});
+
 test("returns to the top when marking a stop understood", async ({ page }) => {
   await page.goto("/?demo=1");
   await page.getByRole("button", { name: "Review updates" }).click();
@@ -198,14 +224,19 @@ async function mockReviewApi(page: Page, options: { failFirstPublish?: boolean; 
   let generationPolls = 0;
   let investigationId = "investigation-1";
   let publishAttempts = 0;
+  let modelOverride: typeof defaultSelection | null = null;
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
     const method = request.method();
 
-    if (path === "/api/providers") return json(route, { providers });
+    if (path === "/api/providers") return json(route, { providers, defaultSelection });
     if (path === "/api/sessions/pilot-session") return json(route, { session: reviewSession });
+    if (path === "/api/sessions/pilot-session/model-selection") {
+      if (method === "PUT") modelOverride = request.postDataJSON().override ?? null;
+      return json(route, { override: modelOverride });
+    }
     if (path === "/api/sessions/pilot-session/update") return json(route, { update: null, baselineCheckpoint: null });
     if (path === "/api/sessions/pilot-session/progress") {
       return json(route, { progress: { activeScope: null, activeStopIds: { full: null, update: null }, scopes: { full: {}, update: {} } } });
@@ -321,4 +352,8 @@ const manifest = {
 const providers = [{
   id: "codex", name: "Codex CLI", configured: true, transport: "cli", setupCommand: "codex login", setupDescription: "Sign in.",
   models: [{ id: "codex-default", provider: "codex", name: "Account default", family: "Codex", description: "Uses the signed-in account default.", badge: "Recommended", reasoningEfforts: ["medium"], defaultEffort: "medium" }],
+}, {
+  id: "openai", name: "OpenAI API", configured: true, transport: "api", setupCommand: "OPENAI_API_KEY", setupDescription: "Set a key.",
+  models: [{ id: "gpt-6-sol", provider: "openai", name: "GPT-6 Sol", family: "OpenAI", description: "Balanced review model.", badge: "API", reasoningEfforts: ["medium", "high"], defaultEffort: "medium" }],
 }];
+const defaultSelection = { provider: "codex", model: "codex-default", reasoningEffort: "medium" } as const;
