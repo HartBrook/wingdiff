@@ -155,7 +155,7 @@ form. Wingdiff does not run the terminal renderer or consume ANSI output;
 Git's structured diff remains the authoritative source for line numbers,
 fingerprints, and review anchors.
 
-From the real-PR Summary, choose a configured model and select **Generate guided review**. The model organizes the validated diff into semantic stops, ranks concrete findings by severity, and references opaque evidence anchors. Wingdiff rejects the result unless every changed file is covered and every claim or finding resolves to an exact known anchor. Generated tours are pinned to the acquired head SHA and can be resumed locally.
+From the real-PR Summary, select **Generate guided review**. Wingdiff uses the configured default model automatically; choose **Change** beside the model summary to apply an override for only that review. The model organizes the validated diff into semantic stops, ranks concrete findings by severity, and references opaque evidence anchors. Wingdiff rejects the result unless every changed file is covered and every claim or finding resolves to an exact known anchor. Generated tours are pinned to the acquired head SHA and can be resumed locally.
 
 Before generation, Wingdiff shows the exact model context, provider transport, changed files, repository instructions, exclusions, size, and content fingerprint. The immutable manifest, fingerprint, and evidence-anchor snapshot are stored with the tour; a changed manifest invalidates the resumable tour. Model-facing evidence references use compact request-local aliases constrained to the supplied anchor set, then map back to immutable evidence fingerprints before validation and storage. Potentially sensitive, generated, and vendor files are marked; common key and environment-file patterns are excluded by default. Exclusions are editable local globs. `AGENTS.md`, `CONTRIBUTING.md`, `.github/CONTRIBUTING.md`, and `.gitlab/CONTRIBUTING.md` are included when present, capped at 20,000 characters each. Context over 750,000 characters is blocked until reduced.
 
@@ -200,7 +200,7 @@ Codex CLI uses the default model selected for the signed-in ChatGPT account. Win
 - `gpt-6-luna` — fast, cost-efficient investigations
 - `gpt-5.3-codex` — deprecated Codex-tuned model available only through the direct OpenAI API provider
 
-Claude Sonnet 4.6 and Opus 4.6 remain available through the same provider interface. Select Codex CLI, OpenAI API, or Anthropic API plus the model and supported reasoning effort from the model control in the top bar.
+Claude Sonnet 4.6 and Opus 4.6 remain available through the same provider interface. Wingdiff chooses the first configured provider as the default. The Summary shows the effective provider, model, and reasoning effort, with a review-scoped override available through **Change**.
 
 API keys are read only by the loopback Node server and are never returned to browser JavaScript. OpenAI API requests use the Responses API with `store: false`; tour generation uses strict structured output and investigations stream. Wingdiff never reads or copies Codex CLI credentials.
 

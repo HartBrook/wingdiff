@@ -4,7 +4,7 @@ import { acquireReviewSession, refreshReviewSession, type AcquisitionDependencie
 import { validateDraftComment } from "./comments.js";
 import { buildSessionGenerationContext } from "./context.js";
 import { buildSessionInvestigationContext } from "./investigation.js";
-import { createProviders, publicProviders, validateSelection } from "./providers/index.js";
+import { createProviders, defaultSelection, publicProviders, validateSelection } from "./providers/index.js";
 import type { ModelSelection, ProviderId, TextProvider } from "./providers/types.js";
 import { SessionStore } from "./sessions.js";
 import type { InvestigationEntry, ReviewDraft, ReviewProgressStatus, TourScope } from "./sessions.js";
@@ -42,6 +42,8 @@ interface TourGenerationJob {
 export function createApp(environment: NodeJS.ProcessEnv = process.env, options: AppOptions = {}) {
   const app = express();
   const providers = options.providers ?? createProviders(environment);
+  const providerCatalog = publicProviders(environment, new Set(providers.keys()));
+  const configuredDefaultSelection = defaultSelection(providerCatalog);
   const cwd = options.cwd ?? process.cwd();
   const sessionStore = options.sessionStore ?? new SessionStore();
   const tourGenerations = new Map<string, TourGenerationJob>();
@@ -540,7 +542,34 @@ export function createApp(environment: NodeJS.ProcessEnv = process.env, options:
   });
 
   app.get("/api/providers", (_request, response) => {
-    response.json({ providers: publicProviders(environment, new Set(providers.keys())) });
+    response.json({ providers: providerCatalog, defaultSelection: configuredDefaultSelection });
+  });
+
+  app.get("/api/sessions/:id/model-selection", (request, response) => {
+    const session = sessionStore.getSession(request.params.id);
+    if (!session) {
+      response.status(404).json({ error: "Review session not found." });
+      return;
+    }
+    response.json({ override: sessionStore.getModelSelectionOverride(session.id) });
+  });
+
+  app.put("/api/sessions/:id/model-selection", (request, response) => {
+    try {
+      const session = sessionStore.getSession(request.params.id);
+      if (!session) {
+        response.status(404).json({ error: "Review session not found." });
+        return;
+      }
+      const override = request.body?.override == null ? null : validateSelection(request.body.override);
+      if (override && !providers.has(override.provider)) {
+        response.status(400).json({ error: `${override.provider} is not configured.` });
+        return;
+      }
+      response.json({ override: sessionStore.saveModelSelectionOverride(session.id, override) });
+    } catch (error) {
+      response.status(400).json({ error: error instanceof Error ? error.message : "The model override is invalid." });
+    }
   });
 
   app.post("/api/sessions/:id/investigate", async (request, response) => {
