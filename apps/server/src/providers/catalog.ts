@@ -122,6 +122,13 @@ export function publicProviders(
   }));
 }
 
+export function defaultSelection(providers: readonly PublicProvider[]): ModelSelection {
+  const provider = providers.find((candidate) => candidate.configured) ?? providers[0];
+  const model = provider?.models[0];
+  if (!provider || !model) throw new Error("No review model is available.");
+  return { provider: provider.id, model: model.id, reasoningEffort: model.defaultEffort };
+}
+
 export function validateSelection(input: unknown): ModelSelection {
   if (!input || typeof input !== "object") throw new Error("A model selection is required.");
   const value = input as Record<string, unknown>;
