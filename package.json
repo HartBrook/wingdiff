@@ -1,11 +1,12 @@
 {
   "name": "wingdiff",
-  "version": "0.2.3",
-  "description": "Understand a pull request before you approve it. A local, open source guided review tour where every claim links to the diff and you publish the review.",
+  "version": "0.3.0",
+  "description": "Understand a pull or merge request before you approve it. A local, open source guided review tour where every claim links to the diff and you publish the review.",
   "keywords": [
     "code-review",
     "pull-request",
     "github",
+    "gitlab",
     "review",
     "ai",
     "local-first",
@@ -35,7 +36,7 @@
   "homepage": "https://github.com/HartBrook/wingdiff#readme",
   "type": "module",
   "engines": {
-    "node": "^22.13.0 || >=24.0.0"
+    "node": "^22.19.0 || >=24.0.0"
   },
   "workspaces": [
     "apps/*"
@@ -54,7 +55,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.131.0",
+    "@anthropic-ai/sdk": "^1.8.0",
     "express": "^5.2.1",
     "openai": "^7.23.0"
   },

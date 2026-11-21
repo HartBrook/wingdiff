@@ -30,7 +30,7 @@ describe("review acquisition", () => {
     const dependencies = fixtureDependencies();
     dependencies.inspectTarget = async () => ({
       checkout: { status: "different", path: "/work/other", repository: "other/repo" },
-      githubCli: { installed: true, authenticated: true },
+      hostingCli: { provider: "github", command: "gh", installed: true, supported: true, authenticated: true },
       networkChecked: false,
     });
     const readMetadata = vi.spyOn(dependencies, "readMetadata");
@@ -48,18 +48,48 @@ describe("review acquisition", () => {
     store.close();
   });
 
+  it("uses the locally acquired evidence for persisted change counts", async () => {
+    const store = new SessionStore(":memory:");
+    const dependencies = fixtureDependencies();
+    dependencies.readMetadata = async () => ({ ...metadata(), additions: 99, deletions: 88, filesChanged: 77 });
+
+    const session = await acquireReviewSession(target, "/work/codex", store, undefined, dependencies);
+
+    expect(session.metadata).toMatchObject({ additions: 1, deletions: 0, filesChanged: 1 });
+    store.close();
+  });
+
   it("stops with an actionable error when GitHub is not authenticated", async () => {
     const store = new SessionStore(":memory:");
     const dependencies = fixtureDependencies();
     dependencies.inspectTarget = async () => ({
       checkout: { status: "matched", path: "/work/codex", repository: "openai/codex" },
-      githubCli: { installed: true, authenticated: false },
+      hostingCli: { provider: "github", command: "gh", installed: true, supported: true, authenticated: false },
       networkChecked: false,
     });
     const readMetadata = vi.spyOn(dependencies, "readMetadata");
 
     await expect(acquireReviewSession(target, "/work/codex", store, undefined, dependencies))
       .rejects.toThrow(/gh auth login/);
+    expect(readMetadata).not.toHaveBeenCalled();
+    store.close();
+  });
+
+  it("stops before GitLab access when glab is below the supported minimum", async () => {
+    const gitLabTarget = parsePullRequestTarget("https://gitlab.com/acme/service/-/merge_requests/42");
+    const store = new SessionStore(":memory:");
+    const dependencies = fixtureDependencies();
+    dependencies.inspectTarget = async () => ({
+      checkout: { status: "matched", path: "/work/service", repository: "acme/service" },
+      hostingCli: {
+        provider: "gitlab", command: "glab", installed: true, supported: false, version: "1.99.0", authenticated: true,
+      },
+      networkChecked: false,
+    });
+    const readMetadata = vi.spyOn(dependencies, "readMetadata");
+
+    await expect(acquireReviewSession(gitLabTarget, "/work/service", store, undefined, dependencies))
+      .rejects.toThrow(/1\.100\.0 or later.*Found 1\.99\.0/);
     expect(readMetadata).not.toHaveBeenCalled();
     store.close();
   });
@@ -132,7 +162,7 @@ function fixtureDependencies(): AcquisitionDependencies {
 function preflight(): LocalTargetPreflight {
   return {
     checkout: { status: "matched", path: "/work/codex", repository: "openai/codex" },
-    githubCli: { installed: true, authenticated: true },
+    hostingCli: { provider: "github", command: "gh", installed: true, supported: true, authenticated: true },
     networkChecked: false,
   };
 }

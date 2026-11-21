@@ -150,7 +150,7 @@ function generatedTour(acquired: AcquiredReviewSession, scope: GeneratedSessionT
 function session(): AcquiredReviewSession {
   return {
     id: "session-1",
-    target: { owner: "openai", repository: "codex", number: 42, canonicalUrl: "https://github.com/openai/codex/pull/42", label: "openai/codex#42", source: "url" },
+    target: { platform: "github", host: "github.com", owner: "openai", repository: "codex", number: 42, canonicalUrl: "https://github.com/openai/codex/pull/42", label: "openai/codex#42", source: "url" },
     metadata: {
       number: 42, repository: "openai/codex", url: "https://github.com/openai/codex/pull/42", title: "Counter", body: "",
       author: { login: "octocat" }, base: { ref: "main", sha: "a".repeat(40) }, head: { ref: "feature", sha: "b".repeat(40) },

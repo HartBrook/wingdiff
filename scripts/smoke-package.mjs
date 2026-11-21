@@ -42,7 +42,7 @@ try {
   }
 
   const { stdout: helpOutput } = await execFile(binaryPath, ["--help"], executionOptions);
-  if (!helpOutput.includes("wingdiff — guided pull request review") || !helpOutput.includes("Usage:")) {
+  if (!helpOutput.includes("wingdiff — guided code review") || !helpOutput.includes("Usage:")) {
     throw new Error("Installed wingdiff --help output is incomplete.");
   }
 

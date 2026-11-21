@@ -4,8 +4,6 @@ import {
   DEFAULT_SELECTION,
   FALLBACK_PROVIDERS,
   fetchProviders,
-  normalizeSelection,
-  preferredAvailableSelection,
   selectedModel,
   streamInvestigation,
   streamSessionInvestigation,
@@ -40,6 +38,7 @@ import {
   fetchReviewCheckpoint,
   fetchReviewProgress,
   fetchReviewSession,
+  fetchSessionModelSelectionOverride,
   fetchDraftComments,
   fetchInvestigationEntries,
   fetchReviewDraft,
@@ -56,6 +55,7 @@ import {
   revisionStopIndex,
   saveReviewDraft,
   saveReviewProgress,
+  saveSessionModelSelectionOverride,
   saveSessionContext,
   startSessionTourGeneration,
   updateInvestigationEntry,
@@ -161,7 +161,7 @@ function Launcher({ initialTarget, onDemo, onSession }: { initialTarget?: string
       window.history.replaceState({}, "", `?target=${encodeURIComponent(prepared.target.canonicalUrl)}`);
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") return;
-      setError(caught instanceof Error ? caught.message : "Wingdiff could not read that pull request target.");
+      setError(caught instanceof Error ? caught.message : "Wingdiff could not read that code review target.");
     } finally {
       setSubmitting(false);
     }
@@ -175,7 +175,7 @@ function Launcher({ initialTarget, onDemo, onSession }: { initialTarget?: string
       const session = await createReviewSession(preparation.target.canonicalUrl);
       onSession(session.id);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Wingdiff could not open this pull request.");
+      setError(caught instanceof Error ? caught.message : "Wingdiff could not open this review request.");
     } finally {
       setAcquiring(false);
     }
@@ -193,23 +193,23 @@ function Launcher({ initialTarget, onDemo, onSession }: { initialTarget?: string
     <main className="launcher-main">
       <section className="launcher-intro">
         <div className="eyebrow">Start a review</div>
-        <h1>Choose a pull request.</h1>
+        <h1>Choose a pull or merge request.</h1>
         <p>Wingdiff builds a guided tour of the change, with every claim linked to the diff. Nothing is posted until you publish your review.</p>
         <form className={`target-form ${error ? "is-error" : ""}`} onSubmit={(event) => { event.preventDefault(); void submitTarget(); }}>
           <Icon name="git-pull" size={19} />
-          <input autoFocus aria-label="GitHub pull request" onChange={(event) => { setInput(event.target.value); setPreparation(null); setError(null); }} placeholder="https://github.com/owner/repo/pull/123" spellCheck={false} value={input} />
+          <input autoFocus aria-label="Pull or merge request" onChange={(event) => { setInput(event.target.value); setPreparation(null); setError(null); }} placeholder="GitHub or GitLab URL" spellCheck={false} value={input} />
           <button disabled={!input.trim() || submitting} type="submit">{submitting ? "Checking setup…" : preparation ? "Recheck setup" : "Check setup"}<Icon name="arrow-right" size={16} /></button>
         </form>
         {error && <div className="target-error" role="alert"><Icon name="flag" size={14} />{error}</div>}
-        <div className="target-help"><span>Also accepts</span><code>owner/repo#123</code><span>or run</span><code>wingdiff 123</code><span>inside a checkout</span></div>
+        <div className="target-help"><span>Also accepts</span><code>owner/repo#123</code><span>or</span><code>group/repo!123</code><span>and checkout-local numbers</span></div>
       </section>
 
       {preparation ? <section className="target-ready">
         <span className="target-ready__icon"><Icon name="check" size={19} /></span>
-        <div><div className="eyebrow">{blocker ? "Setup needed" : "Ready to review"}</div><h2>{preparation.target.label}</h2><p>{checkoutMessage(preparation)} · {githubCliMessage(preparation)}. No pull request data was requested.</p>{blocker && <p className="target-ready__blocker" role="alert"><Icon name="flag" size={13} />{blocker}</p>}</div>
+        <div><div className="eyebrow">{blocker ? "Setup needed" : "Ready to review"}</div><h2>{preparation.target.label}</h2><p>{checkoutMessage(preparation)} · {hostingCliMessage(preparation)}. No request data was requested.</p>{blocker && <p className="target-ready__blocker" role="alert"><Icon name="flag" size={13} />{blocker}</p>}</div>
         <div className="target-ready__actions"><button className="button button--primary" disabled={!canAcquire || acquiring} onClick={() => void openPullRequest()} title={blocker} type="button">{acquiring ? "Preparing review…" : "Start review"}<Icon name="arrow-right" size={15} /></button><button className="button button--quiet" onClick={onDemo} type="button">Try demo</button></div>
       </section> : recent.length > 0 ? <section className="recent-targets">
-        <header><span>Recent pull requests</span><small>Stored on this device</small></header>
+        <header><span>Recent reviews</span><small>Stored on this device</small></header>
         {recent.map((item) => <button key={item.canonicalUrl} onClick={() => void submitTarget(item.canonicalUrl)} type="button"><span><strong>{item.label}</strong><small>{item.canonicalUrl}</small></span><Icon name="chevron-right" size={15} /></button>)}
       </section> : <button className="demo-link" onClick={onDemo} type="button"><span><Icon name="spark" size={15} /> Try the demo review</span><Icon name="arrow-right" size={14} /></button>}
     </main>
@@ -251,8 +251,10 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setErrorMessage] = useState<string | null>(null);
   const [providers, setProviders] = useState<ProviderDefinition[]>(FALLBACK_PROVIDERS);
-  const [modelSelection, setModelSelection] = usePersistentState<ModelSelection>("wingdiff:model", DEFAULT_SELECTION, restoreModelSelection);
+  const [defaultModelSelection, setDefaultModelSelection] = useState<ModelSelection>(DEFAULT_SELECTION);
+  const [modelSelectionOverride, setModelSelectionOverride] = useState<ModelSelection | null>(null);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [modelSettingsSaving, setModelSettingsSaving] = useState(false);
   const [contextManifest, setContextManifest] = useState<SessionContextManifest | null>(null);
   const [contextPreviewOpen, setContextPreviewOpen] = useState(false);
   const [contextLoading, setContextLoading] = useState(false);
@@ -293,9 +295,11 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
   const view: ReviewView = location.view === "tour" && !stops.length ? "summary" : location.view;
   const activeStopId = (location.view === "tour" ? location.stop : undefined) ?? progress.activeStopIds[reviewScope];
   const activeIndex = Math.max(0, stops.findIndex((stop) => stop.id === activeStopId));
+  const hostName = session.target.platform === "gitlab" ? "GitLab" : "GitHub";
   const activeStop = stops[activeIndex];
   const activeEvidence = activeStop?.evidence.find((item) => item.id === activeEvidenceId) ?? activeStop?.evidence[0];
   const stopNotebook = activeStop ? notebook.filter((entry) => entry.stopId === activeStop.id) : [];
+  const modelSelection = modelSelectionOverride ?? defaultModelSelection;
   const activeProvider = providers.find((provider) => provider.id === modelSelection.provider);
   const activeModel = selectedModel(providers, modelSelection);
   const activeModelLabel = activeProvider ? `${activeProvider.name} · ${activeModel.name}` : activeModel.name;
@@ -337,11 +341,12 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       fetchReviewSubmission(session.id, controller.signal),
       fetchReviewPublication(session.id, controller.signal),
       fetchTourGenerationStatus(session.id, controller.signal),
-      fetchProviders(controller.signal).then((availableProviders) => {
-        setProviders(availableProviders);
-        setModelSelection((current) => preferredAvailableSelection(availableProviders, current));
+      fetchSessionModelSelectionOverride(session.id, controller.signal),
+      fetchProviders(controller.signal).then((catalog) => {
+        setProviders(catalog.providers);
+        setDefaultModelSelection(catalog.defaultSelection);
       }),
-    ]).then(([fullTour, updateTour, updateContext, fullCheckpoint, updateCheckpoint, storedProgress, storedComments, storedNotebook, storedReviewDraft, storedSubmission, storedPublication, storedGeneration]) => {
+    ]).then(([fullTour, updateTour, updateContext, fullCheckpoint, updateCheckpoint, storedProgress, storedComments, storedNotebook, storedReviewDraft, storedSubmission, storedPublication, storedGeneration, storedModelOverride]) => {
       setTours({ full: fullTour, update: updateTour });
       setUpdate(updateContext?.update ?? null);
       setBaselineCheckpoint(updateContext?.baselineCheckpoint ?? null);
@@ -353,6 +358,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       setDisposition(storedReviewDraft?.event ?? "COMMENT");
       setSubmission(storedSubmission);
       setPublication(storedPublication);
+      setModelSelectionOverride(storedModelOverride);
       setPublicationError(storedPublication?.error ?? null);
       setGenerationStatus(storedGeneration.state === "idle" ? null : storedGeneration);
       if (storedGeneration.state === "running" || storedGeneration.state === "succeeded") {
@@ -474,6 +480,21 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     }
   }
 
+  async function saveModelSettings(selection: ModelSelection | null) {
+    if (modelSettingsSaving) return;
+    setModelSettingsSaving(true);
+    setError(null);
+    try {
+      const override = selection && sameModelSelection(selection, defaultModelSelection) ? null : selection;
+      setModelSelectionOverride(await saveSessionModelSelectionOverride(session.id, override));
+      setModelPickerOpen(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Wingdiff could not save review model settings.");
+    } finally {
+      setModelSettingsSaving(false);
+    }
+  }
+
   async function confirmGenerationContext() {
     if (!contextManifest || contextSaving) return;
     setContextSaving(true);
@@ -589,7 +610,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
 
   function openComment(useFinding = false, initialBody = "", preferredEvidenceId?: string) {
     if (submission) {
-      setError("This review has already been published to GitHub.");
+      setError(`This review has already been published to ${hostName}.`);
       openView("review");
       return;
     }
@@ -600,7 +621,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     const evidence = preferredEvidence ?? selectedEvidence ?? (useFinding ? findingEvidence : activeEvidence) ?? activeEvidence;
     const anchor = commentAnchor(evidence, selection?.evidenceId === evidence.id ? selection : null);
     if (!anchor) {
-      setError("This evidence does not contain a line that GitHub can anchor a comment to.");
+      setError(`This evidence does not contain a line that ${hostName} can anchor a comment to.`);
       return;
     }
     setComposer({
@@ -663,7 +684,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     }
   }
 
-  async function publishReviewToGitHub(acknowledgeApprovalRisks = false) {
+  async function publishReviewToCodeHost(acknowledgeApprovalRisks = false) {
     if (submission || publishingReview) return;
     setPublishingReview(true);
     setPublicationError(null);
@@ -674,7 +695,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       setSubmission(published);
       setPublication(null);
       setPublicationError(null);
-      setNotice("Review published to GitHub.");
+      setNotice(`Review published to ${hostName}.`);
     } catch (caught) {
       setPublicationError(caught instanceof Error ? caught.message : "Wingdiff could not publish this review.");
       try {
@@ -693,7 +714,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       await clearUncertainReviewPublication(session.id);
       setPublication(null);
       setPublicationError(null);
-      setNotice("Publication retry enabled after GitHub verification.");
+      setNotice(`Publication retry enabled after ${hostName} verification.`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Wingdiff could not enable a retry.");
     }
@@ -775,7 +796,7 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
     const next = stops[activeIndex + 1];
     setStopStatus(activeStop.id, "understood", next?.id ?? activeStop.id);
     if (next) navigate(scoped("tour", { stop: next.id }), "replace");
-    else openView("summary");
+    else openView("review");
   }
 
   function toggleFlag() {
@@ -816,10 +837,9 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       <div className="topbar__divider" />
       {view !== "summary" && <button className="home-button" onClick={() => openView("summary")} title="Back to summary (Esc)" type="button"><Icon name="arrow-left" size={14} /><span>Summary</span></button>}
       <button className="home-button" onClick={onHome} type="button"><Icon name="git-pull" size={14} /><span>New review</span></button>
-      <div className="pr-identity"><span>{metadata.repository}</span><strong>#{metadata.number}</strong><span className="pr-identity__title">{metadata.title}</span></div>
+      <div className="pr-identity"><span>{metadata.repository}</span><strong>{session.target.platform === "gitlab" ? "!" : "#"}{metadata.number}</strong><span className="pr-identity__title">{metadata.title}</span></div>
       <div className="topbar__spacer" />
-      <button className="model-button" onClick={() => setModelPickerOpen(true)} type="button"><span className="model-button__spark"><Icon name="spark" size={13} /></span><span><small>{activeProvider?.configured ? "Review model" : "Model setup"}</small><strong>{activeModelLabel}</strong></span><Icon name="chevron-right" size={13} /></button>
-      <a className="button button--quiet acquired-github-link" href={metadata.url} rel="noreferrer" target="_blank">GitHub <Icon name="external" size={14} /></a>
+      <a className="button button--quiet acquired-github-link" href={metadata.url} rel="noreferrer" target="_blank">{hostName} <Icon name="external" size={14} /></a>
       <button className="button button--primary topbar__review" onClick={() => openView("review")} type="button">Review {comments.length > 0 && <span>{comments.length}</span>}</button>
       <button aria-label={`Use ${theme === "dark" ? "light" : "dark"} theme`} className="icon-button" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} type="button"><Icon name={theme === "dark" ? "sun" : "moon"} size={17} /></button>
     </header>
@@ -827,16 +847,16 @@ function AcquiredReviewApp({ onHome, onSession, session }: { onHome: () => void;
       <AcquiredTourRail activeIndex={activeIndex} inheritedStopIds={inheritedStopIds} onBrowse={() => openView("browse")} onReview={() => openView("review")} onSelect={selectStop} onSummary={() => openView("summary")} statuses={statuses} stops={stops} />
       <main className="main-canvas" ref={canvasRef}><AcquiredTourView activeEvidence={activeEvidence} activeEvidenceId={activeEvidenceId} activeFindingRevisions={activeFindingRevisions} activeIndex={activeIndex} comments={comments.filter((comment) => comment.stopId === activeStop.id).length} headSha={metadata.head.sha} onAsk={(prompt) => { setDrawerOpen(true); if (prompt) void askQuestion(prompt); }} onComment={() => openComment(false)} onEvidence={setActiveEvidenceId} onFindingComment={() => openComment(true)} onFlag={toggleFlag} onNavigate={navigateStop} onSelectLine={selectLine} onUnderstood={markUnderstood} selection={selection} status={statuses[activeStop.id] ?? "unseen"} stop={activeStop} totalStops={stops.length} /></main>
     </div> : <main className="main-canvas acquired-canvas" ref={canvasRef}>
-      {view === "summary" ? <AcquiredSummary activeModel={activeModelLabel} baselineCheckpoint={baselineCheckpoint} checkpoint={checkpoint} completing={completing} error={error} generated={generated} generating={generating || contextLoading} generationFailed={generationFailed} generationStatus={generationStatus} modelReady={Boolean(activeProvider?.configured)} notice={notice} onBegin={() => selectStop(activeIndex)} onBrowse={() => openView("browse")} onCheckUpdates={() => void checkForUpdates()} onComplete={() => void completeReview()} onGenerate={() => void previewGenerationContext()} onModel={() => setModelPickerOpen(true)} onScope={selectScope} onSelectStop={selectStop} refreshing={refreshing} reviewScope={reviewScope} scopedEvidence={scopedEvidence} session={session} statuses={statuses} stops={stops} tourLoading={tourLoading} update={update} /> : view === "browse" ? tourLoading ? null : <AcquiredBrowse blocks={blocks} initialFile={location.file} onFile={(file) => replaceReviewLocation(scoped("browse", { file }))} key={reviewScope} onSummary={() => openView("summary")} scope={reviewScope} session={session} /> : <AcquiredReviewDesk comments={comments} disposition={disposition} error={error} failedChecks={metadata.checks.failed} headSha={metadata.head.sha} highFindingCount={unresolvedHighFindingCount} onAllowRetry={() => void allowPublicationRetry()} onBack={() => back(scoped(generated ? "tour" : "summary", { stop: activeStop?.id }))} onDisposition={(event) => { setDisposition(event); void persistReviewDraft(reviewSummary, event); }} onPublish={(acknowledged) => void publishReviewToGitHub(acknowledged)} onRemoveComment={(id) => void removeComment(id)} onSave={() => void persistReviewDraft()} onSummary={setReviewSummary} publication={publication} publishError={publicationError} publishing={publishingReview} saving={savingReview} statuses={statuses} stops={stops} submission={submission} summary={reviewSummary} />}
+      {view === "summary" ? <AcquiredSummary activeModel={`${activeModelLabel} · ${reasoningEffortLabel(modelSelection.reasoningEffort)}`} baselineCheckpoint={baselineCheckpoint} checkpoint={checkpoint} completing={completing} error={error} generated={generated} generating={generating || contextLoading} generationFailed={generationFailed} generationStatus={generationStatus} hasModelOverride={Boolean(modelSelectionOverride)} modelReady={Boolean(activeProvider?.configured)} notice={notice} onBegin={() => selectStop(activeIndex)} onBrowse={() => openView("browse")} onCheckUpdates={() => void checkForUpdates()} onComplete={() => void completeReview()} onGenerate={() => void previewGenerationContext()} onModel={() => setModelPickerOpen(true)} onScope={selectScope} onSelectStop={selectStop} refreshing={refreshing} reviewScope={reviewScope} scopedEvidence={scopedEvidence} session={session} statuses={statuses} stops={stops} tourLoading={tourLoading} update={update} /> : view === "browse" ? tourLoading ? null : <AcquiredBrowse blocks={blocks} initialFile={location.file} onFile={(file) => replaceReviewLocation(scoped("browse", { file }))} key={reviewScope} onSummary={() => openView("summary")} scope={reviewScope} session={session} /> : <AcquiredReviewDesk comments={comments} disposition={disposition} error={error} failedChecks={metadata.checks.failed} headSha={metadata.head.sha} highFindingCount={unresolvedHighFindingCount} hostName={hostName} onAllowRetry={() => void allowPublicationRetry()} onBack={() => back(scoped(generated ? "tour" : "summary", { stop: activeStop?.id }))} onDisposition={(event) => { setDisposition(event); void persistReviewDraft(reviewSummary, event); }} onPublish={(acknowledged) => void publishReviewToCodeHost(acknowledged)} onRemoveComment={(id) => void removeComment(id)} onSave={() => void persistReviewDraft()} onSummary={setReviewSummary} publication={publication} publishError={publicationError} publishing={publishingReview} saving={savingReview} statuses={statuses} stops={stops} submission={submission} summary={reviewSummary} />}
     </main>}
-    {modelPickerOpen && <ModelPicker onClose={() => setModelPickerOpen(false)} onSelection={setModelSelection} providers={providers} selection={modelSelection} />}
+    {modelPickerOpen && <ModelPicker defaultSelection={defaultModelSelection} error={error} onApply={(selection) => void saveModelSettings(selection)} onClose={() => setModelPickerOpen(false)} overrideSelection={modelSelectionOverride} providers={providers} saving={modelSettingsSaving} />}
     {contextPreviewOpen && contextManifest && activeProvider && <ContextPreview error={error} exclusions={exclusionText} manifest={contextManifest} modelName={activeModel.name} onCancel={() => setContextPreviewOpen(false)} onConfirm={() => void confirmGenerationContext()} onExclusions={setExclusionText} provider={activeProvider} saving={contextSaving} />}
     {drawerOpen && activeStop && activeEvidence && <InvestigationDrawer answering={answering} entries={stopNotebook} evidence={activeEvidence} headSha={metadata.head.sha} modelName={activeModelLabel} onAsk={askQuestion} onClose={closeInvestigation} onQuestion={setQuestion} onUseAnswer={useInvestigationAsComment} providerConfigured={Boolean(activeProvider?.configured)} question={question} stop={activeStop} />}
     {composer && <CommentComposer composer={composer} headSha={metadata.head.sha} onCancel={() => setComposer(null)} onChange={(body) => setComposer((current) => current ? { ...current, body } : null)} onSeverity={(severity) => setComposer((current) => current ? { ...current, severity } : null)} onStage={stageComment} />}
   </div>;
 }
 
-function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completing, error, generated, generating, generationFailed, generationStatus, modelReady, notice, onBegin, onBrowse, onCheckUpdates, onComplete, onGenerate, onModel, onScope, onSelectStop, refreshing, reviewScope, scopedEvidence, session, statuses, stops, tourLoading, update }: {
+function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completing, error, generated, generating, generationFailed, generationStatus, hasModelOverride, modelReady, notice, onBegin, onBrowse, onCheckUpdates, onComplete, onGenerate, onModel, onScope, onSelectStop, refreshing, reviewScope, scopedEvidence, session, statuses, stops, tourLoading, update }: {
   activeModel: string;
   baselineCheckpoint: ReviewCheckpoint | null;
   checkpoint: ReviewCheckpoint | null;
@@ -846,6 +866,7 @@ function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completi
   generating: boolean;
   generationFailed: boolean;
   generationStatus: TourGenerationStatus | null;
+  hasModelOverride: boolean;
   modelReady: boolean;
   notice: string | null;
   onBegin: () => void;
@@ -881,8 +902,8 @@ function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completi
   return <div className="page page--brief">
     <div className="brief-hero">
       <div className="brief-hero__meta"><span className="avatar">{initials}</span><span><strong>{metadata.author.login}</strong> wants to merge</span><code>{metadata.head.ref}</code><Icon name="arrow-right" size={13} /><code>{metadata.base.ref}</code></div>
-      <div className="brief-hero__title-row"><div><div className="eyebrow">Pull request #{metadata.number} · {reviewScope === "update" ? "since your review" : "entire PR"}</div><h1>{metadata.title}</h1></div><div className={`check-badge ${metadata.checks.failed ? "is-failed" : ""}`}><Icon name={metadata.checks.failed ? "flag" : "check"} size={15} /><span>{metadata.checks.total ? <><strong>{metadata.checks.passed}/{metadata.checks.total}</strong> checks passed</> : <><strong>None</strong> reported</>}</span></div></div>
-      {update && <div className="acquired-scope"><button className={reviewScope === "update" ? "is-active" : ""} onClick={() => onScope("update")} type="button"><span>Since your review</span><b>{update.evidence.files.length}</b></button><button className={reviewScope === "full" ? "is-active" : ""} onClick={() => onScope("full")} type="button"><span>Entire PR</span><b>{session.evidence.files.length}</b></button></div>}
+      <div className="brief-hero__title-row"><div><div className="eyebrow">{session.target.platform === "gitlab" ? `Merge request !${metadata.number}` : `Pull request #${metadata.number}`} · {reviewScope === "update" ? "since your review" : "entire change"}</div><h1>{metadata.title}</h1></div><div className={`check-badge ${metadata.checks.failed ? "is-failed" : ""}`}><Icon name={metadata.checks.failed ? "flag" : "check"} size={15} /><span>{metadata.checks.total ? <><strong>{metadata.checks.passed}/{metadata.checks.total}</strong> checks passed</> : <><strong>None</strong> reported</>}</span></div></div>
+      {update && <div className="acquired-scope"><button className={reviewScope === "update" ? "is-active" : ""} onClick={() => onScope("update")} type="button"><span>Since your review</span><b>{update.evidence.files.length}</b></button><button className={reviewScope === "full" ? "is-active" : ""} onClick={() => onScope("full")} type="button"><span>Entire change</span><b>{session.evidence.files.length}</b></button></div>}
       <div className="brief-stats"><span><strong>{scopedEvidence.files.length}</strong> files</span><span><strong className="addition">+{scopedEvidence.additions}</strong><strong className="deletion">−{scopedEvidence.deletions}</strong> lines</span><span><strong>{metadata.commits.length}</strong> commits</span><span><code>{fromSha.slice(0, 7)}</code> → <code>{scopedEvidence.headSha.slice(0, 7)}</code></span></div>
     </div>
     {generated ? <>
@@ -890,16 +911,16 @@ function AcquiredSummary({ activeModel, baselineCheckpoint, checkpoint, completi
         <header><div><div className="eyebrow">Findings · ranked by impact</div><h2>{blockingCount ? `${blockingCount} finding${blockingCount === 1 ? "" : "s"} to review before approval` : "No findings currently block approval"}</h2></div><span className={`summary-verdict ${blockingCount ? hasHighBlocker ? "is-high" : "" : "is-clear"}`}><Icon name={blockingCount ? "flag" : "check"} size={14} />{blockingCount ? "Review needed" : "Approval looks likely"}</span></header>
         {earlierFindings.length > 0 && <div className="summary-finding-group"><div className="summary-finding-group__label">Earlier findings</div><div className="summary-finding-list">{earlierFindings.map(({ prior, revision, stopIndex }, index) => <button aria-disabled={stopIndex < 0} className={stopIndex < 0 ? "is-static" : ""} key={prior.findingId} onClick={() => stopIndex >= 0 && onSelectStop(stopIndex)} type="button"><span className="finding-rank">{String(index + 1).padStart(2, "0")}</span><span className={`continuity-badge is-${revision.state}`}>{continuityLabel(revision.state)}</span><span><strong>{prior.title}</strong><small>{revision.summary}</small><em>{prior.severity} priority · from {baselineCheckpoint?.reviewedHeadSha.slice(0, 7)}</em></span>{stopIndex >= 0 && <Icon name="chevron-right" size={16} />}</button>)}</div></div>}
         {findings.length > 0 && <div className="summary-finding-group"><div className="summary-finding-group__label">New findings</div><div className="summary-finding-list">{findings.map(({ finding, stop, stopIndex }, index) => <button key={finding.id} onClick={() => onSelectStop(stopIndex)} type="button"><span className="finding-rank">{String(earlierFindings.length + index + 1).padStart(2, "0")}</span><span className={`risk-level risk-level--${finding.severity}`}>{finding.severity}</span><span><strong>{finding.title}</strong><small>{finding.body}</small><em>{finding.category} · {stop.title}</em></span><Icon name="chevron-right" size={16} /></button>)}</div></div>}
-        {!earlierFindings.length && !findings.length && <div className="summary-clear"><Icon name="check" size={18} /><div><strong>Nothing in the analyzed evidence currently argues against approval.</strong><span>The guided route still provides a full-PR backstop.</span></div></div>}
+        {!earlierFindings.length && !findings.length && <div className="summary-clear"><Icon name="check" size={18} /><div><strong>Nothing in the analyzed evidence currently argues against approval.</strong><span>The guided route still provides a full-change backstop.</span></div></div>}
       </section>
-      <section className="summary-context"><div><span>{reviewScope === "update" ? "Update" : "Change"}</span><p>{generated.tour.summary}</p></div><div><span>Author intent</span><AuthorMarkdown fallback="No pull request description was provided." source={metadata.body} /></div></section>
+      <section className="summary-context"><div><span>{reviewScope === "update" ? "Update" : "Change"}</span><p>{generated.tour.summary}</p></div><div><span>Author intent</span><AuthorMarkdown fallback="No request description was provided." source={metadata.body} /></div></section>
       <section className="begin-card"><div><strong>{stops.length} review stop{stops.length === 1 ? "" : "s"}</strong><span>{stops.reduce((total, stop) => total + stop.minutes, 0)} min · pinned to {generated.headSha.slice(0, 7)}{generated.contextFingerprint ? ` · context ${generated.contextFingerprint.slice(0, 10)}` : ""}</span></div><button className="button button--hero" onClick={onBegin} type="button">Start review <Icon name="arrow-right" /></button></section>
-      <section className="checkpoint-card"><div><span className={`card-icon ${checkpoint ? "" : "card-icon--spark"}`}><Icon name={checkpoint ? "check" : "shield"} size={17} /></span><div><strong>{checkpoint ? `Reviewed at ${checkpoint.reviewedHeadSha.slice(0, 7)}` : allReviewed ? "Ready to save this review point" : `${stops.length - reviewedStops} stop${stops.length - reviewedStops === 1 ? "" : "s"} remaining`}</strong><span>{checkpoint ? "Check whether the author has pushed anything new." : allReviewed ? "Future update reviews will begin from this exact head." : "Review every stop before creating the update baseline."}</span></div></div>{checkpoint ? <button className="button button--secondary" disabled={refreshing} onClick={onCheckUpdates} type="button">{refreshing ? "Checking…" : "Check for updates"}<Icon name="arrow-right" size={14} /></button> : <button className="button button--secondary" disabled={!allReviewed || completing} onClick={onComplete} type="button">{completing ? "Saving…" : "Complete review"}<Icon name="check" size={14} /></button>}</section>
+      <section className="checkpoint-card"><div><span className={`card-icon ${checkpoint ? "" : "card-icon--spark"}`}><Icon name={checkpoint ? "check" : "shield"} size={17} /></span><div><strong>{checkpoint ? `Reviewed at ${checkpoint.reviewedHeadSha.slice(0, 7)}` : allReviewed ? "Ready to track future updates" : `${stops.length - reviewedStops} stop${stops.length - reviewedStops === 1 ? "" : "s"} remaining`}</strong><span>{checkpoint ? "Check whether the author has pushed anything new." : allReviewed ? "Save this head as the baseline for “Since your review.”" : "Review every stop before saving an update checkpoint."}</span></div></div>{checkpoint ? <button className="button button--secondary" disabled={refreshing} onClick={onCheckUpdates} type="button">{refreshing ? "Checking…" : "Check for updates"}<Icon name="arrow-right" size={14} /></button> : <button className="button button--secondary" disabled={!allReviewed || completing} onClick={onComplete} type="button">{completing ? "Saving…" : "Save checkpoint"}<Icon name="check" size={14} /></button>}</section>
     </> : <>
-      <section className="summary-findings acquired-evidence-ready"><header><div><div className="eyebrow">Evidence ready</div><h2>The pull request is pinned and ready for a guided review</h2></div><span className="summary-verdict"><Icon name="code" size={14} />{tourLoading ? "Checking" : "Not analyzed"}</span></header><div className="summary-clear"><Icon name="check" size={18} /><div><strong>{session.evidence.files.length} changed file{session.evidence.files.length === 1 ? "" : "s"} passed anchor validation.</strong><span>Generate a semantic route with {activeModel}, or inspect the diff directly.</span></div></div></section>
+      <section className="summary-findings acquired-evidence-ready"><header><div><div className="eyebrow">Evidence ready</div><h2>The change is pinned and ready for a guided review</h2></div><span className="summary-verdict"><Icon name="code" size={14} />{tourLoading ? "Checking" : "Not analyzed"}</span></header><div className="summary-clear"><Icon name="check" size={18} /><div><strong>{session.evidence.files.length} changed file{session.evidence.files.length === 1 ? "" : "s"} passed anchor validation.</strong><span>Generate a semantic route, or inspect the diff directly.</span></div></div></section>
       {metadata.body && <section className="summary-context acquired-description"><div><span>Author description</span><AuthorMarkdown source={metadata.body} /></div></section>}
       {error && <div className="target-error acquired-generation-error" role="alert"><Icon name="flag" size={14} /><span>{error}</span>{generationFailed && <button className="button button--quiet button--small" onClick={onModel} type="button">Review model setup</button>}</div>}
-      <section className="begin-card"><div><strong>{generating ? `Building ${generationStatus?.scope === "update" ? "update" : "guided"} tour` : modelReady ? activeModel : "Choose a configured model"}</strong><span>{generating && generationStatus?.state === "running" ? `${formatElapsedTime(generationStatus.elapsedMs)} elapsed${generationStatus.timeoutMs ? ` · ${formatElapsedTime(generationStatus.timeoutMs)} limit` : ""} · status checked every second` : "Analysis stays inside the local Wingdiff process"}</span></div><div className="acquired-start-actions"><button className="button button--quiet" onClick={onBrowse} type="button">Browse diff</button><button className="button button--hero" disabled={tourLoading || generating} onClick={onGenerate} type="button">{generating ? generationStatus?.state === "running" ? `Building · ${formatElapsedTime(generationStatus.elapsedMs)}` : "Preparing…" : modelReady ? "Generate guided review" : "Choose model"} <Icon name="arrow-right" /></button></div></section>
+      <section className="begin-card"><div><strong>{generating ? `Building ${generationStatus?.scope === "update" ? "update" : "guided"} tour` : modelReady ? "Ready to build your guided review" : "Model setup required"}</strong><span>{generating && generationStatus?.state === "running" ? `${formatElapsedTime(generationStatus.elapsedMs)} elapsed${generationStatus.timeoutMs ? ` · ${formatElapsedTime(generationStatus.timeoutMs)} limit` : ""} · status checked every second` : <>{hasModelOverride ? "Override" : "Default"} · {activeModel} <button className="model-change" disabled={generating} onClick={onModel} type="button">{modelReady ? "Change" : "Set up model"}</button></>}</span></div><div className="acquired-start-actions"><button className="button button--quiet" onClick={onBrowse} type="button">Browse diff</button><button className="button button--hero" disabled={tourLoading || generating} onClick={onGenerate} type="button">{generating ? generationStatus?.state === "running" ? `Building · ${formatElapsedTime(generationStatus.elapsedMs)}` : "Preparing…" : modelReady ? "Generate guided review" : "Set up model"} <Icon name="arrow-right" /></button></div></section>
     </>}
     {notice && <div className="review-notice" role="status"><Icon name="check" size={14} />{notice}</div>}
     {generated && error && <div className="target-error acquired-generation-error" role="alert"><Icon name="flag" size={14} />{error}</div>}
@@ -946,7 +967,7 @@ function AcquiredTourView({ activeEvidence, activeEvidenceId, activeFindingRevis
         {stop.prompts.length > 0 && <section className="insight-section review-prompts"><div className="section-label"><span>Questions to verify</span></div>{stop.prompts.map((prompt, index) => <button className="acquired-prompt" key={prompt} onClick={() => onAsk(prompt)} type="button"><span>{String(index + 1).padStart(2, "0")}</span>{prompt}</button>)}</section>}
       </aside>
     </div>
-    <footer className="stop-footer"><div className="stop-footer__steps"><button aria-label="Previous stop" className="button button--quiet" disabled={activeIndex === 0} onClick={() => onNavigate(-1)} title="Previous stop (K)" type="button"><Icon name="arrow-left" size={16} /> Previous</button><button aria-label="Next stop" className="button button--quiet" disabled={activeIndex === totalStops - 1} onClick={() => onNavigate(1)} title="Next stop (J)" type="button">Next <Icon name="arrow-right" size={16} /></button></div><span>{status === "understood" ? "Marked understood" : status === "flagged" ? "Flagged for review" : "Ready for your judgment"}</span><button className="button button--complete" onClick={onUnderstood} type="button"><Icon name="check" size={16} />{activeIndex === totalStops - 1 ? "Mark understood & finish" : "Mark understood"}<Icon name="arrow-right" size={16} /></button></footer>
+    <footer className="stop-footer"><div className="stop-footer__steps"><button aria-label="Previous stop" className="button button--quiet" disabled={activeIndex === 0} onClick={() => onNavigate(-1)} title="Previous stop (K)" type="button"><Icon name="arrow-left" size={16} /> Previous</button><button aria-label="Next stop" className="button button--quiet" disabled={activeIndex === totalStops - 1} onClick={() => onNavigate(1)} title="Next stop (J)" type="button">Next <Icon name="arrow-right" size={16} /></button></div><span>{status === "understood" ? "Marked understood" : status === "flagged" ? "Flagged for review" : "Ready for your judgment"}</span><button className="button button--complete" onClick={onUnderstood} type="button"><Icon name="check" size={16} />{activeIndex === totalStops - 1 ? "Mark understood & review" : "Mark understood"}<Icon name="arrow-right" size={16} /></button></footer>
   </div>;
 }
 
@@ -1004,16 +1025,17 @@ function AcquiredBrowse({ blocks, initialFile, onFile, onSummary, scope, session
     return () => window.removeEventListener("keydown", handleKeyDown);
   });
 
-  return <div className="page page--browse"><header className="browse-header"><div><div className="eyebrow">{scope === "update" ? "Since your review" : "Entire PR"} · {session.metadata.head.sha.slice(0, 7)}</div><h1>Changed files</h1><p>{scope === "update" ? "Only code changed after your explicit review checkpoint." : "The full pull request diff remains available as a backstop."}</p></div><button className="button button--secondary" onClick={onSummary} type="button"><Icon name="arrow-left" size={16} /> Back to summary <kbd>Esc</kbd></button></header><div className="browse-layout"><nav aria-label="Changed files" className="file-index"><div className="section-label"><span>Changed files</span><b>{blocks.length}</b></div>{blocks.map((block) => <button aria-current={block.id === activeFile ? "true" : undefined} className={block.id === activeFile ? "is-active" : ""} key={block.id} onClick={() => jumpToFile(block.id)} type="button"><Icon name="code" size={14} /><span>{fileName(block.path)}<small>{directoryName(block.path)}</small></span><Icon name="chevron-right" size={13} /></button>)}<div className="file-index__muted"><kbd>J</kbd> <kbd>K</kbd> next / previous file</div></nav><div className="browse-diffs" ref={diffsRef}>{blocks.map((block) => <div className="browse-file" id={block.id} key={block.id} tabIndex={-1}><CodeDiff evidence={block} minimal /></div>)}</div></div></div>;
+  return <div className="page page--browse"><header className="browse-header"><div><div className="eyebrow">{scope === "update" ? "Since your review" : "Entire change"} · {session.metadata.head.sha.slice(0, 7)}</div><h1>Changed files</h1><p>{scope === "update" ? "Only code changed after your explicit review checkpoint." : "The full change diff remains available as a backstop."}</p></div><button className="button button--secondary" onClick={onSummary} type="button"><Icon name="arrow-left" size={16} /> Back to summary <kbd>Esc</kbd></button></header><div className="browse-layout"><nav aria-label="Changed files" className="file-index"><div className="section-label"><span>Changed files</span><b>{blocks.length}</b></div>{blocks.map((block) => <button aria-current={block.id === activeFile ? "true" : undefined} className={block.id === activeFile ? "is-active" : ""} key={block.id} onClick={() => jumpToFile(block.id)} type="button"><Icon name="code" size={14} /><span>{fileName(block.path)}<small>{directoryName(block.path)}</small></span><Icon name="chevron-right" size={13} /></button>)}<div className="file-index__muted"><kbd>J</kbd> <kbd>K</kbd> next / previous file</div></nav><div className="browse-diffs" ref={diffsRef}>{blocks.map((block) => <div className="browse-file" id={block.id} key={block.id} tabIndex={-1}><CodeDiff evidence={block} minimal /></div>)}</div></div></div>;
 }
 
-function AcquiredReviewDesk({ comments, disposition, error, failedChecks, headSha, highFindingCount, onAllowRetry, onBack, onDisposition, onPublish, onRemoveComment, onSave, onSummary, publication, publishError, publishing, saving, statuses, stops, submission, summary }: {
+function AcquiredReviewDesk({ comments, disposition, error, failedChecks, headSha, highFindingCount, hostName, onAllowRetry, onBack, onDisposition, onPublish, onRemoveComment, onSave, onSummary, publication, publishError, publishing, saving, statuses, stops, submission, summary }: {
   comments: DraftComment[];
   disposition: ReviewDisposition;
   error: string | null;
   failedChecks: number;
   headSha: string;
   highFindingCount: number;
+  hostName: "GitHub" | "GitLab";
   onAllowRetry: () => void;
   onBack: () => void;
   onDisposition: (value: ReviewDisposition) => void;
@@ -1048,7 +1070,7 @@ function AcquiredReviewDesk({ comments, disposition, error, failedChecks, headSh
     <header className="review-header"><button className="back-link" onClick={onBack} type="button"><Icon name="arrow-left" size={15} /> Back to review</button><div className="eyebrow">Review desk</div><h1>Prepare your decision.</h1><p>Confirm the feedback and disposition that will represent your review.</p></header>
     <div className="review-summary-strip"><div><span className="summary-icon summary-icon--green"><Icon name="check" /></span><span><strong>{reviewed}/{stops.length}</strong><small>stops reviewed</small></span></div><div><span className="summary-icon summary-icon--amber"><Icon name="flag" /></span><span><strong>{flagged}</strong><small>open flag{flagged === 1 ? "" : "s"}</small></span></div><div><span className="summary-icon summary-icon--blue"><Icon name="comment" /></span><span><strong>{comments.length}</strong><small>draft comment{comments.length === 1 ? "" : "s"}</small></span></div><div className="review-sha"><span className="live-dot" /><span><strong>Pinned head</strong><small>{headSha.slice(0, 12)}</small></span></div></div>
     {error && <div className="target-error acquired-generation-error" role="alert"><Icon name="flag" size={14} />{error}</div>}
-    <div className="review-grid"><div className="review-main"><section className="review-section"><header><div><span>01</span><div><h2>Review summary</h2><p>Keep it concise and decision-relevant.</p></div></div><small>{summary.length} characters</small></header><textarea disabled={Boolean(submission)} onBlur={onSave} onChange={(event) => onSummary(event.target.value)} placeholder="Summarize your review…" rows={6} value={summary} /></section><section className="review-section"><header><div><span>02</span><div><h2>Inline comments</h2><p>Ranked by severity and pinned to the diff.</p></div></div><small>{comments.length} draft{comments.length === 1 ? "" : "s"}</small></header>{rankedComments.length === 0 ? <div className="empty-comments"><Icon name="comment" /><strong>No inline comments</strong><span>A summary-only review is valid.</span></div> : <div className="review-comments">{rankedComments.map((comment) => <article key={comment.id}><header><span className={`risk-level risk-level--${comment.severity}`}>{comment.severity}</span><code>{comment.path}:{comment.startLine}{comment.endLine !== comment.startLine ? `–${comment.endLine}` : ""}</code>{!submission && <button aria-label="Remove draft comment" onClick={() => onRemoveComment(comment.id)} type="button"><Icon name="x" size={15} /></button>}</header><p>{comment.body}</p></article>)}</div>}</section></div><aside className="publish-card"><div className="eyebrow">Final disposition</div><h2>{submission ? "Review published" : "How should GitHub record this review?"}</h2>{submission ? <div className="submitted-review"><span className="summary-icon summary-icon--green"><Icon name="check" /></span><div><strong>{labelDisposition(submission.event)}</strong><small>{new Date(submission.submittedAt).toLocaleString()}</small></div></div> : <div className="disposition-list">{(["COMMENT", "APPROVE", "REQUEST_CHANGES"] as ReviewDisposition[]).map((value) => <button className={disposition === value ? "is-active" : ""} key={value} onClick={() => { setApprovalAcknowledged(false); onDisposition(value); }} type="button"><span className="radio"><i /></span><span><strong>{labelDisposition(value)}</strong><small>{dispositionDescription(value)}</small></span></button>)}</div>}{needsApprovalAcknowledgement && !submission && <div className="approval-warning"><strong>Approval needs acknowledgement</strong><ul>{approvalRisks.map((risk) => <li key={risk}>{risk}</li>)}</ul><label><input checked={approvalAcknowledged} onChange={(event) => setApprovalAcknowledged(event.target.checked)} type="checkbox" />I reviewed these signals and still intend to approve.</label></div>}{publishError && !submission && <div className="publish-error" role="alert"><Icon name="flag" size={14} /><div><strong>Review not published</strong><p>{publishError}</p></div></div>}{publication && !submission && <div className="publication-warning"><strong>{publication.state === "publishing" ? "Publication is already in progress" : "Publication outcome is uncertain"}</strong><p>{publication.state === "publishing" ? "Another request currently owns this publication." : "Check the pull request on GitHub before retrying. The prior request may have succeeded without returning a receipt."}</p>{publication.state === "uncertain" && <button className="button button--quiet button--small" onClick={onAllowRetry} type="button">I verified GitHub · allow retry</button>}</div>}<div className="publish-preview"><span>{submission ? "Sent to GitHub" : "Will publish"}</span><strong>{comments.length} inline comment{comments.length === 1 ? "" : "s"}</strong><strong>{summary.trim() ? "1 review summary" : "No review summary"}</strong><small>{headSha.slice(0, 12)}</small></div>{submission ? <a className="button button--publish" href={submission.url} rel="noreferrer" target="_blank">Open on GitHub <Icon name="external" size={16} /></a> : <><button className="button button--publish" disabled={!canPublish || publishing} onClick={() => onPublish(approvalAcknowledged)} type="button">{publishing ? "Publishing to GitHub…" : "Publish review to GitHub"}<Icon name="external" size={16} /></button><p className="publish-note"><Icon name="shield" size={13} />{saving && !publishing ? "Saving draft locally. You can still publish when ready." : "Head and line anchors are revalidated before publishing."}</p></>}</aside></div>
+    <div className="review-grid"><div className="review-main"><section className="review-section"><header><div><span>01</span><div><h2>Review summary</h2><p>Keep it concise and decision-relevant.</p></div></div><small>{summary.length} characters</small></header><textarea disabled={Boolean(submission)} onBlur={onSave} onChange={(event) => onSummary(event.target.value)} placeholder="Summarize your review…" rows={6} value={summary} /></section><section className="review-section"><header><div><span>02</span><div><h2>Inline comments</h2><p>Ranked by severity and pinned to the diff.</p></div></div><small>{comments.length} draft{comments.length === 1 ? "" : "s"}</small></header>{rankedComments.length === 0 ? <div className="empty-comments"><Icon name="comment" /><strong>No inline comments</strong><span>A summary-only review is valid.</span></div> : <div className="review-comments">{rankedComments.map((comment) => <article key={comment.id}><header><span className={`risk-level risk-level--${comment.severity}`}>{comment.severity}</span><code>{comment.path}:{comment.startLine}{comment.endLine !== comment.startLine ? `–${comment.endLine}` : ""}</code>{!submission && <button aria-label="Remove draft comment" onClick={() => onRemoveComment(comment.id)} type="button"><Icon name="x" size={15} /></button>}</header><p>{comment.body}</p></article>)}</div>}</section></div><aside className="publish-card"><div className="eyebrow">Final disposition</div><h2>{submission ? "Review published" : `How should ${hostName} record this review?`}</h2>{submission ? <div className="submitted-review"><span className="summary-icon summary-icon--green"><Icon name="check" /></span><div><strong>{labelDisposition(submission.event)}</strong><small>{new Date(submission.submittedAt).toLocaleString()}</small></div></div> : <div className="disposition-list">{(["COMMENT", "APPROVE", "REQUEST_CHANGES"] as ReviewDisposition[]).map((value) => <button className={disposition === value ? "is-active" : ""} key={value} onClick={() => { setApprovalAcknowledged(false); onDisposition(value); }} type="button"><span className="radio"><i /></span><span><strong>{labelDisposition(value)}</strong><small>{dispositionDescription(value)}</small></span></button>)}</div>}{needsApprovalAcknowledgement && !submission && <div className="approval-warning"><strong>Approval needs acknowledgement</strong><ul>{approvalRisks.map((risk) => <li key={risk}>{risk}</li>)}</ul><label><input checked={approvalAcknowledged} onChange={(event) => setApprovalAcknowledged(event.target.checked)} type="checkbox" />I reviewed these signals and still intend to approve.</label></div>}{publishError && !submission && <div className="publish-error" role="alert"><Icon name="flag" size={14} /><div><strong>Review not published</strong><p>{publishError}</p></div></div>}{publication && !submission && <div className="publication-warning"><strong>{publication.state === "publishing" ? "Publication is already in progress" : "Publication outcome is uncertain"}</strong><p>{publication.state === "publishing" ? "Another request currently owns this publication." : `Check the request on ${hostName} before retrying. The prior request may have succeeded without returning a receipt.`}</p>{publication.state === "uncertain" && <button className="button button--quiet button--small" onClick={onAllowRetry} type="button">I verified {hostName} · allow retry</button>}</div>}<div className="publish-preview"><span>{submission ? `Sent to ${hostName}` : "Will publish"}</span><strong>{comments.length} inline comment{comments.length === 1 ? "" : "s"}</strong><strong>{summary.trim() ? "1 review summary" : "No review summary"}</strong><small>{headSha.slice(0, 12)}</small></div>{submission ? <a className="button button--publish" href={submission.url} rel="noreferrer" target="_blank">Open on {hostName} <Icon name="external" size={16} /></a> : <><button className="button button--publish" disabled={!canPublish || publishing} onClick={() => onPublish(approvalAcknowledged)} type="button">{publishing ? `Publishing to ${hostName}…` : `Publish review to ${hostName}`}<Icon name="external" size={16} /></button><p className="publish-note"><Icon name="shield" size={13} />{saving && !publishing ? "Saving draft locally. You can still publish when ready." : "Head and line anchors are revalidated before publishing."}</p></>}</aside></div>
   </div>;
 }
 
@@ -1068,7 +1090,8 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
   const [question, setQuestion] = useState("");
   const [answering, setAnswering] = useState(false);
   const [providers, setProviders] = useState<ProviderDefinition[]>(FALLBACK_PROVIDERS);
-  const [modelSelection, setModelSelection] = usePersistentState<ModelSelection>("wingdiff:model", DEFAULT_SELECTION, restoreModelSelection);
+  const [defaultModelSelection, setDefaultModelSelection] = useState<ModelSelection>(DEFAULT_SELECTION);
+  const [modelSelectionOverride, setModelSelectionOverride] = useState<ModelSelection | null>(null);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [theme, setTheme] = usePersistentState<"dark" | "light">("wingdiff:theme", "dark");
   const [reviewSummary, setReviewSummary] = useState(
@@ -1087,6 +1110,7 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
   const understoodCount = tourStops.filter((stop) => statuses[stop.id] === "understood").length;
   const activeEvidence = activeStop.evidence.find((item) => item.id === activeEvidenceId) ?? activeStop.evidence[0]!;
   const stopNotebook = notebook.filter((entry) => entry.stopId === activeStop.id);
+  const modelSelection = modelSelectionOverride ?? defaultModelSelection;
   const activeModel = selectedModel(providers, modelSelection);
   const activeProvider = providers.find((provider) => provider.id === modelSelection.provider);
   const activeModelLabel = activeProvider ? `${activeProvider.name} · ${activeModel.name}` : activeModel.name;
@@ -1097,9 +1121,9 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetchProviders(controller.signal).then((availableProviders) => {
-      setProviders(availableProviders);
-      setModelSelection((current) => preferredAvailableSelection(availableProviders, current));
+    fetchProviders(controller.signal).then((catalog) => {
+      setProviders(catalog.providers);
+      setDefaultModelSelection(catalog.defaultSelection);
     }).catch(() => undefined);
     return () => controller.abort();
   }, []);
@@ -1389,10 +1413,13 @@ function ReviewApp({ onHome }: { onHome: () => void }) {
 
       {modelPickerOpen && (
         <ModelPicker
+          defaultSelection={defaultModelSelection}
+          error={null}
+          onApply={(selection) => { setModelSelectionOverride(selection && !sameModelSelection(selection, defaultModelSelection) ? selection : null); setModelPickerOpen(false); }}
           onClose={() => setModelPickerOpen(false)}
-          onSelection={setModelSelection}
+          overrideSelection={modelSelectionOverride}
           providers={providers}
-          selection={modelSelection}
+          saving={false}
         />
       )}
 
@@ -1455,7 +1482,7 @@ function TourRail({ activeIndex, comments, completed, mobileOpen, onBrief, onRev
 }
 
 function ReviewScope({ compact = false, mode, onChange }: { compact?: boolean; mode: ReviewMode; onChange: (mode: ReviewMode) => void }) {
-  return <div className={`review-scope ${compact ? "review-scope--compact" : ""}`}><button className={mode === "update" ? "is-active" : ""} onClick={() => onChange("update")} type="button"><span>Since your review</span><b>{updateStops.length}</b></button><button className={mode === "full" ? "is-active" : ""} onClick={() => onChange("full")} type="button"><span>Entire PR</span><b>{tourStops.length}</b></button></div>;
+  return <div className={`review-scope ${compact ? "review-scope--compact" : ""}`}><button className={mode === "update" ? "is-active" : ""} onClick={() => onChange("update")} type="button"><span>Since your review</span><b>{updateStops.length}</b></button><button className={mode === "full" ? "is-active" : ""} onClick={() => onChange("full")} type="button"><span>Entire change</span><b>{tourStops.length}</b></button></div>;
 }
 
 function Summary({ onBegin, onReviewMode, onSelectStop, reviewMode }: { onBegin: () => void; onReviewMode: (mode: ReviewMode) => void; onSelectStop: (index: number) => void; reviewMode: ReviewMode }) {
@@ -1497,7 +1524,7 @@ function TourView({ activeEvidence, activeEvidenceId, activeIndex, comments, fin
           <section className="insight-section review-prompts"><div className="section-label"><span>Questions to verify</span></div>{stop.prompts.map((prompt, index) => <button key={prompt} onClick={onAsk} type="button"><span>{String(index + 1).padStart(2, "0")}</span>{prompt}<Icon name="chevron-right" size={14} /></button>)}</section>
         </aside>
       </div>
-      <footer className="stop-footer"><button aria-label="Previous stop" className="button button--quiet" disabled={activeIndex === 0} onClick={() => onNavigate(-1)} type="button"><Icon name="arrow-left" size={16} /> Previous</button><span>{status === "understood" ? "Marked understood" : status === "flagged" ? "Flagged for review" : "Ready for your judgment"}</span><button className="button button--complete" onClick={onUnderstood} type="button"><Icon name="check" size={16} />{activeIndex === totalStops - 1 ? "Mark understood & finish" : "Mark understood"}<Icon name="arrow-right" size={16} /></button></footer>
+      <footer className="stop-footer"><button aria-label="Previous stop" className="button button--quiet" disabled={activeIndex === 0} onClick={() => onNavigate(-1)} type="button"><Icon name="arrow-left" size={16} /> Previous</button><span>{status === "understood" ? "Marked understood" : status === "flagged" ? "Flagged for review" : "Ready for your judgment"}</span><button className="button button--complete" onClick={onUnderstood} type="button"><Icon name="check" size={16} />{activeIndex === totalStops - 1 ? "Mark understood & review" : "Mark understood"}<Icon name="arrow-right" size={16} /></button></footer>
     </div>
   );
 }
@@ -1556,22 +1583,34 @@ function ContextPreview({ error, exclusions, manifest, modelName, onCancel, onCo
   </section></div>;
 }
 
-function ModelPicker({ onClose, onSelection, providers, selection }: { onClose: () => void; onSelection: (selection: ModelSelection) => void; providers: ProviderDefinition[]; selection: ModelSelection }) {
+function ModelPicker({ defaultSelection, error, onApply, onClose, overrideSelection, providers, saving }: {
+  defaultSelection: ModelSelection;
+  error: string | null;
+  onApply: (selection: ModelSelection | null) => void;
+  onClose: () => void;
+  overrideSelection: ModelSelection | null;
+  providers: ProviderDefinition[];
+  saving: boolean;
+}) {
+  const [selection, setSelection] = useState<ModelSelection>(overrideSelection ?? defaultSelection);
   const provider = providers.find((candidate) => candidate.id === selection.provider) ?? providers[0]!;
   const active = provider.models.find((model) => model.id === selection.model) ?? provider.models[0]!;
+  const defaultLabel = modelSelectionLabel(providers, defaultSelection);
 
   function chooseProvider(next: ProviderDefinition) {
     const first = next.models[0]!;
-    onSelection({ provider: next.id, model: first.id, reasoningEffort: first.defaultEffort });
+    setSelection({ provider: next.id, model: first.id, reasoningEffort: first.defaultEffort });
   }
 
-  return <div className="modal-backdrop model-backdrop" role="presentation"><section aria-modal="true" className="model-modal" role="dialog">
-    <header><div><div className="eyebrow">AI provider</div><h2>Choose your review copilot.</h2><p>Codex CLI uses your existing local sign-in. Direct API providers remain optional, and credentials never enter browser JavaScript.</p></div><button aria-label="Close model picker" className="icon-button" onClick={onClose} type="button"><Icon name="x" size={17} /></button></header>
+  return <div className="modal-backdrop model-backdrop" role="presentation"><section aria-label="Review settings" aria-modal="true" className="model-modal" role="dialog">
+    <header><div><div className="eyebrow">Review settings</div><h2>Override the model for this review.</h2><p>New reviews use the configured default automatically. This override stays with only the current review.</p></div><button aria-label="Close review settings" className="icon-button" disabled={saving} onClick={onClose} type="button"><Icon name="x" size={17} /></button></header>
+    <div className="model-default"><span><Icon name="spark" size={14} /></span><div><small>Configured default</small><strong>{defaultLabel}</strong></div>{!overrideSelection && <em>In use</em>}</div>
+    {error && <div className="target-error model-settings-error" role="alert"><Icon name="flag" size={13} />{error}</div>}
     <div className="provider-tabs">{providers.map((candidate) => <button className={candidate.id === provider.id ? "is-active" : ""} key={candidate.id} onClick={() => chooseProvider(candidate)} type="button"><span>{candidate.name}</span><small className={candidate.configured ? "is-configured" : ""}><i />{candidate.configured ? "Ready" : candidate.transport === "cli" ? "Needs sign-in" : "Needs key"}</small></button>)}</div>
-    <div className="model-grid">{provider.models.map((model) => <button className={model.id === active.id ? "is-active" : ""} key={model.id} onClick={() => onSelection({ provider: provider.id, model: model.id, reasoningEffort: model.defaultEffort })} type="button"><span className="model-radio"><i /></span><span><strong>{model.name}{model.badge && <em>{model.badge}</em>}</strong><small>{model.description}</small></span></button>)}</div>
-    <section className="reasoning-setting"><div><span>Reasoning effort</span><small>Higher effort can improve difficult reviews with more latency and token usage.</small></div><div>{active.reasoningEfforts.map((effort) => <button className={selection.reasoningEffort === effort ? "is-active" : ""} key={effort} onClick={() => onSelection({ ...selection, reasoningEffort: effort })} type="button">{effort}</button>)}</div></section>
+    <div className="model-grid">{provider.models.map((model) => <button className={model.id === active.id ? "is-active" : ""} key={model.id} onClick={() => setSelection({ provider: provider.id, model: model.id, reasoningEffort: model.defaultEffort })} type="button"><span className="model-radio"><i /></span><span><strong>{model.name}{model.badge && <em>{model.badge}</em>}</strong><small>{model.description}</small></span></button>)}</div>
+    <section className="reasoning-setting"><div><span>Reasoning effort</span><small>Higher effort can improve difficult reviews with more latency and token usage.</small></div><div>{active.reasoningEfforts.map((effort) => <button className={selection.reasoningEffort === effort ? "is-active" : ""} key={effort} onClick={() => setSelection({ ...selection, reasoningEffort: effort })} type="button">{effort}</button>)}</div></section>
     {!provider.configured && <div className="provider-setup"><Icon name="shield" size={16} /><div><strong>{provider.name} is not ready</strong><p>{provider.setupDescription} Run <code>{provider.setupCommand}</code>, then restart Wingdiff.</p></div></div>}
-    <footer><span><Icon name="check" size={13} /> Selection saved locally</span><button className="button button--primary" onClick={onClose} type="button">Use {active.name}</button></footer>
+    <footer><button className="button button--quiet" disabled={saving || !overrideSelection} onClick={() => onApply(null)} type="button">Reset to default</button><div><button className="button button--quiet" disabled={saving} onClick={onClose} type="button">Cancel</button><button className="button button--primary" disabled={saving || !provider.configured} onClick={() => onApply(selection)} type="button">{saving ? "Saving…" : "Apply override"}</button></div></footer>
   </section></div>;
 }
 
@@ -1609,22 +1648,36 @@ function checkoutMessage(preparation: TargetPreparation): string {
   return "No local checkout resolved";
 }
 
-function githubCliMessage(preparation: TargetPreparation): string {
-  const githubCli = preparation.environment.githubCli;
-  if (!githubCli.installed) return "GitHub CLI not found";
-  return githubCli.authenticated ? "GitHub authenticated" : "GitHub authentication needed";
+function hostingCliMessage(preparation: TargetPreparation): string {
+  const cli = preparation.environment.hostingCli;
+  const hostName = preparation.target.platform === "gitlab" ? "GitLab" : "GitHub";
+  if (!cli.installed) return `${hostName} CLI not found`;
+  if (!cli.supported) return `${hostName} CLI upgrade needed`;
+  return cli.authenticated ? `${hostName} authenticated` : `${hostName} authentication needed`;
 }
 
 function AuthorMarkdown({ fallback, source }: { fallback?: string; source: string }) {
   return <Suspense fallback={<p className="markdown-loading">Formatting description…</p>}><MarkdownContent fallback={fallback} source={source} /></Suspense>;
 }
 
-function restoreModelSelection(stored: ModelSelection) { return normalizeSelection(FALLBACK_PROVIDERS, stored); }
-
 function usePersistentState<T>(key: string, fallback: T, restore: (stored: T) => T = (stored) => stored) {
   const [value, setValue] = useState<T>(() => { try { const stored = window.localStorage.getItem(key); return stored ? restore(JSON.parse(stored) as T) : fallback; } catch { return fallback; } });
   useEffect(() => { try { window.localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage can be unavailable */ } }, [key, value]);
   return [value, setValue] as const;
+}
+
+function sameModelSelection(left: ModelSelection, right: ModelSelection) {
+  return left.provider === right.provider && left.model === right.model && left.reasoningEffort === right.reasoningEffort;
+}
+
+function modelSelectionLabel(providers: ProviderDefinition[], selection: ModelSelection) {
+  const provider = providers.find((candidate) => candidate.id === selection.provider);
+  const model = selectedModel(providers, selection);
+  return `${provider?.name ?? model.family} · ${model.name} · ${reasoningEffortLabel(selection.reasoningEffort)}`;
+}
+
+function reasoningEffortLabel(effort: ModelSelection["reasoningEffort"]) {
+  return effort === "xhigh" ? "Extra high" : effort.charAt(0).toUpperCase() + effort.slice(1);
 }
 
 function shortTitle(title: string) { return title.replace(/^The /, "").replace(/^Every /, "").replace(/^Delay /, ""); }

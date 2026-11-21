@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { acquisitionBlocker, addRecentTarget, parseLaunchRoute, type PullRequestTarget, type TargetPreparation } from "./launcher";
 
 const target: PullRequestTarget = {
+  platform: "github",
+  host: "github.com",
   owner: "openai",
   repository: "codex",
   number: 42,
@@ -38,7 +40,7 @@ describe("launcher state", () => {
       target,
       environment: {
         checkout: { status: "different", path: "/work/wingdiff", repository: "HartBrook/wingdiff" },
-        githubCli: { installed: true, authenticated: true },
+        hostingCli: { provider: "github", command: "gh", installed: true, supported: true, authenticated: true },
         networkChecked: false,
       },
     };
@@ -54,10 +56,43 @@ describe("launcher state", () => {
       target,
       environment: {
         checkout: { status: "matched", path: "/work/codex", repository: "openai/codex" },
-        githubCli: { installed: true, authenticated: false },
+        hostingCli: { provider: "github", command: "gh", installed: true, supported: true, authenticated: false },
         networkChecked: false,
       },
     };
     expect(acquisitionBlocker(preparation)).toMatch(/gh auth login/);
+  });
+
+  it("gives GitLab-specific setup guidance", () => {
+    const preparation: TargetPreparation = {
+      target: {
+        ...target,
+        platform: "gitlab",
+        host: "gitlab.example.com",
+        owner: "acme/platform",
+        canonicalUrl: "https://gitlab.example.com/acme/platform/codex/-/merge_requests/42",
+        label: "acme/platform/codex!42",
+      },
+      environment: {
+        checkout: { status: "managed" },
+        hostingCli: { provider: "gitlab", command: "glab", installed: true, supported: true, version: "1.100.0", authenticated: false },
+        networkChecked: false,
+      },
+    };
+    expect(acquisitionBlocker(preparation)).toBe("GitLab CLI is not authenticated. Run: glab auth login --hostname gitlab.example.com");
+  });
+
+  it("blocks an outdated GitLab CLI before acquisition", () => {
+    const preparation: TargetPreparation = {
+      target: { ...target, platform: "gitlab", host: "gitlab.com" },
+      environment: {
+        checkout: { status: "managed" },
+        hostingCli: {
+          provider: "gitlab", command: "glab", installed: true, supported: false, version: "1.99.0", authenticated: true,
+        },
+        networkChecked: false,
+      },
+    };
+    expect(acquisitionBlocker(preparation)).toMatch(/1\.100\.0 or later.*Found 1\.99\.0/);
   });
 });

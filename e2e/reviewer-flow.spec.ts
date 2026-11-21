@@ -47,8 +47,34 @@ test("reviews a real-session fixture from privacy preview through an anchored dr
   await expect(page.getByRole("link", { name: "Open on GitHub" })).toBeVisible();
 
   await page.getByRole("button", { name: "New review" }).click();
-  await expect(page.getByRole("heading", { name: "Choose a pull request." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Choose a pull or merge request." })).toBeVisible();
   await expect(page.getByRole("button", { name: "Check setup" })).toBeVisible();
+});
+
+test("uses the configured default and applies model changes only after confirmation", async ({ page }) => {
+  await mockReviewApi(page);
+  await page.goto("/?session=pilot-session");
+
+  const runCard = page.locator(".begin-card");
+  await expect(runCard).toContainText("Default · Codex CLI · Account default");
+  await expect(page.locator(".topbar .model-button")).toHaveCount(0);
+
+  await runCard.getByRole("button", { name: "Change" }).click();
+  const settings = page.getByRole("dialog", { name: "Review settings" });
+  await settings.getByRole("button", { name: /OpenAI API/ }).click();
+  await settings.getByRole("button", { name: "Cancel" }).click();
+  await expect(runCard).toContainText("Default · Codex CLI · Account default");
+
+  await runCard.getByRole("button", { name: "Change" }).click();
+  await settings.getByRole("button", { name: /OpenAI API/ }).click();
+  await settings.getByRole("button", { name: "Apply override" }).click();
+  await expect(runCard).toContainText("Override · OpenAI API · GPT-6 Sol");
+
+  await page.reload();
+  await expect(runCard).toContainText("Override · OpenAI API · GPT-6 Sol");
+  await runCard.getByRole("button", { name: "Change" }).click();
+  await settings.getByRole("button", { name: "Reset to default" }).click();
+  await expect(runCard).toContainText("Default · Codex CLI · Account default");
 });
 
 test("returns to the top when marking a stop understood", async ({ page }) => {
@@ -63,6 +89,34 @@ test("returns to the top when marking a stop understood", async ({ page }) => {
   await page.getByRole("button", { name: "Mark understood", exact: true }).click();
   await expect(page.locator(".stop-header h1")).not.toHaveText(firstTitle ?? "");
   await expect.poll(() => canvas.evaluate((element) => element.scrollTop)).toBe(0);
+});
+
+test("shows a readable, selectable intraline replacement in the demo update review", async ({ page }) => {
+  await page.goto("/?demo=1");
+  await page.getByRole("button", { name: "Review updates" }).click();
+
+  await expect(page.locator(".diff-line__change").first()).toBeVisible();
+  const header = page.locator(".diff-line__header").first();
+  await expect(header).toHaveText(/^@ src\/infra\/redis\/attempt-store\.ts:\d+ @/);
+  await expect(header).not.toContainText("@@");
+
+  const changedRow = page.locator(".diff-line--deletion, .diff-line--addition").first();
+  const lineButton = changedRow.locator(".diff-line__number");
+  await expect(lineButton).toBeEnabled();
+  await lineButton.click();
+  await expect(changedRow).toHaveClass(/is-selected/);
+});
+
+test("moves from the final real-review stop directly to the review desk", async ({ page }) => {
+  await mockReviewApi(page, { tourReady: true });
+  await page.goto("/?session=pilot-session");
+
+  await page.getByRole("button", { name: "Start review" }).click();
+  await expect(page.getByRole("heading", { name: "Counter updates become atomic" })).toBeVisible();
+  await page.getByRole("button", { name: "Mark understood & review" }).click();
+
+  await expect(page.getByRole("heading", { name: "Prepare your decision." })).toBeVisible();
+  await expect(page).toHaveURL(/session=pilot-session&view=review/);
 });
 
 test("keeps browser history inside a real review session", async ({ page }) => {
@@ -104,7 +158,7 @@ test("keeps browser history inside a real review session", async ({ page }) => {
   await page.keyboard.press("Escape");
   await expect(summary).toBeVisible();
   await page.goBack();
-  await expect(page.getByRole("heading", { name: "Choose a pull request." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Choose a pull or merge request." })).toBeVisible();
 });
 
 test("steps between demo stops without burying the summary in history", async ({ page }) => {
@@ -113,7 +167,7 @@ test("steps between demo stops without burying the summary in history", async ({
   const title = page.locator(".stop-header h1");
   const firstTitle = await title.textContent();
 
-  await page.getByRole("button", { name: "Entire PR" }).click();
+  await page.getByRole("button", { name: "Entire change" }).click();
   await page.keyboard.press("j");
   await page.keyboard.press("j");
   await expect(title).not.toHaveText(firstTitle ?? "");
@@ -129,7 +183,7 @@ test("steps between demo stops without burying the summary in history", async ({
   await expect(title).toHaveText(thirdTitle ?? "");
 
   await page.goBack();
-  await expect(page.getByRole("button", { name: /Review (updates|entire PR)/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Review (updates|entire (PR|change))/ })).toBeVisible();
   await expect(page).toHaveURL(/demo=1/);
 });
 
@@ -151,41 +205,59 @@ test("publishes on the first click after editing and keeps failures actionable",
   await expect(page.getByRole("link", { name: "Open on GitHub" })).toBeVisible();
 });
 
-async function mockReviewApi(page: Page, options: { failFirstPublish?: boolean; tourReady?: boolean } = {}) {
+test("presents and publishes a GitLab merge request with host-native labels", async ({ page }) => {
+  await mockReviewApi(page, { session: gitLabSession });
+  await page.goto("/?session=pilot-session");
+
+  await expect(page.getByRole("link", { name: "GitLab" })).toBeVisible();
+  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "How should GitLab record this review?" })).toBeVisible();
+  await page.getByPlaceholder("Summarize your review…").fill("The atomic update is ready.");
+  await page.getByRole("button", { name: "Publish review to GitLab" }).click();
+  await expect(page.getByRole("link", { name: "Open on GitLab" })).toBeVisible();
+});
+
+async function mockReviewApi(page: Page, options: { failFirstPublish?: boolean; session?: typeof session; tourReady?: boolean } = {}) {
+  const reviewSession = options.session ?? session;
   let tourReady = options.tourReady ?? false;
   let generationStarted = false;
   let generationPolls = 0;
   let investigationId = "investigation-1";
   let publishAttempts = 0;
+  let modelOverride: typeof defaultSelection | null = null;
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
     const method = request.method();
 
-    if (path === "/api/providers") return json(route, { providers });
-    if (path === "/api/sessions/pilot-session") return json(route, { session });
+    if (path === "/api/providers") return json(route, { providers, defaultSelection });
+    if (path === "/api/sessions/pilot-session") return json(route, { session: reviewSession });
+    if (path === "/api/sessions/pilot-session/model-selection") {
+      if (method === "PUT") modelOverride = request.postDataJSON().override ?? null;
+      return json(route, { override: modelOverride });
+    }
     if (path === "/api/sessions/pilot-session/update") return json(route, { update: null, baselineCheckpoint: null });
     if (path === "/api/sessions/pilot-session/progress") {
       return json(route, { progress: { activeScope: null, activeStopIds: { full: null, update: null }, scopes: { full: {}, update: {} } } });
     }
     if (path === "/api/sessions/pilot-session/comments") {
-      if (method === "POST") return json(route, { comment: { id: "comment-1", sessionId: session.id, createdAt: now, updatedAt: now, ...request.postDataJSON() } }, 201);
+      if (method === "POST") return json(route, { comment: { id: "comment-1", sessionId: reviewSession.id, createdAt: now, updatedAt: now, ...request.postDataJSON() } }, 201);
       return json(route, { comments: [] });
     }
     if (path === "/api/sessions/pilot-session/investigations") {
       if (method === "POST") {
         const input = request.postDataJSON();
-        return json(route, { entry: { id: investigationId, sessionId: session.id, answer: "", status: "streaming", createdAt: now, updatedAt: now, ...input } }, 201);
+        return json(route, { entry: { id: investigationId, sessionId: reviewSession.id, answer: "", status: "streaming", createdAt: now, updatedAt: now, ...input } }, 201);
       }
       return json(route, { entries: [] });
     }
     if (path === `/api/sessions/pilot-session/investigations/${investigationId}`) {
       const update = request.postDataJSON();
-      return json(route, { entry: { id: investigationId, sessionId: session.id, stopId: "atomic-counter", evidenceId: "session-0-src/counter.ts", question: "Can concurrent callers lose increments?", provider: "codex", model: "Codex CLI · GPT-6 Sol", createdAt: now, updatedAt: now, ...update } });
+      return json(route, { entry: { id: investigationId, sessionId: reviewSession.id, stopId: "atomic-counter", evidenceId: "session-0-src/counter.ts", question: "Can concurrent callers lose increments?", provider: "codex", model: "Codex CLI · GPT-6 Sol", createdAt: now, updatedAt: now, ...update } });
     }
     if (path === "/api/sessions/pilot-session/review-draft") {
-      if (method === "PUT") return json(route, { draft: { sessionId: session.id, updatedAt: now, ...request.postDataJSON() } });
+      if (method === "PUT") return json(route, { draft: { sessionId: reviewSession.id, updatedAt: now, ...request.postDataJSON() } });
       return json(route, { draft: null });
     }
     if (path === "/api/sessions/pilot-session/review-submission") {
@@ -194,7 +266,7 @@ async function mockReviewApi(page: Page, options: { failFirstPublish?: boolean; 
         if (options.failFirstPublish && publishAttempts === 1) return json(route, { error: "GitHub rejected the review." }, 400);
         const input = request.postDataJSON();
         return json(route, { submission: {
-          sessionId: session.id, headSha, githubReviewId: 91, url: "https://github.com/acme/service/pull/42#pullrequestreview-91",
+          sessionId: reviewSession.id, headSha, githubReviewId: 91, url: reviewSession.metadata.url,
           event: input.event, body: input.body, comments: [], submittedAt: now,
         } }, 201);
       }
@@ -244,7 +316,7 @@ const diffLines = [
 ];
 const session = {
   id: "pilot-session",
-  target: { owner: "acme", repository: "service", number: 42, canonicalUrl: "https://github.com/acme/service/pull/42", label: "acme/service#42", source: "url" },
+  target: { platform: "github", host: "github.com", owner: "acme", repository: "service", number: 42, canonicalUrl: "https://github.com/acme/service/pull/42", label: "acme/service#42", source: "url" },
   metadata: {
     number: 42, repository: "acme/service", url: "https://github.com/acme/service/pull/42", title: "Make the counter update atomic", body: "Replace a read/write pair.\n\n- Preserve expiry\n- Add regression coverage",
     author: { login: "dev" }, base: { ref: "main", sha: baseSha }, head: { ref: "atomic-counter", sha: headSha },
@@ -252,6 +324,18 @@ const session = {
   },
   evidence: { baseSha, headSha, additions: 1, deletions: 1, files: [{ oldPath: "src/counter.ts", path: "src/counter.ts", status: "modified", additions: 1, deletions: 1, hunks: [{ header: "@@ -2 +2 @@", oldStart: 2, oldLines: 1, newStart: 2, newLines: 1, lines: diffLines }] }] },
   status: "ready", createdAt: now, updatedAt: now,
+};
+const gitLabSession = {
+  ...session,
+  target: {
+    platform: "gitlab", host: "gitlab.com", owner: "acme/platform", repository: "service", number: 42,
+    canonicalUrl: "https://gitlab.com/acme/platform/service/-/merge_requests/42", label: "acme/platform/service!42", source: "url",
+  },
+  metadata: {
+    ...session.metadata,
+    repository: "acme/platform/service",
+    url: "https://gitlab.com/acme/platform/service/-/merge_requests/42",
+  },
 };
 const tour = {
   sessionId: session.id, scope: "full", selection: { provider: "codex", model: "codex-default", reasoningEffort: "medium" }, baseSha, headSha, createdAt: now, updatedAt: now,
@@ -268,4 +352,8 @@ const manifest = {
 const providers = [{
   id: "codex", name: "Codex CLI", configured: true, transport: "cli", setupCommand: "codex login", setupDescription: "Sign in.",
   models: [{ id: "codex-default", provider: "codex", name: "Account default", family: "Codex", description: "Uses the signed-in account default.", badge: "Recommended", reasoningEfforts: ["medium"], defaultEffort: "medium" }],
+}, {
+  id: "openai", name: "OpenAI API", configured: true, transport: "api", setupCommand: "OPENAI_API_KEY", setupDescription: "Set a key.",
+  models: [{ id: "gpt-6-sol", provider: "openai", name: "GPT-6 Sol", family: "OpenAI", description: "Balanced review model.", badge: "API", reasoningEfforts: ["medium", "high"], defaultEffort: "medium" }],
 }];
+const defaultSelection = { provider: "codex", model: "codex-default", reasoningEffort: "medium" } as const;
