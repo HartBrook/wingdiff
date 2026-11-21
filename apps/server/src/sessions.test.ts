@@ -125,7 +125,20 @@ describe("local review sessions", () => {
       selection: { provider: "codex", model: "gpt-6-sol", reasoningEffort: "medium" },
       tour: { summary: "The counter change is small and focused." },
     });
-    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(15);
+    expect(Number(store.database.prepare("PRAGMA user_version").get()?.user_version)).toBe(16);
+    store.close();
+  });
+
+  it("persists and clears a review-scoped model override", () => {
+    const store = new SessionStore(":memory:");
+    const session = store.upsertReadySession(target, metadata(), evidence());
+    const selection = { provider: "openai" as const, model: "gpt-6-astra", reasoningEffort: "high" as const };
+
+    expect(store.getModelSelectionOverride(session.id)).toBeNull();
+    expect(store.saveModelSelectionOverride(session.id, selection)).toEqual(selection);
+    expect(store.getModelSelectionOverride(session.id)).toEqual(selection);
+    expect(store.saveModelSelectionOverride(session.id, null)).toBeNull();
+    expect(store.getModelSelectionOverride(session.id)).toBeNull();
     store.close();
   });
 

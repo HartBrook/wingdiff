@@ -258,6 +258,24 @@ export async function fetchReviewSession(id: string, signal?: AbortSignal): Prom
   return sessionRequest(`/api/sessions/${encodeURIComponent(id)}`, { signal });
 }
 
+export async function fetchSessionModelSelectionOverride(id: string, signal?: AbortSignal): Promise<ModelSelection | null> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/model-selection`, { signal });
+  const body = await response.json() as { override?: ModelSelection | null; error?: string };
+  if (!response.ok) throw new Error(body.error ?? "Wingdiff could not load review model settings.");
+  return body.override ?? null;
+}
+
+export async function saveSessionModelSelectionOverride(id: string, override: ModelSelection | null): Promise<ModelSelection | null> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/model-selection`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ override }),
+  });
+  const body = await response.json() as { override?: ModelSelection | null; error?: string };
+  if (!response.ok) throw new Error(body.error ?? "Wingdiff could not save review model settings.");
+  return body.override ?? null;
+}
+
 export async function fetchSessionTour(id: string, scope: "full" | "update" = "full", signal?: AbortSignal): Promise<GeneratedSessionTour | null> {
   const response = await fetch(`/api/sessions/${encodeURIComponent(id)}/tour?scope=${scope}`, { signal });
   if (response.status === 404 || response.status === 409) return null;
